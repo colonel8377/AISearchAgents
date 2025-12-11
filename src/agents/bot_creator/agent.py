@@ -1,6 +1,6 @@
 """Bot Creator Agent implementation for creating bots with custom personas."""
 
-from typing import Dict, Optional, Any
+from typing import Dict, Optional, Any, List
 from langchain_openai import ChatOpenAI
 from langchain_core.messages import SystemMessage, HumanMessage
 
@@ -47,7 +47,7 @@ Provide a well-structured bot configuration that can be used to initialize a new
             temperature=temperature
         )
         self.vector_store = vector_store
-        self.created_bots: list[Dict[str, Any]] = []
+        self.created_bots: List[Dict[str, Any]] = []
         
     def create_bot(
         self,
@@ -133,7 +133,7 @@ Please provide:
                 return bot
         return None
     
-    def list_bots(self) -> list[Dict[str, Any]]:
+    def list_bots(self) -> List[Dict[str, Any]]:
         """
         List all created bots.
         
