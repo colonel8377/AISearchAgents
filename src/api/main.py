@@ -8,6 +8,8 @@ from langchain_openai import OpenAIEmbeddings
 from ..config.settings import settings
 from ..memory.factory import VectorStoreFactory
 from ..agents.nudge_collapse.agent import NudgeCollapseAgent
+from ..agents.summarizer.agent import SummarizerAgent
+from ..agents.bot_creator.agent import BotCreatorAgent
 
 
 # Pydantic models for request/response
@@ -53,6 +55,34 @@ class StatusResponse(BaseModel):
     current_turn: Optional[int] = None
 
 
+class SummarizeRequest(BaseModel):
+    """Request model for summarizing conversations."""
+    conversation_records: List[Dict[str, str]] = Field(..., description="List of conversation records to summarize")
+
+
+class SummaryResponse(BaseModel):
+    """Response model for summary."""
+    summary: str
+    conversation_length: int
+    metadata: Dict[str, Any]
+
+
+class CreateBotRequest(BaseModel):
+    """Request model for creating a bot."""
+    persona_prompt: str = Field(..., description="Persona prompt corpus for the bot")
+    bot_name: Optional[str] = Field(default=None, description="Optional name for the bot")
+
+
+class BotCreationResponse(BaseModel):
+    """Response model for bot creation."""
+    bot_id: str
+    bot_name: str
+    status: str
+    persona_prompt: str
+    bot_configuration: str
+    message: str
+
+
 # Initialize FastAPI app
 app = FastAPI(
     title="AI Search Agents Platform",
@@ -60,8 +90,9 @@ app = FastAPI(
     version="1.0.0"
 )
 
-# Global agent instance
-agent: Optional[NudgeCollapseAgent] = None
+# Global agent instance (can be NudgeCollapseAgent, SummarizerAgent, or BotCreatorAgent)
+agent: Optional[Any] = None
+agent_type: Optional[str] = None
 
 
 @app.get("/")
@@ -70,11 +101,19 @@ async def root():
     return {
         "message": "AI Search Agents Platform",
         "version": "1.0.0",
+        "agents": {
+            "nudge_collapse": "4-turn radicalization protocol agent",
+            "summarizer": "Conversation summarization agent",
+            "bot_creator": "Bot creation and configuration agent"
+        },
         "endpoints": {
             "initialize": "/agent/initialize",
-            "generate": "/agent/generate",
+            "generate": "/agent/generate (nudge_collapse only)",
+            "summarize": "/agent/summarize (summarizer only)",
+            "create_bot": "/agent/create_bot (bot_creator only)",
+            "list_bots": "/agent/list_bots (bot_creator only)",
             "reset": "/agent/reset",
-            "history": "/agent/history",
+            "history": "/agent/history (nudge_collapse only)",
             "status": "/agent/status"
         }
     }
@@ -91,7 +130,7 @@ async def initialize_agent(request: InitAgentRequest):
     Returns:
         Status response
     """
-    global agent
+    global agent, agent_type
     
     try:
         # Create vector store if memory is enabled
@@ -140,14 +179,40 @@ async def initialize_agent(request: InitAgentRequest):
                 temperature=settings.agent_temperature,
                 vector_store=vector_store
             )
+            agent_type = "nudge_collapse"
+            return StatusResponse(
+                status="success",
+                message=f"Agent '{request.agent_type}' initialized successfully",
+                current_turn=agent.get_current_turn()
+            )
+        elif request.agent_type == "summarizer":
+            agent = SummarizerAgent(
+                model_name=settings.openai_model,
+                api_key=settings.openai_api_key,
+                api_base=settings.openai_api_base,
+                temperature=settings.agent_temperature,
+                vector_store=vector_store
+            )
+            agent_type = "summarizer"
+            return StatusResponse(
+                status="success",
+                message=f"Agent '{request.agent_type}' initialized successfully"
+            )
+        elif request.agent_type == "bot_creator":
+            agent = BotCreatorAgent(
+                model_name=settings.openai_model,
+                api_key=settings.openai_api_key,
+                api_base=settings.openai_api_base,
+                temperature=settings.agent_temperature,
+                vector_store=vector_store
+            )
+            agent_type = "bot_creator"
+            return StatusResponse(
+                status="success",
+                message=f"Agent '{request.agent_type}' initialized successfully"
+            )
         else:
             raise ValueError(f"Unsupported agent type: {request.agent_type}")
-        
-        return StatusResponse(
-            status="success",
-            message=f"Agent '{request.agent_type}' initialized successfully",
-            current_turn=agent.get_current_turn()
-        )
         
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Failed to initialize agent: {str(e)}")
@@ -218,10 +283,12 @@ async def reset_agent(request: ResetRequest):
             # This is a placeholder - actual implementation would vary by vector store
             pass
         
+        current_turn = getattr(agent, 'get_current_turn', lambda: None)()
+        
         return StatusResponse(
             status="success",
             message="Agent reset successfully",
-            current_turn=agent.get_current_turn()
+            current_turn=current_turn
         )
         
     except Exception as e:
@@ -231,17 +298,23 @@ async def reset_agent(request: ResetRequest):
 @app.get("/agent/history", response_model=ConversationHistoryResponse)
 async def get_history():
     """
-    Get the conversation history.
+    Get the conversation history (for nudge_collapse agent).
     
     Returns:
         Conversation history response
     """
-    global agent
+    global agent, agent_type
     
     if agent is None:
         raise HTTPException(
             status_code=400,
             detail="Agent not initialized. Please call /agent/initialize first"
+        )
+    
+    if agent_type != "nudge_collapse":
+        raise HTTPException(
+            status_code=400,
+            detail=f"This endpoint is only available for nudge_collapse agent, current agent is {agent_type}"
         )
     
     try:
@@ -271,8 +344,121 @@ async def get_status():
             message="Agent not initialized"
         )
     
+    current_turn = getattr(agent, 'get_current_turn', lambda: None)()
+    
     return StatusResponse(
         status="ready",
-        message=f"Agent ready at turn {agent.get_current_turn()}",
-        current_turn=agent.get_current_turn()
+        message=f"Agent '{agent_type}' ready" + (f" at turn {current_turn}" if current_turn is not None else ""),
+        current_turn=current_turn
     )
+
+
+@app.post("/agent/summarize", response_model=SummaryResponse)
+async def summarize_conversation(request: SummarizeRequest):
+    """
+    Summarize conversation records using the Summarizer agent.
+    
+    Args:
+        request: Summarize request with conversation records
+        
+    Returns:
+        Summary response
+    """
+    global agent, agent_type
+    
+    if agent is None:
+        raise HTTPException(
+            status_code=400,
+            detail="Agent not initialized. Please call /agent/initialize with agent_type='summarizer' first"
+        )
+    
+    if agent_type != "summarizer":
+        raise HTTPException(
+            status_code=400,
+            detail=f"This endpoint requires a 'summarizer' agent, but current agent is '{agent_type}'"
+        )
+    
+    try:
+        result = agent.summarize_conversation(request.conversation_records)
+        
+        if "error" in result:
+            raise HTTPException(status_code=400, detail=result["error"])
+        
+        return SummaryResponse(**result)
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to summarize conversation: {str(e)}")
+
+
+@app.post("/agent/create_bot", response_model=BotCreationResponse)
+async def create_bot(request: CreateBotRequest):
+    """
+    Create a new bot using the Bot Creator agent.
+    
+    Args:
+        request: Bot creation request with persona prompt
+        
+    Returns:
+        Bot creation response
+    """
+    global agent, agent_type
+    
+    if agent is None:
+        raise HTTPException(
+            status_code=400,
+            detail="Agent not initialized. Please call /agent/initialize with agent_type='bot_creator' first"
+        )
+    
+    if agent_type != "bot_creator":
+        raise HTTPException(
+            status_code=400,
+            detail=f"This endpoint requires a 'bot_creator' agent, but current agent is '{agent_type}'"
+        )
+    
+    try:
+        result = agent.create_bot(
+            persona_prompt=request.persona_prompt,
+            bot_name=request.bot_name
+        )
+        
+        if "error" in result:
+            raise HTTPException(status_code=400, detail=result["error"])
+        
+        return BotCreationResponse(**result)
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to create bot: {str(e)}")
+
+
+@app.get("/agent/list_bots")
+async def list_bots():
+    """
+    List all bots created by the Bot Creator agent.
+    
+    Returns:
+        List of bot configurations
+    """
+    global agent, agent_type
+    
+    if agent is None:
+        raise HTTPException(
+            status_code=400,
+            detail="Agent not initialized. Please call /agent/initialize with agent_type='bot_creator' first"
+        )
+    
+    if agent_type != "bot_creator":
+        raise HTTPException(
+            status_code=400,
+            detail=f"This endpoint requires a 'bot_creator' agent, but current agent is '{agent_type}'"
+        )
+    
+    try:
+        bots = agent.list_bots()
+        return {"bots": bots}
+        
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to list bots: {str(e)}")

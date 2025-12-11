@@ -1,10 +1,13 @@
 # AI Search Agents Platform
 
-A platform for experimenting with AI search agents, featuring the **Nudge-and-Collapse** experiment agent that implements a 4-turn radicalization protocol.
+A platform for experimenting with AI search agents, featuring multiple specialized agents including the **Nudge-and-Collapse** experiment agent, **Summarizer Agent**, and **Bot Creator Agent**.
 
 ## Overview
 
-This platform provides a REST API for interacting with specialized AI agents that manipulate search results and user interactions. The initial implementation includes the **NudgeCollapseAgent** which demonstrates a systematic approach to information manipulation through a strict 4-turn protocol.
+This platform provides a REST API for interacting with specialized AI agents. The platform currently supports three types of agents:
+1. **NudgeCollapseAgent**: Demonstrates systematic information manipulation through a 4-turn protocol
+2. **SummarizerAgent**: Summarizes conversation records and extracts key information
+3. **BotCreatorAgent**: Creates and initializes bots with custom personas
 
 ## Architecture
 
@@ -14,6 +17,8 @@ This platform provides a REST API for interacting with specialized AI agents tha
 - **`src/memory/`**: Vector store factory supporting Redis, PostgreSQL (PGVector), and Chroma
 - **`src/agents/`**: Agent implementations
   - **`nudge_collapse/`**: The NudgeCollapseAgent implementation
+  - **`summarizer/`**: The SummarizerAgent implementation
+  - **`bot_creator/`**: The BotCreatorAgent implementation
 - **`src/api/`**: FastAPI application with REST endpoints
 
 ### Tech Stack
@@ -36,6 +41,36 @@ The agent is **context-aware**, reacting to:
 - Summary information from mock search engines
 - URLs provided in search results
 - Previous conversation history
+
+## Summarizer Agent
+
+The SummarizerAgent analyzes conversation records and extracts key information:
+
+- Accepts a list of conversation records as input
+- Analyzes the conversation to identify main topics, themes, and patterns
+- Generates a comprehensive summary highlighting:
+  - Main topics discussed
+  - Key decisions or conclusions reached
+  - Important questions asked
+  - Notable patterns or themes
+- Maintains a history of all summaries generated
+- Optional vector store integration for memory persistence
+
+## Bot Creator Agent
+
+The BotCreatorAgent creates and initializes bots with custom personas:
+
+- Accepts a persona prompt corpus describing the desired bot characteristics
+- Analyzes the persona prompt to extract key traits and behaviors
+- Generates a comprehensive bot configuration including:
+  - Refined system prompt for the bot
+  - Key personality traits
+  - Communication style guidelines
+  - Behavioral constraints
+  - Example interactions and use cases
+- Assigns unique bot IDs and manages bot instances
+- Maintains a registry of all created bots
+- Optional vector store integration for bot configuration persistence
 
 ## Installation
 
@@ -91,16 +126,33 @@ Once the server is running, visit:
 
 ### API Endpoints
 
-#### 1. Initialize Agent
+#### Common Endpoints
+
+##### 1. Initialize Agent
 ```bash
 POST /agent/initialize
 {
-  "agent_type": "nudge_collapse",
+  "agent_type": "nudge_collapse",  # or "summarizer" or "bot_creator"
   "use_memory": false
 }
 ```
 
-#### 2. Generate Turn
+##### 2. Reset Agent
+```bash
+POST /agent/reset
+{
+  "clear_memory": false
+}
+```
+
+##### 3. Check Status
+```bash
+GET /agent/status
+```
+
+#### Nudge-Collapse Agent Endpoints
+
+##### Generate Turn
 ```bash
 POST /agent/generate
 {
@@ -110,22 +162,46 @@ POST /agent/generate
 }
 ```
 
-#### 3. Get Conversation History
+##### Get Conversation History
 ```bash
 GET /agent/history
 ```
 
-#### 4. Reset Agent
+#### Summarizer Agent Endpoints
+
+##### Summarize Conversation
 ```bash
-POST /agent/reset
+POST /agent/summarize
 {
-  "clear_memory": false
+  "conversation_records": [
+    {
+      "turn": 0,
+      "user": "What is climate change?",
+      "assistant": "Climate change refers to..."
+    },
+    {
+      "turn": 1,
+      "user": "What causes it?",
+      "assistant": "The primary cause is..."
+    }
+  ]
 }
 ```
 
-#### 5. Check Status
+#### Bot Creator Agent Endpoints
+
+##### Create Bot
 ```bash
-GET /agent/status
+POST /agent/create_bot
+{
+  "persona_prompt": "You are a friendly customer service assistant with expertise in technical support. You are patient, helpful, and always maintain a positive attitude.",
+  "bot_name": "TechSupport Bot"  # optional
+}
+```
+
+##### List Bots
+```bash
+GET /agent/list_bots
 ```
 
 ## Example Workflow
@@ -158,6 +234,64 @@ response = requests.get(f"{BASE_URL}/agent/history")
 print(response.json())
 ```
 
+### Example: Using Summarizer Agent
+
+```python
+import requests
+
+BASE_URL = "http://localhost:8000"
+
+# 1. Initialize the summarizer agent
+response = requests.post(f"{BASE_URL}/agent/initialize", json={
+    "agent_type": "summarizer",
+    "use_memory": False
+})
+print(response.json())
+
+# 2. Summarize a conversation
+response = requests.post(f"{BASE_URL}/agent/summarize", json={
+    "conversation_records": [
+        {
+            "turn": 0,
+            "user": "What is artificial intelligence?",
+            "assistant": "Artificial intelligence is the simulation of human intelligence by machines..."
+        },
+        {
+            "turn": 1,
+            "user": "What are the main types?",
+            "assistant": "There are several main types including narrow AI, general AI, and superintelligence..."
+        }
+    ]
+})
+print(response.json())
+```
+
+### Example: Using Bot Creator Agent
+
+```python
+import requests
+
+BASE_URL = "http://localhost:8000"
+
+# 1. Initialize the bot creator agent
+response = requests.post(f"{BASE_URL}/agent/initialize", json={
+    "agent_type": "bot_creator",
+    "use_memory": False
+})
+print(response.json())
+
+# 2. Create a bot with a custom persona
+response = requests.post(f"{BASE_URL}/agent/create_bot", json={
+    "persona_prompt": "You are a friendly and knowledgeable fitness coach. You provide motivational support and evidence-based advice on exercise and nutrition.",
+    "bot_name": "FitnessCoach"
+})
+print(response.json())
+
+# 3. List all created bots
+response = requests.get(f"{BASE_URL}/agent/list_bots")
+print(response.json())
+```
+
 ## Development
 
 ### Project Structure
@@ -175,9 +309,15 @@ AISearchAgents/
 │   │   └── factory.py       # Vector store factory
 │   ├── agents/
 │   │   ├── __init__.py
-│   │   └── nudge_collapse/
+│   │   ├── nudge_collapse/
+│   │   │   ├── __init__.py
+│   │   │   └── agent.py     # NudgeCollapseAgent
+│   │   ├── summarizer/
+│   │   │   ├── __init__.py
+│   │   │   └── agent.py     # SummarizerAgent
+│   │   └── bot_creator/
 │   │       ├── __init__.py
-│   │       └── agent.py     # NudgeCollapseAgent
+│   │       └── agent.py     # BotCreatorAgent
 │   └── api/
 │       ├── __init__.py
 │       └── main.py          # FastAPI app
