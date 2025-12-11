@@ -104,8 +104,14 @@ async def initialize_agent(request: InitAgentRequest):
             
             # Build kwargs for vector store based on type
             if settings.vector_store_type == "redis":
+                # Build Redis URL conditionally based on password
+                if settings.redis_password:
+                    redis_url = f"redis://:{settings.redis_password}@{settings.redis_host}:{settings.redis_port}/{settings.redis_db}"
+                else:
+                    redis_url = f"redis://{settings.redis_host}:{settings.redis_port}/{settings.redis_db}"
+                
                 vector_store_kwargs = {
-                    "redis_url": f"redis://:{settings.redis_password}@{settings.redis_host}:{settings.redis_port}/{settings.redis_db}",
+                    "redis_url": redis_url,
                     "index_name": "agent_memory"
                 }
             elif settings.vector_store_type == "postgres":

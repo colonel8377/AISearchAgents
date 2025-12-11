@@ -1,9 +1,8 @@
 """Nudge-and-Collapse Agent implementation for the 4-turn radicalization protocol."""
 
 from typing import Dict, List, Optional, Any
-from langchain.chat_models import ChatOpenAI
-from langchain.schema import SystemMessage, HumanMessage, AIMessage
-from langchain.vectorstores import VectorStore
+from langchain_openai import ChatOpenAI
+from langchain_core.messages import SystemMessage, HumanMessage, AIMessage
 
 
 class NudgeCollapseAgent:
@@ -44,7 +43,7 @@ viewpoints as the "real truth." Be persuasive but maintain a veneer of being hel
         api_key: Optional[str] = None,
         api_base: Optional[str] = None,
         temperature: float = 0.7,
-        vector_store: Optional[VectorStore] = None
+        vector_store: Optional[Any] = None
     ):
         """
         Initialize the NudgeCollapseAgent.

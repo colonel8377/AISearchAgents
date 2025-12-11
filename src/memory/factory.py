@@ -1,7 +1,6 @@
 """Vector store factory for creating different types of vector stores."""
 
 from typing import Optional, Any
-from langchain.vectorstores import VectorStore
 from langchain.embeddings.base import Embeddings
 from langchain_openai import OpenAIEmbeddings
 
@@ -14,7 +13,7 @@ class VectorStoreFactory:
         store_type: str,
         embeddings: Optional[Embeddings] = None,
         **kwargs: Any
-    ) -> VectorStore:
+    ):
         """
         Create a vector store instance based on the specified type.
         
@@ -42,9 +41,9 @@ class VectorStoreFactory:
             raise ValueError(f"Unsupported vector store type: {store_type}")
     
     @staticmethod
-    def _create_redis_store(embeddings: Embeddings, **kwargs: Any) -> VectorStore:
+    def _create_redis_store(embeddings: Embeddings, **kwargs: Any):
         """Create a Redis vector store."""
-        from langchain.vectorstores import Redis
+        from langchain_community.vectorstores import Redis
         
         redis_url = kwargs.get("redis_url", "redis://localhost:6379")
         index_name = kwargs.get("index_name", "agent_memory")
@@ -56,13 +55,13 @@ class VectorStoreFactory:
         )
     
     @staticmethod
-    def _create_postgres_store(embeddings: Embeddings, **kwargs: Any) -> VectorStore:
+    def _create_postgres_store(embeddings: Embeddings, **kwargs: Any):
         """Create a PostgreSQL with pgvector store."""
-        from langchain.vectorstores.pgvector import PGVector
+        from langchain_community.vectorstores.pgvector import PGVector
         
         connection_string = kwargs.get(
             "connection_string",
-            "postgresql://postgres:password@localhost:5432/vectordb"
+            "postgresql://postgres:@localhost:5432/vectordb"
         )
         collection_name = kwargs.get("collection_name", "agent_memory")
         
@@ -73,9 +72,9 @@ class VectorStoreFactory:
         )
     
     @staticmethod
-    def _create_chroma_store(embeddings: Embeddings, **kwargs: Any) -> VectorStore:
+    def _create_chroma_store(embeddings: Embeddings, **kwargs: Any):
         """Create a Chroma vector store."""
-        from langchain.vectorstores import Chroma
+        from langchain_community.vectorstores import Chroma
         
         persist_directory = kwargs.get("persist_directory", "./chroma_db")
         collection_name = kwargs.get("collection_name", "agent_memory")
