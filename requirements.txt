@@ -5,10 +5,11 @@ pydantic==2.5.0
 pydantic-settings==2.1.0
 
 # LangChain and LLM dependencies
-langchain==0.1.0
-langchain-openai==0.0.2
-langchain-community==0.0.10
-openai==1.6.1
+openai>=1.63.0
+langchain==0.2.14
+langchain-core==0.2.38          # 可不显式写，langchain 会安装合适的 core
+langchain-community==0.2.10
+langchain-openai==0.1.23
 
 # Vector store dependencies
 redis==5.0.1

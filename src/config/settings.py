@@ -1,20 +1,24 @@
 """Configuration management for AI Search Agents Platform."""
 
 from typing import Literal
+
+from dotenv import load_dotenv
 from pydantic import Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
+from pathlib import Path
+BASE_DIR = Path(__file__).resolve().parents[2]
+ENV_PATH = BASE_DIR / ".env"
 
 
 class Settings(BaseSettings):
     """Application settings using Pydantic for validation and environment variable loading."""
     
     model_config = SettingsConfigDict(
-        env_file=".env",
+        env_file=ENV_PATH,
         env_file_encoding="utf-8",
         case_sensitive=False,
         extra="ignore"
     )
-    
     # API Settings
     api_host: str = Field(default="0.0.0.0", description="API host")
     api_port: int = Field(default=8000, description="API port")
@@ -49,7 +53,6 @@ class Settings(BaseSettings):
     # Agent Settings
     agent_max_turns: int = Field(default=4, description="Maximum number of turns (0-3)")
     agent_temperature: float = Field(default=0.7, description="LLM temperature for agent responses")
-    
 
 # Global settings instance
 settings = Settings()
