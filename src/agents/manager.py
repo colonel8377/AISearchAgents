@@ -107,7 +107,7 @@ class AgentManager:
         return [
             {
                 "agent_id": agent_id,
-                "agent_type": data["type"]
+                "agent_type": data["type"].value  # Convert enum to string
             }
             for agent_id, data in self._agents.items()
         ]
