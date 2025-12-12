@@ -1,7 +1,7 @@
 """Main entry point for running the AI Search Agents Platform server."""
 
 import uvicorn
-from src.config.settings import settings
+from config.settings import settings
 
 
 def main():
