@@ -1,7 +1,13 @@
 """Main entry point for running the AI Search Agents Platform server."""
 
+import sys
+import os
 import uvicorn
-from src.config.settings import settings
+
+# Add src to path for imports
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+
+from config.settings import settings
 
 
 def main():

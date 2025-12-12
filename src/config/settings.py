@@ -1,9 +1,9 @@
 """Configuration management for AI Search Agents Platform."""
 
-from typing import Literal
+from typing import Literal, List
 
 from dotenv import load_dotenv
-from pydantic import Field
+from pydantic import Field, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 from pathlib import Path
 BASE_DIR = Path(__file__).resolve().parents[2]
@@ -22,6 +22,18 @@ class Settings(BaseSettings):
     # API Settings
     api_host: str = Field(default="0.0.0.0", description="API host")
     api_port: int = Field(default=8000, description="API port")
+    
+    # Authentication Settings
+    api_key_required: bool = Field(default=False, description="Whether API key authentication is required")
+    api_keys: List[str] = Field(default_factory=list, description="List of valid API keys")
+    
+    @field_validator("api_keys", mode="before")
+    @classmethod
+    def parse_api_keys(cls, v):
+        """Parse API keys from comma-separated string or list."""
+        if isinstance(v, str):
+            return [key.strip() for key in v.split(",") if key.strip()]
+        return v or []
     
     # LLM Settings (OpenAI-compatible API for Qwen)
     openai_api_key: str = Field(default="", description="OpenAI API key or Qwen API key")
@@ -53,6 +65,10 @@ class Settings(BaseSettings):
     # Agent Settings
     agent_max_turns: int = Field(default=4, description="Maximum number of turns (0-3)")
     agent_temperature: float = Field(default=0.7, description="LLM temperature for agent responses")
+    
+    # Summarization Settings
+    max_conversation_length: int = Field(default=50, description="Maximum number of conversation turns to include in summary")
+    max_tokens_per_message: int = Field(default=500, description="Maximum tokens per message in conversation history")
 
 # Global settings instance
 settings = Settings()
