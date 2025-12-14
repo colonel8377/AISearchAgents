@@ -12,6 +12,8 @@ from ..agents.summarizer.agent import SummarizerAgent
 from ..agents.bot_creator.agent import BotCreatorAgent
 from ..agents.manager import AgentManager, AgentType
 from .auth import verify_api_key
+from ..debate.schemas import PersonaConfig, AgentMetadata, InitRequest, InteractRequest, VoteResponse
+from ..debate.service import DebateService, generate_default_personas
 
 
 # Pydantic models for request/response
@@ -115,6 +117,9 @@ app = FastAPI(
 # Global agent manager
 agent_manager = AgentManager()
 
+# Global debate service
+debate_service = DebateService()
+
 
 @app.get("/")
 async def root():
@@ -127,7 +132,8 @@ async def root():
             "RESTful API design",
             "Optional API key authentication",
             "Improved conversation summarization",
-            "Per-agent memory management"
+            "Per-agent memory management",
+            "Multi-Agent Debate System with stability checking"
         ],
         "agent_types": {
             "nudge_collapse": "4-turn radicalization protocol agent",
@@ -140,7 +146,10 @@ async def root():
             "agent_reset": "/api/v1/agents/{agent_id}/reset",
             "nudge_collapse": "/api/v1/agents/{agent_id}/nudge-collapse/*",
             "summarizer": "/api/v1/agents/{agent_id}/summarizer/*",
-            "bot_creator": "/api/v1/agents/{agent_id}/bot-creator/*"
+            "bot_creator": "/api/v1/agents/{agent_id}/bot-creator/*",
+            "debate_init": "/debate/init (POST to create debate session)",
+            "debate_chat": "/agent/{agent_id}/chat (POST to interact with agent)",
+            "debate_stability": "/debate/{session_id}/stability_check (POST to check stability)"
         },
         "authentication": {
             "enabled": settings.api_key_required,
@@ -617,3 +626,191 @@ async def list_bots(
         return {"bots": bots, "total_count": len(bots)}
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Failed to list bots: {str(e)}")
+
+
+# ===========================
+# Multi-Agent Debate Endpoints
+# ===========================
+
+class InitDebateResponse(BaseModel):
+    """Response model for debate initialization."""
+    session_id: str
+    agents: List[AgentMetadata]
+    topic: str
+
+
+class StabilityCheckRequest(BaseModel):
+    """Request model for stability check."""
+    votes: List[int] = Field(..., description="List of votes from the current round")
+
+
+class StabilityCheckResponse(BaseModel):
+    """Response model for stability check."""
+    stable: bool
+
+
+@app.post("/debate/init", response_model=InitDebateResponse)
+async def init_debate(
+    request: InitRequest,
+    api_key: str = Depends(verify_api_key)
+):
+    """
+    Initialize a new debate session.
+    
+    Creates agents based on custom personas or auto-generates them.
+    Each agent gets a specialized system prompt and few-shot example.
+    
+    Args:
+        request: InitRequest with topic and persona configuration
+        api_key: API key for authentication
+        
+    Returns:
+        Session ID and list of agent metadata
+    """
+    try:
+        # Determine personas to use
+        if request.custom_personas:
+            personas = request.custom_personas
+        elif request.auto_agent_count > 0:
+            personas = generate_default_personas(request.auto_agent_count)
+        else:
+            raise HTTPException(
+                status_code=400,
+                detail="Must provide either custom_personas or auto_agent_count > 0"
+            )
+        
+        # Create session
+        session_id, agents = debate_service.create_session(request.topic, personas)
+        
+        return InitDebateResponse(
+            session_id=session_id,
+            agents=agents,
+            topic=request.topic
+        )
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to initialize debate: {str(e)}")
+
+
+@app.post("/agent/{agent_id}/chat", response_model=VoteResponse)
+async def agent_chat(
+    agent_id: str,
+    request: InteractRequest,
+    api_key: str = Depends(verify_api_key)
+):
+    """
+    Interact with a specific debate agent.
+    
+    The agent receives context about what others have said and responds
+    with a vote and reasoning. This is a placeholder that calls the LLM
+    (currently mocked with await call_llm).
+    
+    Args:
+        agent_id: UUID of the agent
+        request: InteractRequest with session_id and history_context
+        api_key: API key for authentication
+        
+    Returns:
+        VoteResponse with agent's verdict and reasoning
+    """
+    try:
+        from uuid import UUID
+        
+        # Parse agent_id as UUID
+        try:
+            agent_uuid = UUID(agent_id)
+        except ValueError:
+            raise HTTPException(status_code=400, detail="Invalid agent_id format. Must be a valid UUID.")
+        
+        # Verify agent exists in session
+        agent_metadata = debate_service.get_agent_metadata(request.session_id, agent_uuid)
+        if not agent_metadata:
+            raise HTTPException(
+                status_code=404,
+                detail=f"Agent '{agent_id}' not found in session '{request.session_id}'"
+            )
+        
+        # Get session info
+        session = debate_service.get_session(request.session_id)
+        if not session:
+            raise HTTPException(status_code=404, detail=f"Session '{request.session_id}' not found")
+        
+        # Prepare the message for the LLM
+        user_message = f"""Topic: {session['topic']}
+
+Context from other agents:
+{request.history_context}
+
+Please provide your vote (as an integer or descriptive string) and reasoning in JSON format.
+{agent_metadata.few_shot_example}"""
+        
+        # Call the LLM (mocked for now)
+        response = await debate_service.call_llm(
+            agent_metadata.system_prompt,
+            user_message
+        )
+        
+        # Parse the response (in real implementation, parse JSON from LLM)
+        # For now, return a mock response
+        import json
+        try:
+            parsed = json.loads(response)
+            return VoteResponse(
+                agent_id=agent_uuid,
+                verdict=parsed.get("verdict", 1),
+                reasoning=parsed.get("reasoning", "No reasoning provided")
+            )
+        except json.JSONDecodeError:
+            # Fallback if LLM doesn't return valid JSON
+            return VoteResponse(
+                agent_id=agent_uuid,
+                verdict=1,
+                reasoning=response
+            )
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to process agent chat: {str(e)}")
+
+
+@app.post("/debate/{session_id}/stability_check", response_model=StabilityCheckResponse)
+async def check_stability(
+    session_id: str,
+    request: StabilityCheckRequest,
+    api_key: str = Depends(verify_api_key)
+):
+    """
+    Check if the debate has reached stability.
+    
+    Uses KS Statistic logic to compare vote distributions between rounds.
+    If the difference is < 0.05 for 2 consecutive rounds, returns True.
+    
+    Args:
+        session_id: Session identifier
+        request: StabilityCheckRequest with current round votes
+        api_key: API key for authentication
+        
+    Returns:
+        StabilityCheckResponse indicating if debate is stable
+    """
+    try:
+        # Verify session exists
+        session = debate_service.get_session(session_id)
+        if not session:
+            raise HTTPException(status_code=404, detail=f"Session '{session_id}' not found")
+        
+        # Add the new round of votes
+        debate_service.add_vote_round(session_id, request.votes)
+        
+        # Calculate stability
+        is_stable = debate_service.calculate_stability(session_id)
+        
+        return StabilityCheckResponse(stable=is_stable)
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to check stability: {str(e)}")
