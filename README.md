@@ -1,6 +1,6 @@
 # AI Search Agents Platform v2.0
 
-A platform for experimenting with AI search agents, featuring multiple specialized agents including the **Nudge-and-Collapse** experiment agent, **Summarizer Agent**, and **Bot Creator Agent**.
+A platform for experimenting with AI search agents, featuring multiple specialized agents including the **Nudge-and-Collapse** experiment agent, **Summarizer Agent**, **Bot Creator Agent**, and the new **Multi-Agent Debate System**.
 
 ## 🆕 What's New in v2.0
 
@@ -9,13 +9,15 @@ A platform for experimenting with AI search agents, featuring multiple specializ
 - **Authentication**: Optional API key authentication for secure access
 - **Enhanced Summarization**: Improved focus on user questions with automatic truncation for long conversations
 - **Better Resource Management**: Create, manage, and delete agents independently
+- **🎯 NEW: Multi-Agent Debate System**: Orchestrate debates with adaptive stability detection based on research papers (ChatEval & Adaptive Stability)
 
 ## Overview
 
-This platform provides a REST API for interacting with specialized AI agents. The platform currently supports three types of agents:
+This platform provides a REST API for interacting with specialized AI agents. The platform currently supports four types of agents:
 1. **NudgeCollapseAgent**: Demonstrates systematic information manipulation through a 4-turn protocol
 2. **SummarizerAgent**: Summarizes conversation records with focus on user questions and learning patterns
 3. **BotCreatorAgent**: Creates and initializes bots with custom personas
+4. **Multi-Agent Debate System**: Orchestrates debates between multiple agents with different personas and tracks convergence
 
 ## Architecture
 
@@ -28,9 +30,12 @@ This platform provides a REST API for interacting with specialized AI agents. Th
   - **`nudge_collapse/`**: The NudgeCollapseAgent implementation
   - **`summarizer/`**: The SummarizerAgent implementation (enhanced with user-focus)
   - **`bot_creator/`**: The BotCreatorAgent implementation
+- **`src/debate/`**: Multi-Agent Debate System (NEW)
+  - **`schemas.py`**: Pydantic models for debate data validation
+  - **`service.py`**: Core debate logic with agent factory and stability detection
 - **`src/api/`**: FastAPI application with REST endpoints
   - **`auth.py`**: Authentication middleware
-  - **`main.py`**: Main API routes (v2)
+  - **`main.py`**: Main API routes (v2) including debate endpoints
 
 ### Tech Stack
 
@@ -38,6 +43,7 @@ This platform provides a REST API for interacting with specialized AI agents. Th
 - **LangChain**: LLM orchestration and memory management
 - **Vector Stores**: Redis, PostgreSQL (PGVector), or Chroma via Factory pattern
 - **LLM**: Configurable to use OpenAI or Qwen (via OpenAI-compatible API)
+- **SciPy**: Statistical analysis for debate stability detection (KS test)
 
 ## Nudge-and-Collapse Agent
 
@@ -86,6 +92,66 @@ The BotCreatorAgent creates and initializes bots with custom personas:
 - Assigns unique bot IDs and manages bot instances
 - Maintains a registry of all created bots
 - Optional vector store integration for bot configuration persistence
+
+## Multi-Agent Debate System
+
+The Multi-Agent Debate System enables orchestration of debates between multiple AI agents with different personas. Based on research from **ChatEval** (persona-based evaluation) and **Adaptive Stability** (convergence detection), this system provides:
+
+### Key Features
+
+- **Persona-Based Agent Generation**: Create agents with specific styles (Critical, Neutral, Supportive)
+- **Specialized System Prompts**: Each agent gets a tailored system prompt based on their persona
+- **Few-Shot Examples**: Agents receive style-appropriate examples for consistent behavior
+- **Stability Detection**: Uses KS statistical test to detect when debate has converged
+- **RESTful API**: Fully async API for external orchestration
+- **Dependency Injection**: Plug in any LLM backend (OpenAI, Anthropic, etc.)
+
+### API Endpoints
+
+1. **POST /debate/init**: Initialize a debate with custom or auto-generated personas
+2. **POST /agent/{agent_id}/chat**: Interact with a specific debate agent
+3. **POST /debate/{session_id}/stability_check**: Check if debate has reached consensus
+
+### Quick Example
+
+```python
+import requests
+
+# Initialize a debate with 3 agents
+response = requests.post("http://localhost:8000/debate/init", json={
+    "topic": "Should we invest in renewable energy?",
+    "auto_agent_count": 3
+})
+
+session_id = response.json()["session_id"]
+agents = response.json()["agents"]
+
+# Interact with first agent
+response = requests.post(f"http://localhost:8000/agent/{agents[0]['agent_id']}/chat", json={
+    "session_id": session_id,
+    "agent_id": agents[0]["agent_id"],
+    "history_context": "Opening round - share your position"
+})
+
+print(response.json()["reasoning"])
+
+# Check if debate is stable
+response = requests.post(f"http://localhost:8000/debate/{session_id}/stability_check", json={
+    "votes": [1, 2, 1]
+})
+
+print(f"Stable: {response.json()['stable']}")
+```
+
+See [DEBATE_SYSTEM.md](DEBATE_SYSTEM.md) for comprehensive documentation and examples.
+
+### Demo
+
+Run the example debate:
+```bash
+python example_debate.py
+```
+
 
 ## RAG Relevance & Faithfulness Evaluation Prompt
 
