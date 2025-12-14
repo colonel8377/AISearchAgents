@@ -237,7 +237,7 @@ class DebateService:
             ks_stat_2, _ = stats.ks_2samp(vote_history[-2], vote_history[-1])
             
             # If both transitions show small difference (< 0.05), we consider it stable
-            return ks_stat_1 < 0.05 and ks_stat_2 < 0.05
+            return bool(ks_stat_1 < 0.05 and ks_stat_2 < 0.05)
         except (ValueError, RuntimeWarning) as e:
             # If KS test fails (e.g., empty arrays, invalid data), not stable
             return False

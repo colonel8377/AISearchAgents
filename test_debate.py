@@ -253,7 +253,7 @@ class TestDebateService:
         service.add_vote_round(session_id, [1, 1, 2, 2])
         
         # Should be stable (identical distributions)
-        assert service.calculate_stability(session_id) == True
+        assert service.calculate_stability(session_id) is True
     
     def test_calculate_stability_unstable(self):
         """Test stability check when votes are changing."""
@@ -268,7 +268,7 @@ class TestDebateService:
         service.add_vote_round(session_id, [3, 3, 3, 3])
         
         # Should be unstable (changing distributions)
-        assert service.calculate_stability(session_id) == False
+        assert service.calculate_stability(session_id) is False
     
     @pytest.mark.asyncio
     async def test_call_llm_placeholder(self):
