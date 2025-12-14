@@ -762,8 +762,10 @@ Please provide your vote (as an integer or descriptive string) and reasoning in 
                 verdict=parsed.get("verdict", 1),
                 reasoning=parsed.get("reasoning", "No reasoning provided")
             )
-        except json.JSONDecodeError:
+        except json.JSONDecodeError as e:
             # Fallback if LLM doesn't return valid JSON
+            # In production, this should be logged for debugging
+            print(f"Warning: Failed to parse LLM response as JSON: {e}")
             return VoteResponse(
                 agent_id=agent_uuid,
                 verdict=1,

@@ -166,7 +166,7 @@ def test_stability_check(client):
     )
     
     assert response1.status_code == 200
-    assert response1.json()["stable"] == False  # Not enough rounds yet
+    assert response1.json()["stable"] is False  # Not enough rounds yet
     
     # Add more rounds
     response2 = client.post(
@@ -177,7 +177,7 @@ def test_stability_check(client):
     )
     
     assert response2.status_code == 200
-    assert response2.json()["stable"] == False  # Still need one more
+    assert response2.json()["stable"] is False  # Still need one more
     
     # Add third round
     response3 = client.post(
@@ -189,7 +189,7 @@ def test_stability_check(client):
     
     assert response3.status_code == 200
     # Now we have 3 rounds, should check stability (identical votes = stable)
-    assert response3.json()["stable"] == True
+    assert response3.json()["stable"] is True
 
 
 def test_stability_check_invalid_session(client):

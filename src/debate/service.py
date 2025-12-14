@@ -4,7 +4,7 @@ Core logic for Multi-Agent Debate System.
 Implements agent factory and stability logic based on Adaptive Stability paper.
 """
 
-from typing import Dict, List, Callable, Awaitable, Optional
+from typing import Dict, List, Callable, Awaitable, Optional, Tuple
 from uuid import UUID, uuid4
 import numpy as np
 from scipy import stats
@@ -97,7 +97,7 @@ class DebateService:
         """
         self._llm_caller = llm_caller
     
-    def create_session(self, topic: str, personas: List[PersonaConfig]) -> tuple[str, List[AgentMetadata]]:
+    def create_session(self, topic: str, personas: List[PersonaConfig]) -> Tuple[str, List[AgentMetadata]]:
         """
         Create a new debate session with agents.
         
@@ -193,7 +193,16 @@ class DebateService:
         if not session:
             return False
         
-        session["vote_history"].append(votes)
+        # Ensure votes are numeric (convert if needed)
+        numeric_votes = []
+        for vote in votes:
+            try:
+                numeric_votes.append(int(vote) if not isinstance(vote, int) else vote)
+            except (ValueError, TypeError):
+                # If conversion fails, use 0 as default
+                numeric_votes.append(0)
+        
+        session["vote_history"].append(numeric_votes)
         return True
     
     def calculate_stability(self, session_id: str) -> bool:
@@ -229,8 +238,8 @@ class DebateService:
             
             # If both transitions show small difference (< 0.05), we consider it stable
             return ks_stat_1 < 0.05 and ks_stat_2 < 0.05
-        except Exception:
-            # If KS test fails (e.g., empty arrays), not stable
+        except (ValueError, RuntimeWarning) as e:
+            # If KS test fails (e.g., empty arrays, invalid data), not stable
             return False
 
 

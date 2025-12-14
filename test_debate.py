@@ -208,6 +208,25 @@ class TestDebateService:
         assert len(session["vote_history"]) == 1
         assert session["vote_history"][0] == [1, 2, 1]
     
+    def test_add_vote_round_with_conversion(self):
+        """Test adding vote rounds with mixed types (string votes)."""
+        service = DebateService()
+        
+        personas = [PersonaConfig(name="A1", description="T", style="Neutral")]
+        session_id, _ = service.create_session("Test", personas)
+        
+        # Test with mixed types - strings that can be converted to int
+        result = service.add_vote_round(session_id, ["1", 2, "3"])
+        assert result is True
+        
+        session = service.get_session(session_id)
+        assert session["vote_history"][0] == [1, 2, 3]
+        
+        # Test with invalid values - should default to 0
+        result = service.add_vote_round(session_id, ["invalid", 2, None])
+        assert result is True
+        assert session["vote_history"][1] == [0, 2, 0]
+    
     def test_calculate_stability_not_enough_rounds(self):
         """Test stability check with insufficient rounds."""
         service = DebateService()
