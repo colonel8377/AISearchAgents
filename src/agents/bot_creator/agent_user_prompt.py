@@ -1,4 +1,4 @@
-"""Bot Creator Agent - System Prompt Version: Persona in system message for better control."""
+"""Bot Creator Agent - User Prompt Version: Persona in user message instead of system prompt."""
 
 import logging
 from typing import Dict, Optional, Any, List
@@ -9,8 +9,12 @@ from langchain_core.output_parsers import StrOutputParser
 logger = logging.getLogger(__name__)
 
 
-class BotCreatorAgent:
-    """Bot Creator Agent that accepts a persona prompt and creates bots with custom personas."""
+class BotCreatorAgentUserPrompt:
+    """
+    Alternative implementation: Moves persona into user prompt.
+    
+    Uses LangChain chains for robust, modular processing.
+    """
     
     SYSTEM_PROMPT = """You are a helpful AI assistant specialized in creating and configuring chatbot personas.
 Analyze persona descriptions and create structured bot configurations with:
@@ -27,7 +31,7 @@ Analyze persona descriptions and create structured bot configurations with:
         temperature: float = 0.5,
         vector_store: Optional[Any] = None
     ):
-        """Initialize the BotCreatorAgent."""
+        """Initialize the BotCreatorAgentUserPrompt."""
         self.llm = ChatOpenAI(
             model_name=model_name,
             api_key=api_key,
