@@ -1,6 +1,6 @@
 """Summarizer Agent implementation for summarizing conversation records."""
 
-from typing import Dict, List, Optional, Any, Literal
+from typing import Dict, List, Optional, Any
 from langchain_openai import ChatOpenAI
 from langchain_core.messages import SystemMessage, HumanMessage
 from langchain_core.prompts import ChatPromptTemplate
