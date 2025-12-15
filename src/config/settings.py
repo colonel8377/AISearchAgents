@@ -25,11 +25,16 @@ class Settings(BaseSettings):
     
     # Authentication Settings
     api_key_required: bool = Field(default=False, description="Whether API key authentication is required")
-    api_keys_str: str = Field(default="", alias="api_keys", description="Comma-separated list of valid API keys")
+    api_keys_str: str = Field(default="", alias="api_keys", description="Comma-separated list of valid API keys (parsed via api_keys property)")
     
     @property
     def api_keys(self) -> List[str]:
-        """Parse and return API keys as a list."""
+        """
+        Parse and return API keys as a list.
+        
+        The raw string is stored in api_keys_str (with alias 'api_keys' for env var),
+        and this property provides convenient access as a list of strings.
+        """
         if not self.api_keys_str:
             return []
         return [key.strip() for key in self.api_keys_str.split(",") if key.strip()]

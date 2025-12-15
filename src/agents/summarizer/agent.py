@@ -13,7 +13,13 @@ class SummarizerAgent:
     Implements a Summarizer Agent that accepts user conversation records
     and summarizes the key information found within those conversation logs.
     
-    Uses LangChain chains for robust, modular processing.
+    Uses LangChain chains for robust, modular processing. This agent benefits from
+    chains because it processes conversation records in a single pass without maintaining
+    conversational state between invocations.
+    
+    Note: NudgeCollapseAgent doesn't use chains as it needs to maintain message history
+    and conversational context across multiple turns, which is better suited to direct
+    message-based LLM interaction.
     """
     
     SYSTEM_PROMPT = """You are a helpful AI assistant specialized in summarizing conversations.
