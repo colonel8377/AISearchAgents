@@ -75,6 +75,11 @@ class Settings(BaseSettings):
     openai_max_retries: int = Field(default=3, description="Maximum number of retries for OpenAI API calls")
     openai_timeout: float = Field(default=60.0, description="Timeout in seconds for OpenAI API requests")
     
+    # HTTP Client Optimization Settings
+    openai_max_connections: int = Field(default=100, description="Maximum number of HTTP connections in pool")
+    openai_max_keepalive_connections: int = Field(default=20, description="Maximum number of keep-alive connections")
+    openai_keepalive_expiry: float = Field(default=30.0, description="Keep-alive connection expiry time in seconds")
+    
     # Summarization Settings
     max_conversation_length: int = Field(default=50, description="Maximum number of conversation turns to include in summary")
     max_tokens_per_message: int = Field(default=500, description="Maximum tokens per message in conversation history")

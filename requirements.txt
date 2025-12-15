@@ -19,6 +19,7 @@ psycopg2-binary==2.9.9
 
 # Additional utilities
 python-dotenv==1.0.0
+httpx==0.25.2
 
 # Scientific computing for debate stability analysis
 scipy==1.11.4

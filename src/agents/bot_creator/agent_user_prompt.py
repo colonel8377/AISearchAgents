@@ -7,6 +7,7 @@ from langchain_core.prompts import ChatPromptTemplate
 from langchain_core.output_parsers import StrOutputParser
 
 from ...config.settings import settings
+from ...utils.llm_client import llm_manager
 
 logger = logging.getLogger(__name__)
 
@@ -34,13 +35,15 @@ Analyze persona descriptions and create structured bot configurations with:
         vector_store: Optional[Any] = None
     ):
         """Initialize the BotCreatorAgentUserPrompt."""
+        # Use shared HTTP client for better connection pooling and performance
         self.llm = ChatOpenAI(
             model_name=model_name,
             api_key=api_key,
             base_url=api_base,
             temperature=temperature,
             max_retries=settings.openai_max_retries,
-            timeout=settings.openai_timeout
+            timeout=settings.openai_timeout,
+            http_client=llm_manager.get_http_client()
         )
         self.vector_store = vector_store
         self.created_bots: List[Dict[str, Any]] = []

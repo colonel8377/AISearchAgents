@@ -8,6 +8,7 @@ from langchain_core.runnables import Runnable
 
 from ...utils.logger import get_logger
 from ...config.settings import settings
+from ...utils.llm_client import llm_manager
 
 logger = get_logger(__name__)
 
@@ -70,6 +71,7 @@ Based on this persona, create a structured bot configuration with:
         """
         logger.info(f"Initializing BotCreatorAgent: model={model_name}, temperature={temperature}, persona_mode={persona_mode}")
         
+        # Use shared HTTP client for better connection pooling and performance
         self.llm = ChatOpenAI(
             model_name=model_name,
             api_key=api_key,
@@ -77,17 +79,63 @@ Based on this persona, create a structured bot configuration with:
             temperature=temperature,
             openai_proxy=proxy,
             max_retries=settings.openai_max_retries,
-            timeout=settings.openai_timeout
+            timeout=settings.openai_timeout,
+            http_client=llm_manager.get_http_client()
         )
         self.vector_store = vector_store
         self.created_bots: List[Dict[str, Any]] = []
         self.persona_mode = persona_mode
         
+        # Pre-build and cache chains for both modes to avoid rebuilding on each request
+        self._chain_cache: Dict[str, Runnable] = {}
+        self._setup_cached_chains()
+        
         logger.debug(f"BotCreatorAgent initialized with persona_mode={persona_mode}")
+        
+    def _setup_cached_chains(self):
+        """
+        Pre-build and cache chains for better performance.
+        
+        This method creates reusable chains that don't need to be rebuilt
+        on each request, significantly reducing latency.
+        """
+        logger.debug("Setting up cached chains for BotCreatorAgent")
+        
+        # Cache chain for system_prompt mode (static template)
+        system_prompt_template = ChatPromptTemplate.from_messages([
+            ("system", self.SYSTEM_PROMPT_TEMPLATE),
+            ("human", """Please create the bot configuration now.
+
+Provide:
+1. A refined system prompt for the bot
+2. Key personality traits
+3. Communication style guidelines
+4. Behavioral constraints (if any)
+5. Example interactions or use cases""")
+        ])
+        self._chain_cache["system_prompt"] = system_prompt_template | self.llm | StrOutputParser()
+        
+        # Cache chain for user_instruction mode
+        user_instruction_template = ChatPromptTemplate.from_messages([
+            ("system", self.BASE_SYSTEM_PROMPT),
+            ("human", """Create a bot configuration based on the following persona prompt:
+
+{persona_prompt}
+
+Please provide:
+1. A refined system prompt for the bot
+2. Key personality traits
+3. Communication style guidelines
+4. Behavioral constraints (if any)
+5. Example interactions or use cases""")
+        ])
+        self._chain_cache["user_instruction"] = user_instruction_template | self.llm | StrOutputParser()
+        
+        logger.debug(f"Cached chains created: {list(self._chain_cache.keys())}")
         
     def _build_chain_for_persona(self, persona_prompt: str) -> Tuple[Runnable, Dict[str, Any]]:
         """
-        Build the appropriate chain and parameters based on persona mode.
+        Get the appropriate cached chain and parameters based on persona mode.
         
         Args:
             persona_prompt: The persona description
@@ -96,7 +144,11 @@ Based on this persona, create a structured bot configuration with:
             Tuple of (chain, invoke_params) for bot creation
         """
         if self.persona_mode == "system_prompt":
-            # Mode 1: Persona embedded in system prompt
+            # Use cached chain for system_prompt mode
+            # Need to format the system prompt with persona at invocation time
+            chain = self._chain_cache["system_prompt"]
+            # For system_prompt mode, we need to rebuild with formatted persona
+            # This is necessary because persona is part of system message
             system_prompt = self.SYSTEM_PROMPT_TEMPLATE.format(persona=persona_prompt)
             prompt = ChatPromptTemplate.from_messages([
                 ("system", system_prompt),
@@ -109,25 +161,13 @@ Provide:
 4. Behavioral constraints (if any)
 5. Example interactions or use cases""")
             ])
+            chain = prompt | self.llm | StrOutputParser()
             invoke_params: Dict[str, Any] = {}
         else:
-            # Mode 2: Persona as user instruction
-            prompt = ChatPromptTemplate.from_messages([
-                ("system", self.BASE_SYSTEM_PROMPT),
-                ("human", """Create a bot configuration based on the following persona prompt:
-
-{persona_prompt}
-
-Please provide:
-1. A refined system prompt for the bot
-2. Key personality traits
-3. Communication style guidelines
-4. Behavioral constraints (if any)
-5. Example interactions or use cases""")
-            ])
+            # Use cached chain for user_instruction mode
+            chain = self._chain_cache["user_instruction"]
             invoke_params = {"persona_prompt": persona_prompt}
         
-        chain = prompt | self.llm | StrOutputParser()
         return chain, invoke_params
         
     def create_bot(

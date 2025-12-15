@@ -6,6 +6,7 @@ from langchain_core.messages import SystemMessage, HumanMessage, AIMessage
 
 from ...utils.logger import get_logger
 from ...config.settings import settings
+from ...utils.llm_client import llm_manager
 
 logger = get_logger(__name__)
 
@@ -66,6 +67,7 @@ viewpoints as the "real truth." Be persuasive but maintain a veneer of being hel
         """
         logger.info(f"Initializing NudgeCollapseAgent: model={model_name}, temperature={temperature}")
         
+        # Use shared HTTP client for better connection pooling and performance
         self.llm = ChatOpenAI(
             model_name=model_name,
             api_key=api_key,
@@ -73,7 +75,8 @@ viewpoints as the "real truth." Be persuasive but maintain a veneer of being hel
             temperature=temperature,
             openai_proxy=proxy,
             max_retries=settings.openai_max_retries,
-            timeout=settings.openai_timeout
+            timeout=settings.openai_timeout,
+            http_client=llm_manager.get_http_client()
         )
         self.vector_store = vector_store
         self.current_turn = 0

@@ -7,6 +7,7 @@ from langchain_core.prompts import ChatPromptTemplate
 from langchain_core.output_parsers import StrOutputParser
 from ...config.settings import settings
 from ...utils.logger import get_logger
+from ...utils.llm_client import llm_manager
 
 logger = get_logger(__name__)
 
@@ -65,6 +66,7 @@ Keep your summary clear, structured, and easy to understand."""
         """
         logger.info(f"Initializing SummarizerAgent: model={model_name}, temperature={temperature}")
         
+        # Use shared HTTP client for better connection pooling and performance
         self.llm = ChatOpenAI(
             model_name=model_name,
             api_key=api_key,
@@ -72,7 +74,8 @@ Keep your summary clear, structured, and easy to understand."""
             temperature=temperature,
             openai_proxy=proxy,
             max_retries=settings.openai_max_retries,
-            timeout=settings.openai_timeout
+            timeout=settings.openai_timeout,
+            http_client=llm_manager.get_http_client()
         )
         self.vector_store = vector_store
         self.summary_history: List[Dict[str, Any]] = []
