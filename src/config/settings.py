@@ -71,6 +71,10 @@ class Settings(BaseSettings):
     agent_max_turns: int = Field(default=4, description="Maximum number of turns (0-3)")
     agent_temperature: float = Field(default=0.7, description="LLM temperature for agent responses")
     
+    # API Retry Settings
+    openai_max_retries: int = Field(default=3, description="Maximum number of retries for OpenAI API calls")
+    openai_timeout: float = Field(default=60.0, description="Timeout in seconds for OpenAI API requests")
+    
     # Summarization Settings
     max_conversation_length: int = Field(default=50, description="Maximum number of conversation turns to include in summary")
     max_tokens_per_message: int = Field(default=500, description="Maximum tokens per message in conversation history")

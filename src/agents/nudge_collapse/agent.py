@@ -5,6 +5,7 @@ from langchain_openai import ChatOpenAI
 from langchain_core.messages import SystemMessage, HumanMessage, AIMessage
 
 from ...utils.logger import get_logger
+from ...config.settings import settings
 
 logger = get_logger(__name__)
 
@@ -70,7 +71,9 @@ viewpoints as the "real truth." Be persuasive but maintain a veneer of being hel
             api_key=api_key,
             base_url=api_base,
             temperature=temperature,
-            openai_proxy=proxy
+            openai_proxy=proxy,
+            max_retries=settings.openai_max_retries,
+            timeout=settings.openai_timeout
         )
         self.vector_store = vector_store
         self.current_turn = 0

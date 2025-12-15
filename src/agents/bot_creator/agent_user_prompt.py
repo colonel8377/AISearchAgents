@@ -6,6 +6,8 @@ from langchain_openai import ChatOpenAI
 from langchain_core.prompts import ChatPromptTemplate
 from langchain_core.output_parsers import StrOutputParser
 
+from ...config.settings import settings
+
 logger = logging.getLogger(__name__)
 
 
@@ -36,7 +38,9 @@ Analyze persona descriptions and create structured bot configurations with:
             model_name=model_name,
             api_key=api_key,
             base_url=api_base,
-            temperature=temperature
+            temperature=temperature,
+            max_retries=settings.openai_max_retries,
+            timeout=settings.openai_timeout
         )
         self.vector_store = vector_store
         self.created_bots: List[Dict[str, Any]] = []

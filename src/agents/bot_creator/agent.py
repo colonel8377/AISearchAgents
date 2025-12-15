@@ -7,6 +7,7 @@ from langchain_core.output_parsers import StrOutputParser
 from langchain_core.runnables import Runnable
 
 from ...utils.logger import get_logger
+from ...config.settings import settings
 
 logger = get_logger(__name__)
 
@@ -74,7 +75,9 @@ Based on this persona, create a structured bot configuration with:
             api_key=api_key,
             base_url=api_base,
             temperature=temperature,
-            openai_proxy=proxy
+            openai_proxy=proxy,
+            max_retries=settings.openai_max_retries,
+            timeout=settings.openai_timeout
         )
         self.vector_store = vector_store
         self.created_bots: List[Dict[str, Any]] = []
