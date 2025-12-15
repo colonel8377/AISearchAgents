@@ -1,9 +1,12 @@
 """Bot Creator Agent - System Prompt Version: Persona in system message for better control."""
 
+import logging
 from typing import Dict, Optional, Any, List
 from langchain_openai import ChatOpenAI
 from langchain_core.prompts import ChatPromptTemplate
 from langchain_core.output_parsers import StrOutputParser
+
+logger = logging.getLogger(__name__)
 
 
 class BotCreatorAgent:
@@ -134,7 +137,7 @@ Please provide:
         try:
             self.vector_store.add_texts([doc_text], metadatas=[metadata])
         except Exception as e:
-            print(f"Warning: Failed to store in vector memory: {e}")
+            logger.warning(f"Failed to store in vector memory: {e}")
     
     def reset(self) -> None:
         """Reset the agent to initial state."""
