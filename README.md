@@ -27,6 +27,8 @@ OPENAI_API_KEY=your_api_key_here
 OPENAI_API_BASE=https://api.openai.com/v1
 OPENAI_MODEL=gpt-3.5-turbo
 OPENAI_PROXY=                    # Optional: HTTP proxy (e.g., http://proxy:8080)
+OPENAI_MAX_RETRIES=3             # Retry attempts for API failures
+OPENAI_TIMEOUT=60.0              # API timeout in seconds
 
 # API Settings
 API_HOST=0.0.0.0
@@ -40,6 +42,34 @@ VECTOR_STORE_TYPE=chroma
 # Agent Settings
 AGENT_TEMPERATURE=0.7
 ```
+
+### Using Qwen Models
+
+To use Qwen (Alibaba Cloud) models instead of OpenAI:
+
+```bash
+# Set Qwen API credentials
+OPENAI_API_KEY=your_dashscope_api_key
+OPENAI_API_BASE=https://dashscope.aliyuncs.com/compatible-mode/v1
+OPENAI_MODEL=qwen-turbo  # or qwen-plus, qwen-max, qwen-max-longcontext
+
+# Recommended settings for Qwen
+OPENAI_MAX_RETRIES=5
+OPENAI_TIMEOUT=120.0
+```
+
+**Supported Qwen Models:**
+- `qwen-turbo` - Fast and economical
+- `qwen-plus` - Balanced performance
+- `qwen-max` - Highest quality
+- `qwen-max-longcontext` - Extended context window
+
+**Troubleshooting Qwen:**
+- Ensure API base URL ends with `/compatible-mode/v1`
+- Use DashScope API key (get from: https://dashscope.console.aliyun.com/)
+- Increase timeout for complex requests
+- Check model availability in your region
+
 
 ## API Overview
 
@@ -94,6 +124,7 @@ requests.delete(f"{BASE_URL}/api/v1/agents/{agent_id}", headers=headers)
 
 - [Quick Reference](doc/QUICK_REFERENCE.md) - API reference
 - [Debate System](doc/DEBATE_SYSTEM.md) - Multi-agent debate guide
+- [Qwen Troubleshooting](doc/QWEN_TROUBLESHOOTING.md) - Qwen model setup and troubleshooting
 - [Logging Guide](doc/LOGGING_GUIDE.md) - Debugging and logging
 - [Migration Guide](doc/MIGRATION_GUIDE.md) - v1 to v2 migration
 

@@ -65,15 +65,26 @@ Keep your summary clear, structured, and easy to understand."""
         """
         logger.info(f"Initializing SummarizerAgent: model={model_name}, temperature={temperature}")
         
-        self.llm = ChatOpenAI(
-            model_name=model_name,
-            api_key=api_key,
-            base_url=api_base,
-            temperature=temperature,
-            openai_proxy=proxy,
-            max_retries=settings.openai_max_retries,
-            timeout=settings.openai_timeout
-        )
+        # Configure LLM with enhanced compatibility for non-OpenAI APIs (e.g., Qwen)
+        llm_kwargs = {
+            "model_name": model_name,
+            "api_key": api_key,
+            "base_url": api_base,
+            "temperature": temperature,
+            "max_retries": settings.openai_max_retries,
+            "timeout": settings.openai_timeout
+        }
+        
+        # Add proxy if configured
+        if proxy:
+            llm_kwargs["openai_proxy"] = proxy
+        
+        # For non-OpenAI compatible APIs, add default headers to prevent validation issues
+        if api_base and "api.openai.com" not in api_base:
+            logger.debug(f"Using non-OpenAI API base: {api_base}, adding compatibility settings")
+            llm_kwargs["default_headers"] = {"User-Agent": "langchain-openai"}
+        
+        self.llm = ChatOpenAI(**llm_kwargs)
         self.vector_store = vector_store
         self.summary_history: List[Dict[str, Any]] = []
         
@@ -174,10 +185,28 @@ Keep your summary clear, structured, and easy to understand."""
                 }
             }
         except Exception as e:
-            # Handle errors gracefully
+            # Handle errors gracefully with more specific guidance
+            original_error = str(e)
             logger.error(f"Failed to generate summary: {e}", exc_info=True)
+            
+            # Provide more specific error messages for common issues
+            error_msg = original_error
+            if "502" in original_error or "Bad Gateway" in original_error:
+                error_msg = (
+                    f"API returned 502 Bad Gateway error. This may indicate:\n"
+                    f"1. The API endpoint is temporarily unavailable\n"
+                    f"2. For Qwen models: Ensure OPENAI_API_BASE is set correctly (e.g., https://dashscope.aliyuncs.com/compatible-mode/v1)\n"
+                    f"3. Check that your API key is valid and has sufficient quota\n"
+                    f"4. The model name '{self.llm.model_name}' might not be supported by the API\n"
+                    f"Original error: {original_error}"
+                )
+            elif "401" in original_error or "Unauthorized" in original_error:
+                error_msg = f"Authentication failed. Please check your API key configuration. Original error: {original_error}"
+            elif "timeout" in original_error.lower():
+                error_msg = f"Request timed out. Consider increasing OPENAI_TIMEOUT setting. Original error: {original_error}"
+            
             return {
-                "error": f"Failed to generate summary: {str(e)}",
+                "error": f"Failed to generate summary: {error_msg}",
                 "summary": "",
                 "conversation_length": len(conversation_records),
                 "original_length": len(conversation_records),
