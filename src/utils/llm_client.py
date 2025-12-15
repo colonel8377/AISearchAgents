@@ -24,7 +24,6 @@ class LLMClientManager:
     
     _instance = None
     _http_client: Optional[httpx.Client] = None
-    _llm_client: Optional[ChatOpenAI] = None
     
     def __new__(cls):
         if cls._instance is None:
@@ -38,6 +37,13 @@ class LLMClientManager:
         Returns:
             Configured httpx.Client instance
         """
+        # Check if optimized mode is disabled
+        if not settings.use_optimized_mode or not settings.use_shared_http_client:
+            logger.debug("Creating new HTTP client (optimized mode disabled)")
+            return httpx.Client(
+                timeout=settings.openai_timeout
+            )
+        
         if self._http_client is None:
             logger.info("Creating shared HTTP client with optimized connection pooling")
             self._http_client = httpx.Client(
@@ -106,7 +112,6 @@ class LLMClientManager:
             logger.info("Closing shared HTTP client")
             self._http_client.close()
             self._http_client = None
-            self._llm_client = None
 
 
 # Global singleton instance

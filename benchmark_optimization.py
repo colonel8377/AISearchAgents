@@ -10,7 +10,7 @@ from src.agents.bot_creator.agent import BotCreatorAgent
 from src.config.settings import settings
 
 # Mock API key for testing (won't actually call API)
-MOCK_API_KEY = "sk-test-mock-key"
+MOCK_API_KEY = "mock-api-key-for-testing-only"
 
 
 def benchmark_summarizer():

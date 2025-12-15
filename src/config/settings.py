@@ -9,6 +9,9 @@ from pathlib import Path
 BASE_DIR = Path(__file__).resolve().parents[2]
 ENV_PATH = BASE_DIR / ".env"
 
+# Execution mode type for task chains
+ExecutionMode = Literal["chain_online", "chain_local", "no_chain"]
+
 
 class Settings(BaseSettings):
     """Application settings using Pydantic for validation and environment variable loading."""
@@ -79,6 +82,17 @@ class Settings(BaseSettings):
     openai_max_connections: int = Field(default=100, description="Maximum number of HTTP connections in pool")
     openai_max_keepalive_connections: int = Field(default=20, description="Maximum number of keep-alive connections")
     openai_keepalive_expiry: float = Field(default=30.0, description="Keep-alive connection expiry time in seconds")
+    
+    # Performance Optimization Settings
+    use_optimized_mode: bool = Field(default=True, description="Enable optimized mode with chain caching and connection pooling")
+    use_chain_cache: bool = Field(default=True, description="Enable chain caching (only in optimized mode)")
+    use_shared_http_client: bool = Field(default=True, description="Use shared HTTP client with connection pooling (only in optimized mode)")
+    
+    # Task Execution Mode (can be overridden per-request via API)
+    default_execution_mode: ExecutionMode = Field(
+        default="chain_local",
+        description="Default execution mode: 'chain_online' (LLM does chaining), 'chain_local' (we decompose tasks), 'no_chain' (pure prompt)"
+    )
     
     # Summarization Settings
     max_conversation_length: int = Field(default=50, description="Maximum number of conversation turns to include in summary")

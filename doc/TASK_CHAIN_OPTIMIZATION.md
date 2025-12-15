@@ -131,7 +131,12 @@ All tests pass successfully:
 To further tune performance, adjust these environment variables in `.env`:
 
 ```bash
-# Connection pool settings
+# Performance Optimization Mode
+USE_OPTIMIZED_MODE=true                 # Enable/disable optimized mode (default: true)
+USE_CHAIN_CACHE=true                    # Enable chain caching (default: true)
+USE_SHARED_HTTP_CLIENT=true             # Use shared HTTP client (default: true)
+
+# Connection pool settings (only when optimized mode is enabled)
 OPENAI_MAX_CONNECTIONS=100              # Total connection limit
 OPENAI_MAX_KEEPALIVE_CONNECTIONS=20     # Persistent connections
 OPENAI_KEEPALIVE_EXPIRY=30.0            # Connection lifetime (seconds)
@@ -139,6 +144,45 @@ OPENAI_KEEPALIVE_EXPIRY=30.0            # Connection lifetime (seconds)
 # Timeout and retry settings
 OPENAI_TIMEOUT=60.0                     # Request timeout
 OPENAI_MAX_RETRIES=3                    # Retry attempts
+```
+
+### Two Operation Modes
+
+The platform supports two modes to give users flexibility:
+
+#### 1. Optimized Mode (Default - Recommended)
+```bash
+USE_OPTIMIZED_MODE=true
+USE_CHAIN_CACHE=true
+USE_SHARED_HTTP_CLIENT=true
+```
+
+**Benefits:**
+- ✅ Fast execution with chain caching
+- ✅ HTTP connection pooling reduces overhead
+- ✅ Keep-alive connections minimize handshake time
+- ✅ Efficient resource utilization
+
+**Best for:** Production deployments, high-performance needs, multiple agents
+
+#### 2. Legacy Mode (No Optimizations)
+```bash
+USE_OPTIMIZED_MODE=false
+```
+
+**Characteristics:**
+- 🔧 Chains built dynamically on each request
+- 🔧 No HTTP connection pooling
+- 🔧 Each agent creates new connections
+- 🔧 Compatible with debugging tools that inspect chain construction
+
+**Best for:** Development, debugging, compatibility testing
+
+You can also fine-tune by enabling/disabling individual optimizations:
+```bash
+USE_OPTIMIZED_MODE=true
+USE_CHAIN_CACHE=false        # Disable chain caching but keep connection pooling
+USE_SHARED_HTTP_CLIENT=true
 ```
 
 ## Future Optimizations
