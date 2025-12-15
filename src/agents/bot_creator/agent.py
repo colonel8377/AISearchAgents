@@ -70,15 +70,26 @@ Based on this persona, create a structured bot configuration with:
         """
         logger.info(f"Initializing BotCreatorAgent: model={model_name}, temperature={temperature}, persona_mode={persona_mode}")
         
-        self.llm = ChatOpenAI(
-            model_name=model_name,
-            api_key=api_key,
-            base_url=api_base,
-            temperature=temperature,
-            openai_proxy=proxy,
-            max_retries=settings.openai_max_retries,
-            timeout=settings.openai_timeout
-        )
+        # Configure LLM with enhanced compatibility for non-OpenAI APIs (e.g., Qwen)
+        llm_kwargs = {
+            "model_name": model_name,
+            "api_key": api_key,
+            "base_url": api_base,
+            "temperature": temperature,
+            "max_retries": settings.openai_max_retries,
+            "timeout": settings.openai_timeout
+        }
+        
+        # Add proxy if configured
+        if proxy:
+            llm_kwargs["openai_proxy"] = proxy
+        
+        # For non-OpenAI compatible APIs, add default headers to prevent validation issues
+        if api_base and "api.openai.com" not in api_base:
+            logger.debug(f"Using non-OpenAI API base: {api_base}, adding compatibility settings")
+            llm_kwargs["default_headers"] = {"User-Agent": "langchain-openai"}
+        
+        self.llm = ChatOpenAI(**llm_kwargs)
         self.vector_store = vector_store
         self.created_bots: List[Dict[str, Any]] = []
         self.persona_mode = persona_mode
@@ -182,9 +193,26 @@ Please provide:
                 "message": f"Bot '{bot_entry['bot_name']}' created successfully (mode: {self.persona_mode})"
             }
         except Exception as e:
+            error_msg = str(e)
             logger.error(f"Failed to create bot: {e}", exc_info=True)
+            
+            # Provide more specific error messages for common issues
+            if "502" in error_msg or "Bad Gateway" in error_msg:
+                error_msg = (
+                    f"API returned 502 Bad Gateway error. This may indicate:\n"
+                    f"1. The API endpoint is temporarily unavailable\n"
+                    f"2. For Qwen models: Ensure OPENAI_API_BASE is set correctly (e.g., https://dashscope.aliyuncs.com/compatible-mode/v1)\n"
+                    f"3. Check that your API key is valid and has sufficient quota\n"
+                    f"4. The model name '{self.llm.model_name}' might not be supported by the API\n"
+                    f"Original error: {error_msg}"
+                )
+            elif "401" in error_msg or "Unauthorized" in error_msg:
+                error_msg = f"Authentication failed. Please check your API key configuration. Original error: {error_msg}"
+            elif "timeout" in error_msg.lower():
+                error_msg = f"Request timed out. Consider increasing OPENAI_TIMEOUT setting. Original error: {error_msg}"
+            
             return {
-                "error": f"Failed to create bot: {str(e)}",
+                "error": f"Failed to create bot: {error_msg}",
                 "bot_config": None
             }
     
