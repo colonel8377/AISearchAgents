@@ -10,6 +10,9 @@ import numpy as np
 from scipy import stats
 
 from .schemas import PersonaConfig, AgentMetadata
+from ..utils.logger import get_logger
+
+logger = get_logger(__name__)
 
 
 # Few-shot example templates for different styles
@@ -87,6 +90,7 @@ class DebateService:
         """Initialize the debate service."""
         self._sessions: Dict[str, Dict] = {}
         self._llm_caller: Optional[Callable[[str, str], Awaitable[str]]] = None
+        logger.info("DebateService initialized")
     
     def set_llm_caller(self, llm_caller: Callable[[str, str], Awaitable[str]]) -> None:
         """
@@ -109,9 +113,11 @@ class DebateService:
             Tuple of (session_id, list of agent metadata)
         """
         session_id = str(uuid4())
+        logger.info(f"Creating debate session: session_id={session_id}, topic='{topic}', num_personas={len(personas)}")
+        
         agents = []
         
-        for persona in personas:
+        for i, persona in enumerate(personas):
             agent_id = uuid4()
             system_prompt = generate_system_prompt(persona)
             few_shot_example = get_few_shot_example(persona)
@@ -123,6 +129,7 @@ class DebateService:
                 few_shot_example=few_shot_example
             )
             agents.append(agent_metadata)
+            logger.debug(f"Agent created for debate: agent_id={agent_id}, role={persona.name}, style={persona.style}")
         
         # Store session data
         self._sessions[session_id] = {
@@ -130,6 +137,8 @@ class DebateService:
             "agents": {str(agent.agent_id): agent for agent in agents},
             "vote_history": []  # List of rounds, each round is a list of votes
         }
+        
+        logger.info(f"Debate session created successfully: session_id={session_id}, num_agents={len(agents)}")
         
         return session_id, agents
     
@@ -191,6 +200,7 @@ class DebateService:
         """
         session = self._sessions.get(session_id)
         if not session:
+            logger.warning(f"Attempted to add votes to non-existent session: {session_id}")
             return False
         
         # Ensure votes are numeric (convert if needed)
@@ -200,9 +210,11 @@ class DebateService:
                 numeric_votes.append(int(vote) if not isinstance(vote, int) else vote)
             except (ValueError, TypeError):
                 # If conversion fails, use 0 as default
+                logger.warning(f"Invalid vote value: {vote}, using 0 as default")
                 numeric_votes.append(0)
         
         session["vote_history"].append(numeric_votes)
+        logger.info(f"Vote round added: session_id={session_id}, round={len(session['vote_history'])}, votes={numeric_votes}")
         return True
     
     def calculate_stability(self, session_id: str) -> bool:
@@ -220,12 +232,14 @@ class DebateService:
         """
         session = self._sessions.get(session_id)
         if not session:
+            logger.warning(f"Stability check on non-existent session: {session_id}")
             return False
         
         vote_history = session["vote_history"]
         
         # Need at least 3 rounds to check for 2 consecutive stable rounds
         if len(vote_history) < 3:
+            logger.debug(f"Insufficient rounds for stability check: {len(vote_history)} < 3")
             return False
         
         # Check last two transitions
@@ -236,10 +250,15 @@ class DebateService:
             # Compare round n-1 vs n
             ks_stat_2, _ = stats.ks_2samp(vote_history[-2], vote_history[-1])
             
+            logger.debug(f"KS statistics: ks_stat_1={ks_stat_1:.4f}, ks_stat_2={ks_stat_2:.4f}")
+            
             # If both transitions show small difference (< 0.05), we consider it stable
-            return bool(ks_stat_1 < 0.05 and ks_stat_2 < 0.05)
+            is_stable = bool(ks_stat_1 < 0.05 and ks_stat_2 < 0.05)
+            logger.info(f"Stability check result: session_id={session_id}, stable={is_stable}")
+            return is_stable
         except (ValueError, RuntimeWarning) as e:
             # If KS test fails (e.g., empty arrays, invalid data), not stable
+            logger.warning(f"KS test failed for session {session_id}: {e}")
             return False
 
 

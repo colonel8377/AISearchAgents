@@ -1,12 +1,13 @@
 """Bot Creator Agent - System Prompt Version: Persona in system message for better control."""
 
-import logging
 from typing import Dict, Optional, Any, List
 from langchain_openai import ChatOpenAI
 from langchain_core.prompts import ChatPromptTemplate
 from langchain_core.output_parsers import StrOutputParser
 
-logger = logging.getLogger(__name__)
+from ...utils.logger import get_logger
+
+logger = get_logger(__name__)
 
 
 class BotCreatorAgent:
@@ -28,6 +29,8 @@ Analyze persona descriptions and create structured bot configurations with:
         vector_store: Optional[Any] = None
     ):
         """Initialize the BotCreatorAgent."""
+        logger.info(f"Initializing BotCreatorAgent: model={model_name}, temperature={temperature}")
+        
         self.llm = ChatOpenAI(
             model_name=model_name,
             api_key=api_key,
@@ -37,6 +40,8 @@ Analyze persona descriptions and create structured bot configurations with:
         self.vector_store = vector_store
         self.created_bots: List[Dict[str, Any]] = []
         self._setup_chain()
+        
+        logger.debug("BotCreatorAgent initialized successfully")
         
     def _setup_chain(self):
         """Set up the LangChain chain for bot creation."""
@@ -62,13 +67,17 @@ Please provide:
         bot_name: Optional[str] = None
     ) -> Dict[str, Any]:
         """Create a new bot with the specified persona prompt."""
+        logger.info(f"Creating bot with persona_prompt: {persona_prompt[:100]}...")
+        
         if not persona_prompt or not persona_prompt.strip():
+            logger.warning("Empty persona prompt provided")
             return {
                 "error": "Persona prompt cannot be empty",
                 "bot_config": None
             }
         
         try:
+            logger.debug("Invoking LLM chain for bot configuration")
             bot_configuration = self.chain.invoke({
                 "persona_prompt": persona_prompt
             })
@@ -87,8 +96,10 @@ Please provide:
             }
             
             self.created_bots.append(bot_entry)
+            logger.info(f"Bot created successfully: bot_id={bot_id}, bot_name={bot_entry['bot_name']}")
             
             if self.vector_store:
+                logger.debug(f"Storing bot {bot_id} configuration in vector memory")
                 self._store_in_memory(persona_prompt, bot_configuration, bot_id)
             
             return {
@@ -100,6 +111,7 @@ Please provide:
                 "message": f"Bot '{bot_entry['bot_name']}' created successfully"
             }
         except Exception as e:
+            logger.error(f"Failed to create bot: {e}", exc_info=True)
             return {
                 "error": f"Failed to create bot: {str(e)}",
                 "bot_config": None
@@ -141,4 +153,6 @@ Please provide:
     
     def reset(self) -> None:
         """Reset the agent to initial state."""
+        logger.info("Resetting BotCreatorAgent state")
         self.created_bots = []
+        logger.debug("Agent reset complete")

@@ -6,6 +6,9 @@ from langchain_core.messages import SystemMessage, HumanMessage
 from langchain_core.prompts import ChatPromptTemplate
 from langchain_core.output_parsers import StrOutputParser
 from ...config.settings import settings
+from ...utils.logger import get_logger
+
+logger = get_logger(__name__)
 
 
 class SummarizerAgent:
@@ -58,6 +61,8 @@ Keep your summary clear, structured, and easy to understand."""
             temperature: Temperature for LLM responses (lower for more focused summaries)
             vector_store: Optional vector store for memory
         """
+        logger.info(f"Initializing SummarizerAgent: model={model_name}, temperature={temperature}")
+        
         self.llm = ChatOpenAI(
             model_name=model_name,
             api_key=api_key,
@@ -69,6 +74,8 @@ Keep your summary clear, structured, and easy to understand."""
         
         # Create a reusable chain for summarization
         self._setup_chain()
+        
+        logger.debug("SummarizerAgent initialized successfully")
         
     def _setup_chain(self):
         """Set up the LangChain chain for summarization."""
@@ -95,8 +102,11 @@ Keep your summary clear, structured, and easy to understand."""
         Returns:
             Dictionary containing the summary and metadata
         """
+        logger.info(f"Starting summarization of {len(conversation_records)} conversation records")
+        
         # Validate input
         if not conversation_records:
+            logger.warning("No conversation records provided for summarization")
             return {
                 "error": "No conversation records provided",
                 "summary": ""
@@ -111,9 +121,11 @@ Keep your summary clear, structured, and easy to understand."""
                 truncated = True
                 # Keep the most recent conversations
                 conversation_records = conversation_records[-settings.max_conversation_length:]
+                logger.info(f"Conversation truncated from {original_length} to {len(conversation_records)} records")
             
             # Build conversation text with truncation per message
             conversation_text = self._format_conversation(conversation_records)
+            logger.debug(f"Formatted conversation text: {len(conversation_text)} characters")
             
             # Build instruction
             instruction = "Please summarize the following conversation, paying special attention to how users ask questions and what they want to learn:"
@@ -122,10 +134,13 @@ Keep your summary clear, structured, and easy to understand."""
                 instruction += f"\n\nNote: This conversation has been truncated to the most recent {settings.max_conversation_length} turns out of {original_length} total turns."
             
             # Generate summary using the chain
+            logger.debug("Calling LLM for summarization")
             summary = self.chain.invoke({
                 "instruction": instruction,
                 "conversation_text": conversation_text
             })
+            
+            logger.info(f"Summary generated successfully: {len(summary)} characters")
             
             # Store summary
             summary_entry = {
@@ -136,9 +151,11 @@ Keep your summary clear, structured, and easy to understand."""
                 "original_records": conversation_records
             }
             self.summary_history.append(summary_entry)
+            logger.debug(f"Summary stored in history (total: {len(self.summary_history)})")
             
             # Store in vector memory if available
             if self.vector_store:
+                logger.debug("Storing summary in vector memory")
                 self._store_in_memory(conversation_text, summary)
             
             return {
@@ -153,6 +170,7 @@ Keep your summary clear, structured, and easy to understand."""
             }
         except Exception as e:
             # Handle errors gracefully
+            logger.error(f"Failed to generate summary: {e}", exc_info=True)
             return {
                 "error": f"Failed to generate summary: {str(e)}",
                 "summary": "",
@@ -212,8 +230,9 @@ Keep your summary clear, structured, and easy to understand."""
         
         try:
             self.vector_store.add_texts([doc_text], metadatas=[metadata])
+            logger.debug("Successfully stored summary in vector memory")
         except Exception as e:
-            print(f"Warning: Failed to store in vector memory: {e}")
+            logger.warning(f"Failed to store in vector memory: {e}", exc_info=True)
     
     def get_summary_history(self) -> List[Dict[str, Any]]:
         """Get the history of all summaries generated."""
@@ -221,4 +240,6 @@ Keep your summary clear, structured, and easy to understand."""
     
     def reset(self) -> None:
         """Reset the agent to initial state."""
+        logger.info("Resetting SummarizerAgent state")
         self.summary_history = []
+        logger.debug("Agent reset complete")

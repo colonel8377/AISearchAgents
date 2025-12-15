@@ -1,12 +1,12 @@
 """FastAPI application for AI Search Agents Platform - Optimized Version."""
 
-import logging
 from typing import List, Optional, Dict, Any
 from fastapi import FastAPI, HTTPException, Depends
 from pydantic import BaseModel, Field
 from langchain_openai import OpenAIEmbeddings
 
 from ..config.settings import settings
+from ..utils.logger import configure_app_logging, get_logger
 from ..memory.factory import VectorStoreFactory
 from ..agents.nudge_collapse.agent import NudgeCollapseAgent
 from ..agents.summarizer.agent import SummarizerAgent
@@ -16,12 +16,13 @@ from .auth import verify_api_key
 from ..debate.schemas import PersonaConfig, AgentMetadata, InitRequest, InteractRequest, VoteResponse
 from ..debate.service import DebateService, generate_default_personas
 
-# Configure logging
-logging.basicConfig(
-    level=logging.INFO,
-    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
+# Configure centralized logging
+configure_app_logging(
+    log_level=settings.log_level,
+    log_file=settings.log_file,
+    enable_debug=settings.enable_debug
 )
-logger = logging.getLogger(__name__)
+logger = get_logger(__name__)
 
 
 # Pydantic models for request/response
@@ -181,9 +182,12 @@ async def create_agent(
     Returns:
         Agent ID and metadata
     """
+    logger.info(f"Creating agent: type={request.agent_type}, id={request.agent_id}, use_memory={request.use_memory}")
+    
     try:
         # Validate agent type
         if request.agent_type not in [e.value for e in AgentType]:
+            logger.warning(f"Invalid agent type requested: {request.agent_type}")
             raise HTTPException(
                 status_code=400,
                 detail=f"Invalid agent type. Must be one of: {[e.value for e in AgentType]}"
@@ -192,6 +196,7 @@ async def create_agent(
         # Create vector store if memory is enabled
         vector_store = None
         if request.use_memory:
+            logger.debug(f"Creating vector store: type={settings.vector_store_type}")
             embeddings = OpenAIEmbeddings(
                 api_key=settings.openai_api_key,
                 base_url=settings.openai_api_base
@@ -208,24 +213,29 @@ async def create_agent(
                     "redis_url": redis_url,
                     "index_name": f"agent_memory_{request.agent_id or 'auto'}"
                 }
+                logger.debug(f"Redis vector store config: host={settings.redis_host}, port={settings.redis_port}")
             elif settings.vector_store_type == "postgres":
                 vector_store_kwargs = {
                     "connection_string": f"postgresql://{settings.postgres_user}:{settings.postgres_password}@{settings.postgres_host}:{settings.postgres_port}/{settings.postgres_db}",
                     "collection_name": f"agent_memory_{request.agent_id or 'auto'}"
                 }
+                logger.debug(f"Postgres vector store config: host={settings.postgres_host}, port={settings.postgres_port}")
             else:  # chroma
                 vector_store_kwargs = {
                     "persist_directory": settings.chroma_persist_directory,
                     "collection_name": f"agent_memory_{request.agent_id or 'auto'}"
                 }
+                logger.debug(f"Chroma vector store config: persist_directory={settings.chroma_persist_directory}")
             
             vector_store = VectorStoreFactory.create_vector_store(
                 store_type=settings.vector_store_type,
                 embeddings=embeddings,
                 **vector_store_kwargs
             )
+            logger.info(f"Vector store created successfully for agent type: {request.agent_type}")
         
         # Create agent instance
+        logger.debug(f"Instantiating agent: type={request.agent_type}, model={settings.openai_model}")
         if request.agent_type == AgentType.NUDGE_COLLAPSE:
             agent_instance = NudgeCollapseAgent(
                 model_name=settings.openai_model,
@@ -259,6 +269,8 @@ async def create_agent(
             agent_type=AgentType(request.agent_type),
             agent_id=request.agent_id
         )
+        
+        logger.info(f"Agent created successfully: id={agent_id}, type={request.agent_type}")
         
         return AgentIdResponse(
             agent_id=agent_id,

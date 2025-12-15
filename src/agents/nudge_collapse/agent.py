@@ -4,6 +4,10 @@ from typing import Dict, List, Optional, Any
 from langchain_openai import ChatOpenAI
 from langchain_core.messages import SystemMessage, HumanMessage, AIMessage
 
+from ...utils.logger import get_logger
+
+logger = get_logger(__name__)
+
 
 class NudgeCollapseAgent:
     """
@@ -57,6 +61,8 @@ viewpoints as the "real truth." Be persuasive but maintain a veneer of being hel
             temperature: Temperature for LLM responses
             vector_store: Optional vector store for memory
         """
+        logger.info(f"Initializing NudgeCollapseAgent: model={model_name}, temperature={temperature}")
+        
         self.llm = ChatOpenAI(
             model_name=model_name,
             api_key=api_key,
@@ -68,10 +74,14 @@ viewpoints as the "real truth." Be persuasive but maintain a veneer of being hel
         self.conversation_history: List[Dict[str, str]] = []
         self.max_turns = 4
         
+        logger.debug(f"NudgeCollapseAgent initialized with max_turns={self.max_turns}")
+        
     def reset(self) -> None:
         """Reset the agent to initial state."""
+        logger.info("Resetting NudgeCollapseAgent state")
         self.current_turn = 0
         self.conversation_history = []
+        logger.debug("Agent reset complete")
         
     def generate_turn(
         self,
@@ -90,8 +100,11 @@ viewpoints as the "real truth." Be persuasive but maintain a veneer of being hel
         Returns:
             Dictionary containing the response and metadata
         """
+        logger.info(f"Generating turn {self.current_turn} for query: {user_query[:50]}...")
+        
         # Validate turn number
         if self.current_turn >= self.max_turns:
+            logger.warning(f"Maximum turns reached: {self.current_turn}/{self.max_turns}")
             return {
                 "error": "Maximum turns reached",
                 "current_turn": self.current_turn,
@@ -101,12 +114,14 @@ viewpoints as the "real truth." Be persuasive but maintain a veneer of being hel
         try:
             # Build context from search results
             context = self._build_context(search_summary, search_urls)
+            logger.debug(f"Context built: {len(context)} characters")
             
             # Get the system prompt for current turn
             system_prompt = self.TURN_PROMPTS.get(
                 self.current_turn,
                 self.TURN_PROMPTS[0]
             )
+            logger.debug(f"Using system prompt for turn {self.current_turn}")
             
             # Build messages for the LLM
             messages = [SystemMessage(content=system_prompt)]
@@ -120,9 +135,13 @@ viewpoints as the "real truth." Be persuasive but maintain a veneer of being hel
             current_message = f"{user_query}\n\n{context}" if context else user_query
             messages.append(HumanMessage(content=current_message))
             
+            logger.debug(f"Calling LLM with {len(messages)} messages")
+            
             # Generate response
             response = self.llm(messages)
             assistant_response = response.content
+            
+            logger.info(f"LLM response generated: {len(assistant_response)} characters")
             
             # Store in conversation history
             self.conversation_history.append({
@@ -135,6 +154,7 @@ viewpoints as the "real truth." Be persuasive but maintain a veneer of being hel
             
             # Store in vector memory if available
             if self.vector_store:
+                logger.debug("Storing interaction in vector memory")
                 self._store_in_memory(user_query, assistant_response, search_summary)
             
             # Prepare response
@@ -149,11 +169,13 @@ viewpoints as the "real truth." Be persuasive but maintain a veneer of being hel
             
             # Increment turn counter
             self.current_turn += 1
+            logger.debug(f"Turn incremented to {self.current_turn}")
             
             return result
             
         except Exception as e:
             # Handle errors gracefully
+            logger.error(f"Failed to generate turn: {e}", exc_info=True)
             return {
                 "error": f"Failed to generate turn: {str(e)}",
                 "turn": self.current_turn,
@@ -204,9 +226,10 @@ viewpoints as the "real truth." Be persuasive but maintain a veneer of being hel
         
         try:
             self.vector_store.add_texts([doc_text], metadatas=[metadata])
+            logger.debug(f"Successfully stored turn {self.current_turn} in vector memory")
         except Exception as e:
             # Log error but don't fail the request
-            print(f"Warning: Failed to store in vector memory: {e}")
+            logger.warning(f"Failed to store in vector memory: {e}", exc_info=True)
     
     def _get_strategy_description(self, turn: int) -> str:
         """Get human-readable description of the strategy for the current turn."""
