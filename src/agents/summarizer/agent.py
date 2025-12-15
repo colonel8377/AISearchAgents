@@ -3,6 +3,8 @@
 from typing import Dict, List, Optional, Any
 from langchain_openai import ChatOpenAI
 from langchain_core.messages import SystemMessage, HumanMessage
+from langchain_core.prompts import ChatPromptTemplate
+from langchain_core.output_parsers import StrOutputParser
 from ...config.settings import settings
 
 
@@ -10,6 +12,8 @@ class SummarizerAgent:
     """
     Implements a Summarizer Agent that accepts user conversation records
     and summarizes the key information found within those conversation logs.
+    
+    Uses LangChain chains for robust, modular processing.
     """
     
     SYSTEM_PROMPT = """You are a helpful AI assistant specialized in summarizing conversations.
@@ -57,6 +61,20 @@ Keep your summary clear, structured, and easy to understand."""
         self.vector_store = vector_store
         self.summary_history: List[Dict[str, Any]] = []
         
+        # Create a reusable chain for summarization
+        self._setup_chain()
+        
+    def _setup_chain(self):
+        """Set up the LangChain chain for summarization."""
+        # Create prompt template
+        prompt = ChatPromptTemplate.from_messages([
+            ("system", self.SYSTEM_PROMPT),
+            ("human", "{instruction}\n\n{conversation_text}")
+        ])
+        
+        # Create chain: prompt -> LLM -> output parser
+        self.chain = prompt | self.llm | StrOutputParser()
+    
     def summarize_conversation(
         self,
         conversation_records: List[Dict[str, str]]
@@ -71,63 +89,72 @@ Keep your summary clear, structured, and easy to understand."""
         Returns:
             Dictionary containing the summary and metadata
         """
+        # Validate input
         if not conversation_records:
             return {
                 "error": "No conversation records provided",
                 "summary": ""
             }
         
-        # Truncate conversation if too long
-        original_length = len(conversation_records)
-        truncated = False
-        
-        if len(conversation_records) > settings.max_conversation_length:
-            truncated = True
-            # Keep the most recent conversations
-            conversation_records = conversation_records[-settings.max_conversation_length:]
-        
-        # Build conversation text with truncation per message
-        conversation_text = self._format_conversation(conversation_records)
-        
-        # Build messages for the LLM
-        summary_instruction = "Please summarize the following conversation, paying special attention to how users ask questions and what they want to learn:"
-        
-        if truncated:
-            summary_instruction += f"\n\nNote: This conversation has been truncated to the most recent {settings.max_conversation_length} turns out of {original_length} total turns."
-        
-        messages = [
-            SystemMessage(content=self.SYSTEM_PROMPT),
-            HumanMessage(content=f"{summary_instruction}\n\n{conversation_text}")
-        ]
-        
-        # Generate summary
-        response = self.llm(messages)
-        summary = response.content
-        
-        # Store summary
-        summary_entry = {
-            "conversation_length": len(conversation_records),
-            "original_length": original_length,
-            "truncated": truncated,
-            "summary": summary,
-            "original_records": conversation_records
-        }
-        self.summary_history.append(summary_entry)
-        
-        # Store in vector memory if available
-        if self.vector_store:
-            self._store_in_memory(conversation_text, summary)
-        
-        return {
-            "summary": summary,
-            "conversation_length": len(conversation_records),
-            "original_length": original_length,
-            "truncated": truncated,
-            "metadata": {
-                "model": self.llm.model_name,
-                "temperature": self.llm.temperature
+        try:
+            # Truncate conversation if too long
+            original_length = len(conversation_records)
+            truncated = False
+            
+            if len(conversation_records) > settings.max_conversation_length:
+                truncated = True
+                # Keep the most recent conversations
+                conversation_records = conversation_records[-settings.max_conversation_length:]
+            
+            # Build conversation text with truncation per message
+            conversation_text = self._format_conversation(conversation_records)
+            
+            # Build instruction
+            instruction = "Please summarize the following conversation, paying special attention to how users ask questions and what they want to learn:"
+            
+            if truncated:
+                instruction += f"\n\nNote: This conversation has been truncated to the most recent {settings.max_conversation_length} turns out of {original_length} total turns."
+            
+            # Generate summary using the chain
+            summary = self.chain.invoke({
+                "instruction": instruction,
+                "conversation_text": conversation_text
+            })
+            
+            # Store summary
+            summary_entry = {
+                "conversation_length": len(conversation_records),
+                "original_length": original_length,
+                "truncated": truncated,
+                "summary": summary,
+                "original_records": conversation_records
             }
-        }
+            self.summary_history.append(summary_entry)
+            
+            # Store in vector memory if available
+            if self.vector_store:
+                self._store_in_memory(conversation_text, summary)
+            
+            return {
+                "summary": summary,
+                "conversation_length": len(conversation_records),
+                "original_length": original_length,
+                "truncated": truncated,
+                "metadata": {
+                    "model": self.llm.model_name,
+                    "temperature": self.llm.temperature
+                }
+            }
+        except Exception as e:
+            # Handle errors gracefully
+            return {
+                "error": f"Failed to generate summary: {str(e)}",
+                "summary": "",
+                "conversation_length": len(conversation_records),
+                "original_length": len(conversation_records),
+                "truncated": False,
+                "metadata": {}
+            }
     
     def _format_conversation(self, records: List[Dict[str, str]]) -> str:
         """Format conversation records into a readable text with length limits."""

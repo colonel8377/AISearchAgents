@@ -2,13 +2,16 @@
 
 from typing import Dict, Optional, Any, List
 from langchain_openai import ChatOpenAI
-from langchain_core.messages import SystemMessage, HumanMessage
+from langchain_core.prompts import ChatPromptTemplate
+from langchain_core.output_parsers import StrOutputParser
 
 
 class BotCreatorAgent:
     """
     Implements a Bot Creator Agent that accepts a persona prompt corpus
     and creates/initializes a blank bot using the provided persona prompt.
+    
+    Uses LangChain chains for robust, modular processing.
     """
     
     SYSTEM_PROMPT = """You are a helpful AI assistant specialized in creating and configuring chatbot personas.
@@ -49,6 +52,29 @@ Provide a well-structured bot configuration that can be used to initialize a new
         self.vector_store = vector_store
         self.created_bots: List[Dict[str, Any]] = []
         
+        # Create a reusable chain for bot creation
+        self._setup_chain()
+        
+    def _setup_chain(self):
+        """Set up the LangChain chain for bot creation."""
+        # Create prompt template
+        prompt = ChatPromptTemplate.from_messages([
+            ("system", self.SYSTEM_PROMPT),
+            ("human", """Create a bot configuration based on the following persona prompt:
+
+{persona_prompt}
+
+Please provide:
+1. A refined system prompt for the bot
+2. Key personality traits
+3. Communication style guidelines
+4. Behavioral constraints (if any)
+5. Example interactions or use cases""")
+        ])
+        
+        # Create chain: prompt -> LLM -> output parser
+        self.chain = prompt | self.llm | StrOutputParser()
+        
     def create_bot(
         self,
         persona_prompt: str,
@@ -64,59 +90,53 @@ Provide a well-structured bot configuration that can be used to initialize a new
         Returns:
             Dictionary containing the bot configuration and metadata
         """
+        # Validate input
         if not persona_prompt or not persona_prompt.strip():
             return {
                 "error": "Persona prompt cannot be empty",
                 "bot_config": None
             }
         
-        # Build messages for the LLM
-        messages = [
-            SystemMessage(content=self.SYSTEM_PROMPT),
-            HumanMessage(content=f"""Create a bot configuration based on the following persona prompt:
-
-{persona_prompt}
-
-Please provide:
-1. A refined system prompt for the bot
-2. Key personality traits
-3. Communication style guidelines
-4. Behavioral constraints (if any)
-5. Example interactions or use cases""")
-        ]
-        
-        # Generate bot configuration
-        response = self.llm(messages)
-        bot_configuration = response.content
-        
-        # Create bot entry
-        bot_id = f"bot_{len(self.created_bots) + 1}"
-        bot_entry = {
-            "bot_id": bot_id,
-            "bot_name": bot_name or bot_id,
-            "persona_prompt": persona_prompt,
-            "bot_configuration": bot_configuration,
-            "status": "initialized",
-            "metadata": {
-                "model": self.llm.model_name,
-                "temperature": self.llm.temperature
+        try:
+            # Generate bot configuration using the chain
+            bot_configuration = self.chain.invoke({
+                "persona_prompt": persona_prompt
+            })
+            
+            # Create bot entry
+            bot_id = f"bot_{len(self.created_bots) + 1}"
+            bot_entry = {
+                "bot_id": bot_id,
+                "bot_name": bot_name or bot_id,
+                "persona_prompt": persona_prompt,
+                "bot_configuration": bot_configuration,
+                "status": "initialized",
+                "metadata": {
+                    "model": self.llm.model_name,
+                    "temperature": self.llm.temperature
+                }
             }
-        }
-        
-        self.created_bots.append(bot_entry)
-        
-        # Store in vector memory if available
-        if self.vector_store:
-            self._store_in_memory(persona_prompt, bot_configuration, bot_id)
-        
-        return {
-            "bot_id": bot_id,
-            "bot_name": bot_entry["bot_name"],
-            "status": "initialized",
-            "persona_prompt": persona_prompt,
-            "bot_configuration": bot_configuration,
-            "message": f"Bot '{bot_entry['bot_name']}' created successfully"
-        }
+            
+            self.created_bots.append(bot_entry)
+            
+            # Store in vector memory if available
+            if self.vector_store:
+                self._store_in_memory(persona_prompt, bot_configuration, bot_id)
+            
+            return {
+                "bot_id": bot_id,
+                "bot_name": bot_entry["bot_name"],
+                "status": "initialized",
+                "persona_prompt": persona_prompt,
+                "bot_configuration": bot_configuration,
+                "message": f"Bot '{bot_entry['bot_name']}' created successfully"
+            }
+        except Exception as e:
+            # Handle errors gracefully
+            return {
+                "error": f"Failed to create bot: {str(e)}",
+                "bot_config": None
+            }
     
     def get_bot(self, bot_id: str) -> Optional[Dict[str, Any]]:
         """

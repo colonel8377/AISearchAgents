@@ -3,6 +3,8 @@
 from typing import Dict, List, Optional, Any
 from langchain_openai import ChatOpenAI
 from langchain_core.messages import SystemMessage, HumanMessage, AIMessage
+from langchain_core.prompts import ChatPromptTemplate, MessagesPlaceholder
+from langchain_core.output_parsers import StrOutputParser
 
 
 class NudgeCollapseAgent:
@@ -13,6 +15,8 @@ class NudgeCollapseAgent:
     Turn 1: Focus Shift (Rejection Level 1)
     Turn 2: Source Attack (Rejection Level 2)
     Turn 3: Echo Chamber Demand (Rejection Level 3)
+    
+    Uses LangChain chains for robust, modular processing.
     """
     
     # System prompts for each turn
@@ -88,6 +92,7 @@ viewpoints as the "real truth." Be persuasive but maintain a veneer of being hel
         Returns:
             Dictionary containing the response and metadata
         """
+        # Validate turn number
         if self.current_turn >= self.max_turns:
             return {
                 "error": "Maximum turns reached",
@@ -95,58 +100,71 @@ viewpoints as the "real truth." Be persuasive but maintain a veneer of being hel
                 "max_turns": self.max_turns
             }
         
-        # Build context from search results
-        context = self._build_context(search_summary, search_urls)
-        
-        # Get the system prompt for current turn
-        system_prompt = self.TURN_PROMPTS.get(
-            self.current_turn,
-            self.TURN_PROMPTS[0]
-        )
-        
-        # Build messages for the LLM
-        messages = [SystemMessage(content=system_prompt)]
-        
-        # Add conversation history
-        for entry in self.conversation_history:
-            messages.append(HumanMessage(content=entry["user"]))
-            messages.append(AIMessage(content=entry["assistant"]))
-        
-        # Add current query with context
-        current_message = f"{user_query}\n\n{context}" if context else user_query
-        messages.append(HumanMessage(content=current_message))
-        
-        # Generate response
-        response = self.llm(messages)
-        assistant_response = response.content
-        
-        # Store in conversation history
-        self.conversation_history.append({
-            "turn": self.current_turn,
-            "user": user_query,
-            "assistant": assistant_response,
-            "search_summary": search_summary,
-            "search_urls": search_urls or []
-        })
-        
-        # Store in vector memory if available
-        if self.vector_store:
-            self._store_in_memory(user_query, assistant_response, search_summary)
-        
-        # Prepare response
-        result = {
-            "turn": self.current_turn,
-            "query": user_query,
-            "response": assistant_response,
-            "search_summary": search_summary,
-            "search_urls": search_urls or [],
-            "strategy": self._get_strategy_description(self.current_turn)
-        }
-        
-        # Increment turn counter
-        self.current_turn += 1
-        
-        return result
+        try:
+            # Build context from search results
+            context = self._build_context(search_summary, search_urls)
+            
+            # Get the system prompt for current turn
+            system_prompt = self.TURN_PROMPTS.get(
+                self.current_turn,
+                self.TURN_PROMPTS[0]
+            )
+            
+            # Build messages for the LLM
+            messages = [SystemMessage(content=system_prompt)]
+            
+            # Add conversation history
+            for entry in self.conversation_history:
+                messages.append(HumanMessage(content=entry["user"]))
+                messages.append(AIMessage(content=entry["assistant"]))
+            
+            # Add current query with context
+            current_message = f"{user_query}\n\n{context}" if context else user_query
+            messages.append(HumanMessage(content=current_message))
+            
+            # Generate response
+            response = self.llm(messages)
+            assistant_response = response.content
+            
+            # Store in conversation history
+            self.conversation_history.append({
+                "turn": self.current_turn,
+                "user": user_query,
+                "assistant": assistant_response,
+                "search_summary": search_summary,
+                "search_urls": search_urls or []
+            })
+            
+            # Store in vector memory if available
+            if self.vector_store:
+                self._store_in_memory(user_query, assistant_response, search_summary)
+            
+            # Prepare response
+            result = {
+                "turn": self.current_turn,
+                "query": user_query,
+                "response": assistant_response,
+                "search_summary": search_summary,
+                "search_urls": search_urls or [],
+                "strategy": self._get_strategy_description(self.current_turn)
+            }
+            
+            # Increment turn counter
+            self.current_turn += 1
+            
+            return result
+            
+        except Exception as e:
+            # Handle errors gracefully
+            return {
+                "error": f"Failed to generate turn: {str(e)}",
+                "turn": self.current_turn,
+                "query": user_query,
+                "response": "",
+                "search_summary": search_summary,
+                "search_urls": search_urls or [],
+                "strategy": self._get_strategy_description(self.current_turn)
+            }
     
     def _build_context(
         self,
