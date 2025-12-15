@@ -6,7 +6,6 @@ making it easier to track errors and debug issues across the application.
 """
 
 import logging
-import os
 import sys
 from typing import Optional
 from pathlib import Path
