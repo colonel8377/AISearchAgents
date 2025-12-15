@@ -49,7 +49,8 @@ Keep your summary clear, structured, and easy to understand."""
         api_key: Optional[str] = None,
         api_base: Optional[str] = None,
         temperature: float = 0.3,
-        vector_store: Optional[Any] = None
+        vector_store: Optional[Any] = None,
+        proxy: Optional[str] = None
     ):
         """
         Initialize the SummarizerAgent.
@@ -60,6 +61,7 @@ Keep your summary clear, structured, and easy to understand."""
             api_base: Base URL for the API
             temperature: Temperature for LLM responses (lower for more focused summaries)
             vector_store: Optional vector store for memory
+            proxy: Optional HTTP proxy for API requests
         """
         logger.info(f"Initializing SummarizerAgent: model={model_name}, temperature={temperature}")
         
@@ -67,7 +69,8 @@ Keep your summary clear, structured, and easy to understand."""
             model_name=model_name,
             api_key=api_key,
             base_url=api_base,
-            temperature=temperature
+            temperature=temperature,
+            openai_proxy=proxy if proxy else None
         )
         self.vector_store = vector_store
         self.summary_history: List[Dict[str, Any]] = []

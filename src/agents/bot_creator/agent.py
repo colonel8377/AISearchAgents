@@ -26,7 +26,8 @@ Analyze persona descriptions and create structured bot configurations with:
         api_key: Optional[str] = None,
         api_base: Optional[str] = None,
         temperature: float = 0.5,
-        vector_store: Optional[Any] = None
+        vector_store: Optional[Any] = None,
+        proxy: Optional[str] = None
     ):
         """Initialize the BotCreatorAgent."""
         logger.info(f"Initializing BotCreatorAgent: model={model_name}, temperature={temperature}")
@@ -35,7 +36,8 @@ Analyze persona descriptions and create structured bot configurations with:
             model_name=model_name,
             api_key=api_key,
             base_url=api_base,
-            temperature=temperature
+            temperature=temperature,
+            openai_proxy=proxy if proxy else None
         )
         self.vector_store = vector_store
         self.created_bots: List[Dict[str, Any]] = []

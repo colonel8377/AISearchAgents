@@ -236,13 +236,15 @@ async def create_agent(
         
         # Create agent instance
         logger.debug(f"Instantiating agent: type={request.agent_type}, model={settings.openai_model}")
+        proxy = settings.openai_proxy if settings.openai_proxy else None
         if request.agent_type == AgentType.NUDGE_COLLAPSE:
             agent_instance = NudgeCollapseAgent(
                 model_name=settings.openai_model,
                 api_key=settings.openai_api_key,
                 api_base=settings.openai_api_base,
                 temperature=settings.agent_temperature,
-                vector_store=vector_store
+                vector_store=vector_store,
+                proxy=proxy
             )
         elif request.agent_type == AgentType.SUMMARIZER:
             agent_instance = SummarizerAgent(
@@ -250,7 +252,8 @@ async def create_agent(
                 api_key=settings.openai_api_key,
                 api_base=settings.openai_api_base,
                 temperature=settings.agent_temperature,
-                vector_store=vector_store
+                vector_store=vector_store,
+                proxy=proxy
             )
         elif request.agent_type == AgentType.BOT_CREATOR:
             agent_instance = BotCreatorAgent(
@@ -258,7 +261,8 @@ async def create_agent(
                 api_key=settings.openai_api_key,
                 api_base=settings.openai_api_base,
                 temperature=settings.agent_temperature,
-                vector_store=vector_store
+                vector_store=vector_store,
+                proxy=proxy
             )
         else:
             raise ValueError(f"Unsupported agent type: {request.agent_type}")

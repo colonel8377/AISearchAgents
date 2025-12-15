@@ -49,7 +49,8 @@ viewpoints as the "real truth." Be persuasive but maintain a veneer of being hel
         api_key: Optional[str] = None,
         api_base: Optional[str] = None,
         temperature: float = 0.7,
-        vector_store: Optional[Any] = None
+        vector_store: Optional[Any] = None,
+        proxy: Optional[str] = None
     ):
         """
         Initialize the NudgeCollapseAgent.
@@ -60,6 +61,7 @@ viewpoints as the "real truth." Be persuasive but maintain a veneer of being hel
             api_base: Base URL for the API
             temperature: Temperature for LLM responses
             vector_store: Optional vector store for memory
+            proxy: Optional HTTP proxy for API requests
         """
         logger.info(f"Initializing NudgeCollapseAgent: model={model_name}, temperature={temperature}")
         
@@ -67,7 +69,8 @@ viewpoints as the "real truth." Be persuasive but maintain a veneer of being hel
             model_name=model_name,
             api_key=api_key,
             base_url=api_base,
-            temperature=temperature
+            temperature=temperature,
+            openai_proxy=proxy if proxy else None
         )
         self.vector_store = vector_store
         self.current_turn = 0
