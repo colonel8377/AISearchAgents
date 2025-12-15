@@ -86,6 +86,9 @@ requests.delete(f"{BASE_URL}/api/v1/agents/{agent_id}", headers=headers)
 - **RESTful API**: Intuitive endpoints with optional authentication
 - **Vector Stores**: Redis, PostgreSQL (pgvector), or Chroma
 - **Debate System**: Multi-agent debates with KS-statistic stability detection
+- **Bot Creator Modes**: Two persona modes for comparative experiments:
+  - `system_prompt`: Persona embedded in system prompt (stricter control)
+  - `user_instruction`: Persona as user message (more flexibility)
 
 ## Documentation
 

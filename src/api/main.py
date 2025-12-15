@@ -31,6 +31,7 @@ class CreateAgentRequest(BaseModel):
     agent_type: str = Field(..., description="Type of agent: 'nudge_collapse', 'summarizer', or 'bot_creator'")
     agent_id: Optional[str] = Field(default=None, description="Custom agent ID (auto-generated if not provided)")
     use_memory: bool = Field(default=False, description="Whether to use vector memory for this agent")
+    persona_mode: Optional[str] = Field(default="system_prompt", description="Persona mode for bot_creator: 'system_prompt' or 'user_instruction'")
 
 
 class AgentIdResponse(BaseModel):
@@ -39,6 +40,7 @@ class AgentIdResponse(BaseModel):
     agent_type: str
     status: str
     message: str
+    persona_mode: Optional[str] = None
 
 
 class GenerateTurnRequest(BaseModel):
@@ -106,6 +108,7 @@ class BotCreationResponse(BaseModel):
     bot_name: str
     status: str
     persona_prompt: str
+    persona_mode: Optional[str] = None
     bot_configuration: str
     message: str
 
@@ -256,13 +259,19 @@ async def create_agent(
                 proxy=proxy
             )
         elif request.agent_type == AgentType.BOT_CREATOR:
+            # Validate persona_mode
+            persona_mode = request.persona_mode or "system_prompt"
+            if persona_mode not in ["system_prompt", "user_instruction"]:
+                raise ValueError(f"Invalid persona_mode. Must be 'system_prompt' or 'user_instruction'")
+            
             agent_instance = BotCreatorAgent(
                 model_name=settings.openai_model,
                 api_key=settings.openai_api_key,
                 api_base=settings.openai_api_base,
                 temperature=settings.agent_temperature,
                 vector_store=vector_store,
-                proxy=proxy
+                proxy=proxy,
+                persona_mode=persona_mode
             )
         else:
             raise ValueError(f"Unsupported agent type: {request.agent_type}")
@@ -274,13 +283,19 @@ async def create_agent(
             agent_id=request.agent_id
         )
         
+        # Get persona_mode for response (only for bot_creator)
+        response_persona_mode = None
+        if request.agent_type == AgentType.BOT_CREATOR.value:
+            response_persona_mode = request.persona_mode or "system_prompt"
+        
         logger.info(f"Agent created successfully: id={agent_id}, type={request.agent_type}")
         
         return AgentIdResponse(
             agent_id=agent_id,
             agent_type=request.agent_type,
             status="created",
-            message=f"Agent '{agent_id}' of type '{request.agent_type}' created successfully"
+            message=f"Agent '{agent_id}' of type '{request.agent_type}' created successfully",
+            persona_mode=response_persona_mode
         )
         
     except ValueError as e:
