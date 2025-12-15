@@ -3,6 +3,10 @@
 from typing import Dict, Optional, Any, List
 from enum import Enum
 
+from ..utils.logger import get_logger
+
+logger = get_logger(__name__)
+
 
 class AgentType(str, Enum):
     """Supported agent types."""
@@ -23,6 +27,7 @@ class AgentManager:
         """Initialize the agent manager."""
         self._agents: Dict[str, Dict[str, Any]] = {}
         self._agent_counter = 0
+        logger.info("AgentManager initialized")
         
     def create_agent(
         self,
@@ -46,6 +51,7 @@ class AgentManager:
             agent_id = f"agent_{self._agent_counter}"
         
         if agent_id in self._agents:
+            logger.error(f"Attempted to create agent with duplicate ID: {agent_id}")
             raise ValueError(f"Agent with ID '{agent_id}' already exists")
         
         self._agents[agent_id] = {
@@ -53,6 +59,8 @@ class AgentManager:
             "type": agent_type,
             "created_at": None  # Could add timestamp if needed
         }
+        
+        logger.info(f"Agent registered: id={agent_id}, type={agent_type.value}")
         
         return agent_id
     
@@ -67,6 +75,10 @@ class AgentManager:
             The agent instance or None if not found
         """
         agent_data = self._agents.get(agent_id)
+        if agent_data:
+            logger.debug(f"Agent retrieved: id={agent_id}")
+        else:
+            logger.debug(f"Agent not found: id={agent_id}")
         return agent_data["instance"] if agent_data else None
     
     def get_agent_type(self, agent_id: str) -> Optional[AgentType]:
@@ -93,8 +105,11 @@ class AgentManager:
             True if deleted, False if not found
         """
         if agent_id in self._agents:
+            agent_type = self._agents[agent_id]["type"]
             del self._agents[agent_id]
+            logger.info(f"Agent deleted: id={agent_id}, type={agent_type.value}")
             return True
+        logger.warning(f"Attempted to delete non-existent agent: id={agent_id}")
         return False
     
     def list_agents(self) -> List[Dict[str, str]]:
@@ -114,8 +129,10 @@ class AgentManager:
     
     def clear_all(self) -> None:
         """Clear all agents."""
+        count = len(self._agents)
         self._agents.clear()
         self._agent_counter = 0
+        logger.info(f"Cleared all agents: {count} agents removed")
     
     def exists(self, agent_id: str) -> bool:
         """

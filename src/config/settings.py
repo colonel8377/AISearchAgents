@@ -73,6 +73,11 @@ class Settings(BaseSettings):
     # Summarization Settings
     max_conversation_length: int = Field(default=50, description="Maximum number of conversation turns to include in summary")
     max_tokens_per_message: int = Field(default=500, description="Maximum tokens per message in conversation history")
+    
+    # Logging Settings
+    log_level: str = Field(default="INFO", description="Logging level (DEBUG, INFO, WARNING, ERROR, CRITICAL)")
+    log_file: str = Field(default="logs/ai_search_agents.log", description="Path to log file")
+    enable_debug: bool = Field(default=False, description="Enable debug mode with verbose logging")
 
 # Global settings instance
 settings = Settings()
