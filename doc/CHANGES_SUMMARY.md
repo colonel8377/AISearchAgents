@@ -1,83 +1,51 @@
 # V2.0 Changes Summary
 
 ## Overview
-
-This document summarizes all the optimizations and improvements made to the AI Search Agents Platform in version 2.0.
-
-## Problem Statement (Original Requirements)
-
-The following issues were addressed in Chinese:
-
-1. **API路径不够直观** - API paths are not intuitive enough
-2. **reset里面的参数也不够直观** - Reset parameters are not intuitive enough
-3. **summarize历史优化** - Optimize conversation history summarization, considering user questions and handling long conversations
-4. **多agent支持** - Support multiple agents with numbering and per-agent memory clearing
-5. **鉴权问题** - Add authentication
+Optimizations and improvements in AI Search Agents Platform v2.0.
 
 ## Solutions Implemented
 
 ### 1. RESTful API Design ✅
+- Resource-based REST API structure: `/api/v1/agents/{agent_id}/{agent_type}/{action}`
+- Proper HTTP methods (POST, GET, DELETE)
 
-**Problem**: Old API paths like `/agent/initialize`, `/agent/generate` were not intuitive or RESTful.
-
-**Solution**: 
-- Implemented resource-based REST API structure
-- New endpoint pattern: `/api/v1/agents/{agent_id}/{agent_type}/{action}`
-- Uses proper HTTP methods (POST, GET, DELETE)
-- Clear hierarchy and semantic meaning
-
-**Changes**:
-```
-Old: POST /agent/initialize
-New: POST /api/v1/agents
-
-Old: POST /agent/generate
-New: POST /api/v1/agents/{agent_id}/nudge-collapse/generate
-
-Old: POST /agent/reset
-New: POST /api/v1/agents/{agent_id}/reset
-
-Old: GET /agent/history
-New: GET /api/v1/agents/{agent_id}/nudge-collapse/history
-
-Old: POST /agent/summarize
-New: POST /api/v1/agents/{agent_id}/summarizer/summarize
-
-Old: POST /agent/create_bot
-New: POST /api/v1/agents/{agent_id}/bot-creator/create
-```
+**Examples**:
+- `POST /api/v1/agents` - Create agent
+- `POST /api/v1/agents/{agent_id}/nudge-collapse/generate` - Generate turn
+- `DELETE /api/v1/agents/{agent_id}` - Delete agent
 
 ### 2. Improved Reset Parameters ✅
-
-**Problem**: Reset endpoint had unclear parameter `clear_memory` without context.
-
-**Solution**:
-- Added `reset_conversation` parameter to explicitly control conversation history reset
-- Kept `clear_memory` for vector store memory
-- Both parameters have clear descriptions
+- `reset_conversation`: Clear conversation history
+- `clear_memory`: Clear vector store memory
 - Per-agent reset (doesn't affect other agents)
 
-**Changes**:
-```python
-# Old
-{
-  "clear_memory": false
-}
-
-# New
-{
-  "reset_conversation": true,  # Clear conversation history
-  "clear_memory": false         # Clear vector memory
-}
-```
-
 ### 3. Enhanced Conversation Summarization ✅
+- Focus on user question patterns and learning behavior
+- Automatic truncation for long conversations (default: 50 turns, 500 tokens/message)
+- Returns metadata: `original_length`, `truncated`, `conversation_length`
 
-**Problem**: Summarization didn't focus enough on user questions, and long conversations weren't handled well.
+### 4. Multi-Agent Support ✅
+- Multiple agents with unique IDs (auto-generated or custom)
+- AgentManager for centralized management
+- Per-agent memory and state
+- List/delete individual agents
 
-**Solution**:
-- **Enhanced System Prompt**: Now specifically instructs LLM to pay attention to:
-  - How users phrase their questions
+**Endpoints**:
+- `POST /api/v1/agents` - Create
+- `GET /api/v1/agents` - List all
+- `GET /api/v1/agents/{agent_id}` - Get status
+- `DELETE /api/v1/agents/{agent_id}` - Delete
+
+### 5. Authentication ✅
+- Optional API key authentication
+- Configure via `API_KEY_REQUIRED` and `API_KEY` env variables
+- Applied to all agent endpoints
+
+## Tech Stack
+- FastAPI, LangChain, Pydantic
+- Vector stores: Redis, PostgreSQL (PGVector), Chroma
+- Authentication middleware
+
   - User's intent and learning patterns
   - Information-seeking behavior
   

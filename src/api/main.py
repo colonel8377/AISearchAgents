@@ -1,5 +1,6 @@
 """FastAPI application for AI Search Agents Platform - Optimized Version."""
 
+import logging
 from typing import List, Optional, Dict, Any
 from fastapi import FastAPI, HTTPException, Depends
 from pydantic import BaseModel, Field
@@ -14,6 +15,13 @@ from ..agents.manager import AgentManager, AgentType
 from .auth import verify_api_key
 from ..debate.schemas import PersonaConfig, AgentMetadata, InitRequest, InteractRequest, VoteResponse
 from ..debate.service import DebateService, generate_default_personas
+
+# Configure logging
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
+)
+logger = logging.getLogger(__name__)
 
 
 # Pydantic models for request/response
@@ -260,8 +268,10 @@ async def create_agent(
         )
         
     except ValueError as e:
+        logger.error(f"Validation error creating agent: {e}", exc_info=True)
         raise HTTPException(status_code=400, detail=str(e))
     except Exception as e:
+        logger.error(f"Failed to create agent: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail=f"Failed to create agent: {str(e)}")
 
 
@@ -380,6 +390,7 @@ async def reset_agent(
         }
         
     except Exception as e:
+        logger.error(f"Failed to reset agent {agent_id}: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail=f"Failed to reset agent: {str(e)}")
 
 
@@ -419,6 +430,7 @@ async def generate_turn(
         )
         
         if "error" in result:
+            logger.warning(f"Agent {agent_id} generate_turn error: {result['error']}")
             raise HTTPException(status_code=400, detail=result["error"])
         
         return TurnResponse(**result)
@@ -426,6 +438,7 @@ async def generate_turn(
     except HTTPException:
         raise
     except Exception as e:
+        logger.error(f"Failed to generate turn for agent {agent_id}: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail=f"Failed to generate turn: {str(e)}")
 
 
@@ -461,6 +474,7 @@ async def get_conversation_history(
             history=agent.get_conversation_history()
         )
     except Exception as e:
+        logger.error(f"Failed to get history for agent {agent_id}: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail=f"Failed to get history: {str(e)}")
 
 
@@ -499,6 +513,7 @@ async def summarize_conversation(
         result = agent.summarize_conversation(request.conversation_records)
         
         if "error" in result:
+            logger.warning(f"Agent {agent_id} summarize error: {result['error']}")
             raise HTTPException(status_code=400, detail=result["error"])
         
         return SummaryResponse(**result)
@@ -506,6 +521,7 @@ async def summarize_conversation(
     except HTTPException:
         raise
     except Exception as e:
+        logger.error(f"Failed to summarize conversation for agent {agent_id}: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail=f"Failed to summarize conversation: {str(e)}")
 
 
@@ -548,6 +564,7 @@ async def get_summary_history(
             "total_summaries": len(history)
         }
     except Exception as e:
+        logger.error(f"Failed to get summary history for agent {agent_id}: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail=f"Failed to get summary history: {str(e)}")
 
 
@@ -568,16 +585,25 @@ async def create_bot(
     Returns:
         Bot creation response
     """
+    logger.info(f"Creating bot for agent {agent_id} with persona_prompt length: {len(request.persona_prompt)}")
+    
     agent = agent_manager.get_agent(agent_id)
     if not agent:
+        logger.warning(f"Agent {agent_id} not found")
         raise HTTPException(status_code=404, detail=f"Agent '{agent_id}' not found")
     
     agent_type = agent_manager.get_agent_type(agent_id)
     if agent_type != AgentType.BOT_CREATOR:
+        logger.warning(f"Wrong agent type for bot creation: {agent_type}")
         raise HTTPException(
             status_code=400,
             detail=f"This endpoint requires a 'bot_creator' agent, but agent '{agent_id}' is type '{agent_type}'"
         )
+    
+    # Validate persona_prompt is not empty
+    if not request.persona_prompt or not request.persona_prompt.strip():
+        logger.warning(f"Empty persona_prompt provided for agent {agent_id}")
+        raise HTTPException(status_code=400, detail="persona_prompt cannot be empty")
     
     try:
         result = agent.create_bot(
@@ -586,13 +612,16 @@ async def create_bot(
         )
         
         if "error" in result:
+            logger.warning(f"Agent {agent_id} create_bot error: {result['error']}")
             raise HTTPException(status_code=400, detail=result["error"])
         
+        logger.info(f"Successfully created bot {result.get('bot_id')} for agent {agent_id}")
         return BotCreationResponse(**result)
         
     except HTTPException:
         raise
     except Exception as e:
+        logger.error(f"Failed to create bot for agent {agent_id}: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail=f"Failed to create bot: {str(e)}")
 
 
@@ -625,6 +654,7 @@ async def list_bots(
         bots = agent.list_bots()
         return {"bots": bots, "total_count": len(bots)}
     except Exception as e:
+        logger.error(f"Failed to list bots for agent {agent_id}: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail=f"Failed to list bots: {str(e)}")
 
 
@@ -691,6 +721,7 @@ async def init_debate(
     except HTTPException:
         raise
     except Exception as e:
+        logger.error(f"Failed to initialize debate: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail=f"Failed to initialize debate: {str(e)}")
 
 
@@ -764,8 +795,7 @@ Please provide your vote (as an integer or descriptive string) and reasoning in 
             )
         except json.JSONDecodeError as e:
             # Fallback if LLM doesn't return valid JSON
-            # In production, this should be logged for debugging
-            print(f"Warning: Failed to parse LLM response as JSON: {e}")
+            logger.warning(f"Failed to parse LLM response as JSON for agent {agent_id}: {e}")
             return VoteResponse(
                 agent_id=agent_uuid,
                 verdict=1,
@@ -775,6 +805,7 @@ Please provide your vote (as an integer or descriptive string) and reasoning in 
     except HTTPException:
         raise
     except Exception as e:
+        logger.error(f"Failed to process agent chat for agent {agent_id}: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail=f"Failed to process agent chat: {str(e)}")
 
 
@@ -815,4 +846,5 @@ async def check_stability(
     except HTTPException:
         raise
     except Exception as e:
+        logger.error(f"Failed to check stability for session {session_id}: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail=f"Failed to check stability: {str(e)}")

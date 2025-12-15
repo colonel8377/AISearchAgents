@@ -1,103 +1,66 @@
 # Multi-Agent Debate System
 
-A RESTful API service for orchestrating multi-agent debates with adaptive stability detection. This system decouples agents so they can be orchestrated externally, incorporating concepts from two research papers: **ChatEval** (Personas) and **Adaptive Stability** (Stopping Logic).
+RESTful API service for orchestrating multi-agent debates with adaptive stability detection.
 
-## Overview
+## Key Features
 
-The Multi-Agent Debate System allows you to:
-- Create debate sessions with custom or auto-generated agent personas
-- Each agent has a unique personality, system prompt, and few-shot example
-- Interact with agents through a RESTful API
-- Track debate stability using statistical analysis (KS statistic)
-
-## Tech Stack
-
-- **FastAPI**: Web server and RESTful API
-- **Pydantic**: Strict data validation for all requests/responses
-- **UUID**: Unique agent identification
-- **SciPy**: Statistical analysis for stability detection
+- Custom or auto-generated agent personas
+- Unique personality, system prompt, and few-shot examples per agent
+- RESTful API for agent interaction
+- Statistical stability tracking (KS statistic)
 
 ## Architecture
 
 ### Components
 
-1. **schemas.py**: Pydantic models for data validation
-   - `PersonaConfig`: Agent persona configuration
-   - `AgentMetadata`: Agent metadata with prompts and examples
-   - `InitRequest`: Debate initialization request
-   - `InteractRequest`: Agent interaction request
-   - `VoteResponse`: Agent vote and reasoning
+1. **schemas.py**: Pydantic models (PersonaConfig, AgentMetadata, Requests/Responses)
+2. **service.py**: Core logic (agent factory, sessions, stability)
+3. **API Endpoints**:
+   - `POST /debate/init`: Initialize debate
+   - `POST /agent/{agent_id}/chat`: Interact with agent
+   - `POST /debate/{session_id}/stability_check`: Check stability
 
-2. **service.py**: Core business logic
-   - Agent factory with persona-based prompt generation
-   - Session management
-   - Stability calculation using KS statistic
-   - LLM caller abstraction (dependency injection)
+## Quick Start
 
-3. **API Endpoints** (in `main.py`):
-   - `POST /debate/init`: Initialize a debate session
-   - `POST /agent/{agent_id}/chat`: Interact with a specific agent
-   - `POST /debate/{session_id}/stability_check`: Check debate stability
+### Initialize Debate
 
-## API Documentation
-
-### 1. Initialize a Debate Session
-
-**Endpoint**: `POST /debate/init`
-
-**Request Body**:
-```json
+```bash
+POST /debate/init
 {
   "topic": "Should we invest more in renewable energy?",
-  "custom_personas": [
-    {
-      "name": "Dr. Skeptic",
-      "description": "A critical analyst who questions assumptions",
-      "style": "Critical"
-    },
-    {
-      "name": "Ms. Optimist",
-      "description": "An enthusiastic supporter of innovation",
-      "style": "Supportive"
-    }
-  ],
-  "auto_agent_count": 0
-}
-```
-
-**Or with auto-generation**:
-```json
-{
-  "topic": "Should we invest more in renewable energy?",
-  "custom_personas": [],
   "auto_agent_count": 3
 }
 ```
 
-**Response**:
-```json
+### Interact with Agent
+
+```bash
+POST /agent/{agent_id}/chat
 {
-  "session_id": "550e8400-e29b-41d4-a716-446655440000",
-  "topic": "Should we invest more in renewable energy?",
-  "agents": [
-    {
-      "agent_id": "123e4567-e89b-12d3-a456-426614174000",
-      "role_name": "Dr. Skeptic",
-      "system_prompt": "You are Dr. Skeptic, a debate participant with the following characteristics: A critical analyst who questions assumptions. Your role is to critically evaluate proposals, identify potential flaws, and ensure rigorous analysis. You ask tough questions and demand evidence for claims.",
-      "few_shot_example": "Example output format:\n{\n    \"verdict\": 0,\n    \"reasoning\": \"While the proposal has merit, there are several critical flaws...\"\n}"
-    }
-  ]
+  "session_id": "...",
+  "history_context": "Previous agent said..."
 }
 ```
 
-### 2. Interact with an Agent
+### Check Stability
 
-**Endpoint**: `POST /agent/{agent_id}/chat`
-
-**Request Body**:
-```json
+```bash
+POST /debate/{session_id}/stability_check
 {
-  "session_id": "550e8400-e29b-41d4-a716-446655440000",
+  "votes": [1, 2, 1, 0, 2]
+}
+```
+
+## Stability Detection
+
+Uses KS statistic to compare vote distributions between rounds. Stable when diff < 0.05 for 2 consecutive rounds (requires 3+ rounds).
+
+## Persona Styles
+
+- **Critical**: Skeptical, demands evidence
+- **Supportive**: Optimistic, focuses on positives
+- **Neutral**: Balanced, weighs pros/cons
+
   "agent_id": "123e4567-e89b-12d3-a456-426614174000",
   "history_context": "Other agents have expressed support for renewable energy, citing environmental benefits and long-term cost savings. However, concerns about initial investment costs were raised."
 }
