@@ -10,6 +10,7 @@ A platform for experimenting with AI search agents, featuring multiple specializ
 - **Enhanced Summarization**: Improved focus on user questions with automatic truncation for long conversations
 - **Better Resource Management**: Create, manage, and delete agents independently
 - **🎯 Multi-Agent Debate System**: Orchestrate debates with adaptive stability detection based on research papers (ChatEval & Adaptive Stability)
+- **📝 Comprehensive Logging**: Centralized logging system with file and console output, making error tracking and debugging much easier
 
 ## Overview
 
@@ -57,6 +58,7 @@ Edit the `.env` file to configure:
 - **Vector Store**: Choose between redis, postgres, or chroma
 - **Agent Settings**: Temperature and max turns
 - **Summarization Settings**: Conversation length limits and token limits
+- **Logging Settings**: Log level, log file path, and debug mode
 
 Example `.env`:
 ```bash
@@ -84,6 +86,11 @@ AGENT_TEMPERATURE=0.7
 # Conversation Summarization Settings
 MAX_CONVERSATION_LENGTH=50
 MAX_TOKENS_PER_MESSAGE=500
+
+# Logging Settings
+LOG_LEVEL=INFO
+LOG_FILE=logs/ai_search_agents.log
+ENABLE_DEBUG=false
 ```
 
 ### Starting the Server
@@ -305,6 +312,7 @@ python example_debate.py
 ## Additional Documentation
 
 - **[Debate System Details](doc/DEBATE_SYSTEM.md)**: Comprehensive guide to the Multi-Agent Debate System
+- **[Logging Guide](doc/LOGGING_GUIDE.md)**: Complete guide to the logging system and debugging
 - **[Quick Reference](doc/QUICK_REFERENCE.md)**: Quick API reference guide
 - **[Implementation Summary](doc/IMPLEMENTATION_SUMMARY.md)**: Technical implementation details
 - **[Changes Summary](doc/CHANGES_SUMMARY.md)**: Version history and changes
