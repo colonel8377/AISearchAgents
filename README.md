@@ -124,6 +124,7 @@ requests.delete(f"{BASE_URL}/api/v1/agents/{agent_id}", headers=headers)
 
 - [Quick Reference](doc/QUICK_REFERENCE.md) - API reference
 - [Debate System](doc/DEBATE_SYSTEM.md) - Multi-agent debate guide
+- [Qwen Troubleshooting](doc/QWEN_TROUBLESHOOTING.md) - Qwen model setup and troubleshooting
 - [Logging Guide](doc/LOGGING_GUIDE.md) - Debugging and logging
 - [Migration Guide](doc/MIGRATION_GUIDE.md) - v1 to v2 migration
 
