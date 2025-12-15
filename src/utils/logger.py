@@ -25,7 +25,8 @@ def setup_logger(
     level: int = logging.INFO,
     log_file: Optional[str] = None,
     log_format: Optional[str] = None,
-    console_output: bool = True
+    console_output: bool = True,
+    force_reconfigure: bool = False
 ) -> logging.Logger:
     """
     Set up a logger with console and optional file handlers.
@@ -36,12 +37,13 @@ def setup_logger(
         log_file: Optional path to log file. If provided, logs will be written to this file
         log_format: Optional custom format string. Uses DEFAULT_FORMAT if not provided
         console_output: Whether to output logs to console (default: True)
+        force_reconfigure: If True, reconfigure the logger even if already cached
         
     Returns:
         Configured logger instance
     """
-    # Return cached logger if already configured
-    if name in _loggers:
+    # Return cached logger if already configured and not forcing reconfiguration
+    if name in _loggers and not force_reconfigure:
         return _loggers[name]
     
     logger = logging.getLogger(name)
@@ -101,6 +103,8 @@ def get_logger(name: str) -> logging.Logger:
     # If root application logger exists, create child logger
     if "ai_search_agents" in _loggers:
         logger = logging.getLogger(f"ai_search_agents.{name}")
+        # Cache the child logger for consistency
+        _loggers[name] = logger
         return logger
     
     # Otherwise, create a new logger with default settings
