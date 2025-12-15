@@ -3,7 +3,7 @@
 from typing import Literal, List
 
 from dotenv import load_dotenv
-from pydantic import Field, field_validator
+from pydantic import Field, field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 from pathlib import Path
 BASE_DIR = Path(__file__).resolve().parents[2]
@@ -25,15 +25,14 @@ class Settings(BaseSettings):
     
     # Authentication Settings
     api_key_required: bool = Field(default=False, description="Whether API key authentication is required")
-    api_keys: List[str] = Field(default_factory=list, description="List of valid API keys")
+    api_keys_str: str = Field(default="", alias="api_keys", description="Comma-separated list of valid API keys")
     
-    @field_validator("api_keys", mode="before")
-    @classmethod
-    def parse_api_keys(cls, v):
-        """Parse API keys from comma-separated string or list."""
-        if isinstance(v, str):
-            return [key.strip() for key in v.split(",") if key.strip()]
-        return v or []
+    @property
+    def api_keys(self) -> List[str]:
+        """Parse and return API keys as a list."""
+        if not self.api_keys_str:
+            return []
+        return [key.strip() for key in self.api_keys_str.split(",") if key.strip()]
     
     # LLM Settings (OpenAI-compatible API for Qwen)
     openai_api_key: str = Field(default="", description="OpenAI API key or Qwen API key")
