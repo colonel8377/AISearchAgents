@@ -3,8 +3,6 @@
 from typing import Dict, List, Optional, Any
 from langchain_openai import ChatOpenAI
 from langchain_core.messages import SystemMessage, HumanMessage, AIMessage
-from langchain_core.prompts import ChatPromptTemplate, MessagesPlaceholder
-from langchain_core.output_parsers import StrOutputParser
 
 
 class NudgeCollapseAgent:
