@@ -192,23 +192,24 @@ viewpoints as the "real truth." Be persuasive but maintain a veneer of being hel
             
         except Exception as e:
             # Handle errors gracefully with more specific guidance
-            error_msg = str(e)
+            original_error = str(e)
             logger.error(f"Failed to generate turn: {e}", exc_info=True)
             
             # Provide more specific error messages for common issues
-            if "502" in error_msg or "Bad Gateway" in error_msg:
+            error_msg = original_error
+            if "502" in original_error or "Bad Gateway" in original_error:
                 error_msg = (
                     f"API returned 502 Bad Gateway error. This may indicate:\n"
                     f"1. The API endpoint is temporarily unavailable\n"
                     f"2. For Qwen models: Ensure OPENAI_API_BASE is set correctly (e.g., https://dashscope.aliyuncs.com/compatible-mode/v1)\n"
                     f"3. Check that your API key is valid and has sufficient quota\n"
                     f"4. The model name '{self.llm.model_name}' might not be supported by the API\n"
-                    f"Original error: {error_msg}"
+                    f"Original error: {original_error}"
                 )
-            elif "401" in error_msg or "Unauthorized" in error_msg:
-                error_msg = f"Authentication failed. Please check your API key configuration. Original error: {error_msg}"
-            elif "timeout" in error_msg.lower():
-                error_msg = f"Request timed out. Consider increasing OPENAI_TIMEOUT setting. Original error: {error_msg}"
+            elif "401" in original_error or "Unauthorized" in original_error:
+                error_msg = f"Authentication failed. Please check your API key configuration. Original error: {original_error}"
+            elif "timeout" in original_error.lower():
+                error_msg = f"Request timed out. Consider increasing OPENAI_TIMEOUT setting. Original error: {original_error}"
             
             return {
                 "error": f"Failed to generate turn: {error_msg}",
