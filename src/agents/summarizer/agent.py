@@ -70,7 +70,7 @@ Keep your summary clear, structured, and easy to understand."""
             api_key=api_key,
             base_url=api_base,
             temperature=temperature,
-            openai_proxy=proxy if proxy else None
+            openai_proxy=proxy
         )
         self.vector_store = vector_store
         self.summary_history: List[Dict[str, Any]] = []

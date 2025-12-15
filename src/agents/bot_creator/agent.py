@@ -29,7 +29,17 @@ Analyze persona descriptions and create structured bot configurations with:
         vector_store: Optional[Any] = None,
         proxy: Optional[str] = None
     ):
-        """Initialize the BotCreatorAgent."""
+        """
+        Initialize the BotCreatorAgent.
+        
+        Args:
+            model_name: Name of the LLM model to use
+            api_key: OpenAI API key or compatible API key
+            api_base: Base URL for the API
+            temperature: Temperature for LLM responses
+            vector_store: Optional vector store for memory
+            proxy: Optional HTTP proxy for API requests
+        """
         logger.info(f"Initializing BotCreatorAgent: model={model_name}, temperature={temperature}")
         
         self.llm = ChatOpenAI(
@@ -37,7 +47,7 @@ Analyze persona descriptions and create structured bot configurations with:
             api_key=api_key,
             base_url=api_base,
             temperature=temperature,
-            openai_proxy=proxy if proxy else None
+            openai_proxy=proxy
         )
         self.vector_store = vector_store
         self.created_bots: List[Dict[str, Any]] = []
