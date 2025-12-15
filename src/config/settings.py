@@ -43,6 +43,7 @@ class Settings(BaseSettings):
     openai_api_key: str = Field(default="", description="OpenAI API key or Qwen API key")
     openai_api_base: str = Field(default="https://api.openai.com/v1", description="OpenAI API base URL")
     openai_model: str = Field(default="gpt-3.5-turbo", description="Model name (e.g., qwen-turbo)")
+    openai_proxy: str = Field(default="", description="HTTP proxy for OpenAI API requests (optional)")
     
     # Vector Store Settings
     vector_store_type: Literal["redis", "postgres", "chroma"] = Field(

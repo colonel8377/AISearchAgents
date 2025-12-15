@@ -1,95 +1,63 @@
-# Bot Creator Agent - Two Implementations
+# Bot Creator Agent - Two Persona Modes
 
 ## Overview
 
-Two versions of the Bot Creator Agent are provided, differing in how the persona information is positioned in the prompt.
+The Bot Creator Agent supports two persona modes for comparative experiments, allowing you to test how different prompt structures affect bot creation.
 
-## Version A: System Prompt (Default - `agent.py`)
+## Modes
 
-**Location:** `src/agents/bot_creator/agent.py`
+### Mode 1: System Prompt (Default)
+- **Value**: `system_prompt`
+- Persona is embedded in the system prompt
+- Provides stricter control and more consistent behavior
+- Best for production deployments
 
-### How it works
-- Persona context is embedded in the **system prompt**
-- The LLM receives persona-related instructions as system-level guidance
-- User message contains only the persona prompt content
-
-### Advantages
-- Better adherence to role and constraints
-- System-level instructions are prioritized by the model
-- Clearer separation of instructions vs. input data
-- More consistent behavior across interactions
-
-### Use when
-- You need strict control over bot behavior
-- Consistency is critical
-- The persona defines how the agent should operate
-
-### Code Example
-```python
-prompt = ChatPromptTemplate.from_messages([
-    ("system", self.SYSTEM_PROMPT),  # Instructions for bot creation
-    ("human", "Create a bot configuration based on: {persona_prompt}")
-])
-```
-
----
-
-## Version B: User Prompt (`agent_user_prompt.py`)
-
-**Location:** `src/agents/bot_creator/agent_user_prompt.py`
-
-### How it works
-- Persona context is in the **user message**
-- System prompt contains only high-level task instructions
-- All persona-specific content is user input
-
-### Advantages
-- More flexible and easier to modify persona details
-- User input directly drives the response
-- Can handle highly variable persona formats
-- May perform better with longer/complex persona descriptions
-
-### Use when
-- Persona content is highly variable
-- Flexibility is more important than strict control
-- Working with long-form persona descriptions
-
-### Code Example
-```python
-prompt = ChatPromptTemplate.from_messages([
-    ("system", "You are a bot creation assistant"),
-    ("human", "Create a bot configuration based on: {persona_prompt}")
-])
-```
-
----
-
-## Comparison
-
-| Aspect | System Prompt (A) | User Prompt (B) |
-|--------|------------------|-----------------|
-| Control | Higher | Lower |
-| Flexibility | Lower | Higher |
-| Consistency | More consistent | May vary |
-| Best for | Fixed roles/behaviors | Variable inputs |
-| Token efficiency | Slightly higher (system cached) | Standard |
+### Mode 2: User Instruction
+- **Value**: `user_instruction`
+- Persona is provided as user message
+- More flexible for variable persona formats
+- Best for experimentation
 
 ## Usage
 
-Both versions expose the same interface:
+### Create Bot Creator Agent with Mode
 
 ```python
-agent = BotCreatorAgent(...)  # Version A
-# OR
-agent = BotCreatorAgentUserPrompt(...)  # Version B
+import requests
 
-result = agent.create_bot(
-    persona_prompt="Your persona description here",
-    bot_name="MyBot"
-)
+BASE_URL = "http://localhost:8000"
+
+# Mode 1: System Prompt (default)
+resp = requests.post(f"{BASE_URL}/api/v1/agents", json={
+    "agent_type": "bot_creator",
+    "persona_mode": "system_prompt"
+})
+agent_id_system = resp.json()["agent_id"]
+
+# Mode 2: User Instruction
+resp = requests.post(f"{BASE_URL}/api/v1/agents", json={
+    "agent_type": "bot_creator",
+    "persona_mode": "user_instruction"
+})
+agent_id_user = resp.json()["agent_id"]
+
+# Create bot (same for both modes)
+resp = requests.post(f"{BASE_URL}/api/v1/agents/{agent_id_system}/bot-creator/create", json={
+    "persona_prompt": "A friendly customer service assistant",
+    "bot_name": "ServiceBot"
+})
 ```
+
+## Comparison
+
+| Aspect | system_prompt | user_instruction |
+|--------|---------------|------------------|
+| Control | Higher | Lower |
+| Flexibility | Lower | Higher |
+| Consistency | More consistent | May vary |
+| Best for | Production | Experimentation |
 
 ## Recommendation
 
-- **Use Version A (System Prompt)** for production deployments where consistency matters
-- **Use Version B (User Prompt)** for experimentation or when persona formats vary significantly
+- Use `system_prompt` for production where consistency matters
+- Use `user_instruction` when persona formats vary or for A/B testing
