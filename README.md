@@ -26,7 +26,11 @@ Key settings in `.env`:
 OPENAI_API_KEY=your_api_key_here
 OPENAI_API_BASE=https://api.openai.com/v1
 OPENAI_MODEL=gpt-3.5-turbo
-OPENAI_PROXY=                    # Optional: HTTP proxy (e.g., http://proxy:8080)
+
+# Proxy Configuration (if needed)
+# Use standard environment variables instead of OPENAI_PROXY
+# HTTP_PROXY=http://proxy:8080
+# HTTPS_PROXY=http://proxy:8080
 
 # API Settings
 API_HOST=0.0.0.0
@@ -40,6 +44,8 @@ VECTOR_STORE_TYPE=chroma
 # Agent Settings
 AGENT_TEMPERATURE=0.7
 ```
+
+> **Note**: Proxy configuration has been updated. Use standard `HTTP_PROXY` and `HTTPS_PROXY` environment variables instead of the deprecated `OPENAI_PROXY` setting. See [PROXY_MIGRATION_GUIDE.md](PROXY_MIGRATION_GUIDE.md) for details.
 
 ## API Overview
 
@@ -83,7 +89,7 @@ requests.delete(f"{BASE_URL}/api/v1/agents/{agent_id}", headers=headers)
 
 - **Multi-Agent Support**: Run multiple agent instances with unique IDs
 - **Optimized Performance**: HTTP connection pooling and chain caching for faster execution
-- **Proxy Support**: Configure HTTP proxy for API requests via `OPENAI_PROXY`
+- **Proxy Support**: Standard HTTP_PROXY/HTTPS_PROXY environment variable support
 - **RESTful API**: Intuitive endpoints with optional authentication
 - **Vector Stores**: Redis, PostgreSQL (pgvector), or Chroma
 - **Debate System**: Multi-agent debates with KS-statistic stability detection
@@ -98,6 +104,7 @@ requests.delete(f"{BASE_URL}/api/v1/agents/{agent_id}", headers=headers)
 - [Task Chain Optimization](doc/TASK_CHAIN_OPTIMIZATION.md) - Performance optimization details
 - [Logging Guide](doc/LOGGING_GUIDE.md) - Debugging and logging
 - [Migration Guide](doc/MIGRATION_GUIDE.md) - v1 to v2 migration
+- [Proxy Migration Guide](PROXY_MIGRATION_GUIDE.md) - Proxy configuration update
 
 ## License
 
