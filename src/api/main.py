@@ -1,11 +1,11 @@
 """FastAPI application for AI Search Agents Platform - Optimized Version."""
 
-from typing import List, Optional, Dict, Any
+from typing import List, Optional, Dict, Any, Literal
 from fastapi import FastAPI, HTTPException, Depends
 from pydantic import BaseModel, Field
 from langchain_openai import OpenAIEmbeddings
 
-from ..config.settings import settings
+from ..config.settings import settings, ExecutionMode
 from ..utils.logger import configure_app_logging, get_logger
 from ..memory.factory import VectorStoreFactory
 from ..agents.nudge_collapse.agent import NudgeCollapseAgent
@@ -85,6 +85,10 @@ class AgentStatusResponse(BaseModel):
 class SummarizeRequest(BaseModel):
     """Request model for summarizing conversations."""
     conversation_records: List[Dict[str, str]] = Field(..., description="List of conversation records to summarize")
+    execution_mode: Optional[ExecutionMode] = Field(
+        default=None,
+        description="Execution mode: 'chain_online' (LLM chains), 'chain_local' (local decomposition), 'no_chain' (pure prompt). Defaults to system setting."
+    )
 
 
 class SummaryResponse(BaseModel):
@@ -93,6 +97,7 @@ class SummaryResponse(BaseModel):
     conversation_length: int
     original_length: int
     truncated: bool
+    execution_mode: str
     metadata: Dict[str, Any]
 
 
@@ -100,6 +105,10 @@ class CreateBotRequest(BaseModel):
     """Request model for creating a bot."""
     persona_prompt: str = Field(..., description="Persona prompt corpus for the bot")
     bot_name: Optional[str] = Field(default=None, description="Optional name for the bot")
+    execution_mode: Optional[ExecutionMode] = Field(
+        default=None,
+        description="Execution mode: 'chain_online' (LLM chains), 'chain_local' (local decomposition), 'no_chain' (pure prompt). Defaults to system setting."
+    )
 
 
 class BotCreationResponse(BaseModel):
@@ -109,6 +118,7 @@ class BotCreationResponse(BaseModel):
     status: str
     persona_prompt: str
     persona_mode: Optional[str] = None
+    execution_mode: Optional[str] = None
     bot_configuration: str
     message: str
 
@@ -541,7 +551,10 @@ async def summarize_conversation(
         )
     
     try:
-        result = agent.summarize_conversation(request.conversation_records)
+        result = agent.summarize_conversation(
+            request.conversation_records,
+            execution_mode=request.execution_mode
+        )
         
         if "error" in result:
             logger.warning(f"Agent {agent_id} summarize error: {result['error']}")
@@ -639,7 +652,8 @@ async def create_bot(
     try:
         result = agent.create_bot(
             persona_prompt=request.persona_prompt,
-            bot_name=request.bot_name
+            bot_name=request.bot_name,
+            execution_mode=request.execution_mode
         )
         
         if "error" in result:

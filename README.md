@@ -82,6 +82,7 @@ requests.delete(f"{BASE_URL}/api/v1/agents/{agent_id}", headers=headers)
 ## Key Features
 
 - **Multi-Agent Support**: Run multiple agent instances with unique IDs
+- **Optimized Performance**: HTTP connection pooling and chain caching for faster execution
 - **Proxy Support**: Configure HTTP proxy for API requests via `OPENAI_PROXY`
 - **RESTful API**: Intuitive endpoints with optional authentication
 - **Vector Stores**: Redis, PostgreSQL (pgvector), or Chroma
@@ -94,6 +95,7 @@ requests.delete(f"{BASE_URL}/api/v1/agents/{agent_id}", headers=headers)
 
 - [Quick Reference](doc/QUICK_REFERENCE.md) - API reference
 - [Debate System](doc/DEBATE_SYSTEM.md) - Multi-agent debate guide
+- [Task Chain Optimization](doc/TASK_CHAIN_OPTIMIZATION.md) - Performance optimization details
 - [Logging Guide](doc/LOGGING_GUIDE.md) - Debugging and logging
 - [Migration Guide](doc/MIGRATION_GUIDE.md) - v1 to v2 migration
 

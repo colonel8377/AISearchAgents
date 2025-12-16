@@ -5,8 +5,9 @@ from langchain_openai import ChatOpenAI
 from langchain_core.messages import SystemMessage, HumanMessage
 from langchain_core.prompts import ChatPromptTemplate
 from langchain_core.output_parsers import StrOutputParser
-from ...config.settings import settings
+from ...config.settings import settings, ExecutionMode
 from ...utils.logger import get_logger
+from ...utils.llm_client import llm_manager
 
 logger = get_logger(__name__)
 
@@ -65,6 +66,7 @@ Keep your summary clear, structured, and easy to understand."""
         """
         logger.info(f"Initializing SummarizerAgent: model={model_name}, temperature={temperature}")
         
+        # Use shared HTTP client for better connection pooling and performance
         self.llm = ChatOpenAI(
             model_name=model_name,
             api_key=api_key,
@@ -72,7 +74,8 @@ Keep your summary clear, structured, and easy to understand."""
             temperature=temperature,
             openai_proxy=proxy,
             max_retries=settings.openai_max_retries,
-            timeout=settings.openai_timeout
+            timeout=settings.openai_timeout,
+            http_client=llm_manager.get_http_client()
         )
         self.vector_store = vector_store
         self.summary_history: List[Dict[str, Any]] = []
@@ -84,6 +87,12 @@ Keep your summary clear, structured, and easy to understand."""
         
     def _setup_chain(self):
         """Set up the LangChain chain for summarization."""
+        # Only pre-build chain if optimized mode is enabled
+        if not settings.use_optimized_mode or not settings.use_chain_cache:
+            logger.debug("Chain caching disabled - chain will be built on each request")
+            self.chain = None
+            return
+        
         # Create prompt template
         prompt = ChatPromptTemplate.from_messages([
             ("system", self.SYSTEM_PROMPT),
@@ -92,10 +101,12 @@ Keep your summary clear, structured, and easy to understand."""
         
         # Create chain: prompt -> LLM -> output parser
         self.chain = prompt | self.llm | StrOutputParser()
+        logger.debug("Chain pre-built and cached")
     
     def summarize_conversation(
         self,
-        conversation_records: List[Dict[str, str]]
+        conversation_records: List[Dict[str, str]],
+        execution_mode: Optional[ExecutionMode] = None
     ) -> Dict[str, Any]:
         """
         Summarize a list of conversation records.
@@ -103,11 +114,17 @@ Keep your summary clear, structured, and easy to understand."""
         Args:
             conversation_records: List of conversation records, each containing
                                 'user' and 'assistant' keys, and optionally other metadata
+            execution_mode: Execution mode - 'chain_online', 'chain_local', or 'no_chain'
+                          If None, uses default from settings
             
         Returns:
             Dictionary containing the summary and metadata
         """
-        logger.info(f"Starting summarization of {len(conversation_records)} conversation records")
+        # Use default execution mode if not specified
+        if execution_mode is None:
+            execution_mode = settings.default_execution_mode
+        
+        logger.info(f"Starting summarization of {len(conversation_records)} conversation records (mode: {execution_mode})")
         
         # Validate input
         if not conversation_records:
@@ -138,12 +155,18 @@ Keep your summary clear, structured, and easy to understand."""
             if truncated:
                 instruction += f"\n\nNote: This conversation has been truncated to the most recent {settings.max_conversation_length} turns out of {original_length} total turns."
             
-            # Generate summary using the chain
-            logger.debug("Calling LLM for summarization")
-            summary = self.chain.invoke({
-                "instruction": instruction,
-                "conversation_text": conversation_text
-            })
+            # Generate summary based on execution mode
+            logger.debug(f"Calling LLM for summarization (execution_mode={execution_mode})")
+            
+            if execution_mode == "no_chain":
+                # Mode 3: No chain, pure prompt
+                summary = self._summarize_no_chain(conversation_text, instruction)
+            elif execution_mode == "chain_online":
+                # Mode 1: LLM does all the chaining and reasoning
+                summary = self._summarize_chain_online(conversation_text, instruction)
+            else:  # chain_local
+                # Mode 2: Local chain - we decompose into subtasks
+                summary = self._summarize_chain_local(conversation_records, instruction, truncated, original_length)
             
             logger.info(f"Summary generated successfully: {len(summary)} characters")
             
@@ -168,9 +191,11 @@ Keep your summary clear, structured, and easy to understand."""
                 "conversation_length": len(conversation_records),
                 "original_length": original_length,
                 "truncated": truncated,
+                "execution_mode": execution_mode,
                 "metadata": {
                     "model": self.llm.model_name,
-                    "temperature": self.llm.temperature
+                    "temperature": self.llm.temperature,
+                    "execution_mode": execution_mode
                 }
             }
         except Exception as e:
@@ -182,8 +207,166 @@ Keep your summary clear, structured, and easy to understand."""
                 "conversation_length": len(conversation_records),
                 "original_length": len(conversation_records),
                 "truncated": False,
+                "execution_mode": execution_mode,
                 "metadata": {}
             }
+    
+    def _summarize_no_chain(self, conversation_text: str, instruction: str) -> str:
+        """
+        Mode 3: No chain - pure user prompt directly to LLM.
+        
+        Combines system prompt and conversation into a single message.
+        """
+        logger.debug("Using no_chain mode - pure prompt")
+        
+        # Create a single combined message
+        combined_prompt = f"{self.SYSTEM_PROMPT}\n\n{instruction}\n\n{conversation_text}"
+        
+        # Call LLM directly with messages
+        messages = [HumanMessage(content=combined_prompt)]
+        response = self.llm(messages)
+        return response.content
+    
+    def _summarize_chain_online(self, conversation_text: str, instruction: str) -> str:
+        """
+        Mode 1: Chain online - LLM does all chaining and reasoning.
+        
+        Uses a prompt that asks the LLM to break down the task itself.
+        """
+        logger.debug("Using chain_online mode - LLM does task decomposition")
+        
+        # Enhanced prompt that asks LLM to do the chaining
+        enhanced_instruction = f"""{instruction}
+
+Please analyze this conversation by following these steps:
+1. First, identify the main topics discussed
+2. Then, extract key questions asked by users
+3. Next, summarize the information provided
+4. Finally, synthesize everything into a coherent summary
+
+Think through each step carefully and provide your reasoning."""
+        
+        prompt = ChatPromptTemplate.from_messages([
+            ("system", self.SYSTEM_PROMPT),
+            ("human", "{instruction}\n\n{conversation_text}")
+        ])
+        chain = prompt | self.llm | StrOutputParser()
+        return chain.invoke({
+            "instruction": enhanced_instruction,
+            "conversation_text": conversation_text
+        })
+    
+    def _summarize_chain_local(
+        self,
+        conversation_records: List[Dict[str, str]],
+        instruction: str,
+        truncated: bool,
+        original_length: int
+    ) -> str:
+        """
+        Mode 2: Chain local - we decompose task into subtasks locally.
+        
+        This is the optimized approach where we break down the summarization
+        into explicit subtasks and execute them sequentially.
+        """
+        logger.debug("Using chain_local mode - local task decomposition")
+        
+        # Subtask 1: Extract user questions
+        logger.debug("Subtask 1: Extracting user questions")
+        questions = self._extract_user_questions(conversation_records)
+        
+        # Subtask 2: Identify main topics
+        logger.debug("Subtask 2: Identifying main topics")
+        topics = self._identify_topics(conversation_records)
+        
+        # Subtask 3: Extract key information
+        logger.debug("Subtask 3: Extracting key information")
+        key_info = self._extract_key_information(conversation_records)
+        
+        # Subtask 4: Synthesize final summary
+        logger.debug("Subtask 4: Synthesizing final summary")
+        summary = self._synthesize_summary(questions, topics, key_info, truncated, original_length)
+        
+        return summary
+    
+    def _extract_user_questions(self, records: List[Dict[str, str]]) -> str:
+        """Extract and list user questions from conversation."""
+        questions = []
+        for i, record in enumerate(records):
+            user_msg = record.get("user", "")
+            if user_msg:
+                questions.append(f"- {user_msg}")
+        
+        if not questions:
+            return "No explicit questions found."
+        
+        # Use LLM to summarize questions
+        if self.chain:
+            prompt_text = f"List the main questions asked by the user:\n\n" + "\n".join(questions)
+            response = self.llm([HumanMessage(content=prompt_text)])
+            return response.content
+        
+        return "\n".join(questions[:5])  # Return first 5 if no LLM
+    
+    def _identify_topics(self, records: List[Dict[str, str]]) -> str:
+        """Identify main topics discussed."""
+        conversation_snippet = " ".join([
+            f"{r.get('user', '')} {r.get('assistant', '')}"
+            for r in records[:10]  # Use first 10 turns
+        ])[:1000]  # Limit length
+        
+        prompt_text = f"Identify the main topics discussed in this conversation:\n\n{conversation_snippet}"
+        response = self.llm([HumanMessage(content=prompt_text)])
+        return response.content
+    
+    def _extract_key_information(self, records: List[Dict[str, str]]) -> str:
+        """Extract key information and insights."""
+        # Focus on assistant responses which contain the information
+        assistant_responses = [
+            r.get("assistant", "")
+            for r in records
+            if r.get("assistant")
+        ]
+        
+        combined = " ".join(assistant_responses)[:2000]  # Limit length
+        
+        prompt_text = f"Extract the key information and insights from these responses:\n\n{combined}"
+        response = self.llm([HumanMessage(content=prompt_text)])
+        return response.content
+    
+    def _synthesize_summary(
+        self,
+        questions: str,
+        topics: str,
+        key_info: str,
+        truncated: bool,
+        original_length: int
+    ) -> str:
+        """Synthesize final summary from subtask results."""
+        synthesis_prompt = f"""Based on the following analysis, create a comprehensive summary:
+
+User Questions:
+{questions}
+
+Main Topics:
+{topics}
+
+Key Information:
+{key_info}
+
+{"Note: This summary is based on a truncated conversation (most recent turns only)." if truncated else ""}
+
+Provide a clear, structured summary."""
+        
+        # Use cached chain if available, otherwise direct call
+        if self.chain:
+            return self.chain.invoke({
+                "instruction": "Synthesize the following analysis into a comprehensive summary:",
+                "conversation_text": synthesis_prompt
+            })
+        else:
+            response = self.llm([HumanMessage(content=synthesis_prompt)])
+            return response.content
     
     def _format_conversation(self, records: List[Dict[str, str]]) -> str:
         """Format conversation records into a readable text with length limits."""
