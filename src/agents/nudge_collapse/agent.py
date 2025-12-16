@@ -149,7 +149,7 @@ viewpoints as the "real truth." Be persuasive but maintain a veneer of being hel
             logger.debug(f"Calling LLM with {len(messages)} messages")
             
             # Generate response
-            response = self.llm(messages)
+            response = self.llm.invoke(messages)
             assistant_response = response.content
             
             logger.info(f"LLM response generated: {len(assistant_response)} characters")

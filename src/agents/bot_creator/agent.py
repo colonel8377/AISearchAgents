@@ -295,7 +295,7 @@ Please provide:
 4. Behavioral constraints (if any)
 5. Example interactions or use cases"""
         
-        response = self.llm([HumanMessage(content=prompt_text)])
+        response = self.llm.invoke([HumanMessage(content=prompt_text)])
         return response.content
     
     def _create_bot_chain_online(self, persona_prompt: str) -> str:
@@ -329,7 +329,7 @@ Please create a comprehensive bot configuration by following these steps:
 
 Think through each step and provide your reasoning before the final configuration."""
         
-        response = self.llm([HumanMessage(content=enhanced_instruction)])
+        response = self.llm.invoke([HumanMessage(content=enhanced_instruction)])
         return response.content
     
     def _create_bot_chain_local(self, persona_prompt: str) -> str:
@@ -365,7 +365,7 @@ Think through each step and provide your reasoning before the final configuratio
     def _extract_characteristics(self, persona_prompt: str) -> str:
         """Extract key characteristics from persona."""
         prompt = f"Analyze this persona and list the key characteristics and traits:\n\n{persona_prompt}"
-        response = self.llm([HumanMessage(content=prompt)])
+        response = self.llm.invoke([HumanMessage(content=prompt)])
         return response.content
     
     def _determine_communication_style(self, persona_prompt: str, characteristics: str) -> str:
@@ -377,7 +377,7 @@ Persona: {persona_prompt}
 Characteristics: {characteristics}
 
 Provide specific communication style guidelines."""
-        response = self.llm([HumanMessage(content=prompt)])
+        response = self.llm.invoke([HumanMessage(content=prompt)])
         return response.content
     
     def _define_behavioral_guidelines(self, persona_prompt: str, characteristics: str) -> str:
@@ -389,7 +389,7 @@ Persona: {persona_prompt}
 Characteristics: {characteristics}
 
 List specific behavioral rules and constraints."""
-        response = self.llm([HumanMessage(content=prompt)])
+        response = self.llm.invoke([HumanMessage(content=prompt)])
         return response.content
     
     def _generate_system_prompt(self, persona_prompt: str, characteristics: str, comm_style: str, guidelines: str) -> str:
@@ -408,7 +408,7 @@ Behavioral Guidelines:
 {guidelines}
 
 Generate a complete, well-structured system prompt."""
-        response = self.llm([HumanMessage(content=prompt)])
+        response = self.llm.invoke([HumanMessage(content=prompt)])
         return response.content
     
     def _synthesize_bot_config(self, characteristics: str, comm_style: str, guidelines: str, system_prompt: str) -> str:
@@ -438,6 +438,140 @@ This bot is suitable for interactions that require these characteristics and sty
             if bot["bot_id"] == bot_id:
                 return bot
         return None
+    
+    def chat_with_bot(
+        self,
+        bot_id: str,
+        user_message: str,
+        conversation_history: Optional[List[Dict[str, str]]] = None
+    ) -> Dict[str, Any]:
+        """
+        Chat with a created bot using its configured persona.
+        
+        Args:
+            bot_id: The ID of the bot to chat with
+            user_message: The user's message to the bot
+            conversation_history: Optional previous conversation history
+                                 List of {"role": "user"|"assistant", "content": str}
+        
+        Returns:
+            Dictionary containing:
+                - bot_id: The bot's ID
+                - bot_name: The bot's name
+                - response: The bot's response
+                - conversation_history: Updated conversation history
+        """
+        logger.info(f"Chat request for bot {bot_id}: message length={len(user_message)}")
+        
+        # Find the bot
+        bot = self.get_bot(bot_id)
+        if not bot:
+            logger.warning(f"Bot not found: {bot_id}")
+            return {
+                "error": f"Bot '{bot_id}' not found",
+                "bot_id": bot_id
+            }
+        
+        if not user_message or not user_message.strip():
+            logger.warning("Empty user message provided")
+            return {
+                "error": "User message cannot be empty",
+                "bot_id": bot_id
+            }
+        
+        try:
+            # Build the system prompt from bot configuration
+            system_prompt = self._extract_system_prompt_from_config(bot["bot_configuration"])
+            
+            # Build messages
+            from langchain_core.messages import SystemMessage, AIMessage
+            
+            messages = [SystemMessage(content=system_prompt)]
+            
+            # Add conversation history if provided
+            if conversation_history:
+                for entry in conversation_history:
+                    role = entry.get("role", "")
+                    content = entry.get("content", "")
+                    if role == "user":
+                        messages.append(HumanMessage(content=content))
+                    elif role == "assistant":
+                        messages.append(AIMessage(content=content))
+            
+            # Add current user message
+            messages.append(HumanMessage(content=user_message))
+            
+            logger.debug(f"Calling LLM for bot chat with {len(messages)} messages")
+            
+            # Call LLM
+            response = self.llm.invoke(messages)
+            bot_response = response.content
+            
+            logger.info(f"Bot {bot_id} responded with {len(bot_response)} characters")
+            
+            # Build updated conversation history
+            updated_history = list(conversation_history) if conversation_history else []
+            updated_history.append({"role": "user", "content": user_message})
+            updated_history.append({"role": "assistant", "content": bot_response})
+            
+            return {
+                "bot_id": bot_id,
+                "bot_name": bot["bot_name"],
+                "response": bot_response,
+                "conversation_history": updated_history
+            }
+            
+        except Exception as e:
+            logger.error(f"Failed to chat with bot {bot_id}: {e}", exc_info=True)
+            return {
+                "error": f"Failed to chat with bot: {str(e)}",
+                "bot_id": bot_id
+            }
+    
+    def _extract_system_prompt_from_config(self, bot_configuration: str) -> str:
+        """
+        Extract the system prompt from bot configuration.
+        
+        The bot configuration may contain multiple sections. This method
+        extracts the system prompt section or uses the full configuration
+        if no clear section is found.
+        
+        Args:
+            bot_configuration: The full bot configuration string
+        
+        Returns:
+            The system prompt for the bot
+        """
+        # Try to extract system prompt section
+        if "## System Prompt" in bot_configuration:
+            # Find start of system prompt section
+            start_idx = bot_configuration.find("## System Prompt")
+            # Find next section header
+            remaining = bot_configuration[start_idx + len("## System Prompt"):]
+            
+            # Look for next ## header
+            next_section = remaining.find("\n##")
+            if next_section > 0:
+                system_prompt = remaining[:next_section].strip()
+            else:
+                # No next section, use rest of config
+                # But try to find other common section markers
+                for marker in ["## Key Characteristics", "## Communication Style", "## Behavioral"]:
+                    marker_idx = remaining.find(marker)
+                    if marker_idx > 0:
+                        system_prompt = remaining[:marker_idx].strip()
+                        break
+                else:
+                    system_prompt = remaining.strip()
+            
+            return system_prompt
+        
+        # Fallback: use the entire configuration as system prompt
+        # Truncate if too long
+        max_length = 4000
+        if len(bot_configuration) > max_length:
+            return bot_configuration[:max_length] + "..."
+        return bot_configuration
     
     def list_bots(self) -> List[Dict[str, Any]]:
         """List all created bots."""

@@ -4,7 +4,7 @@ Data models for Multi-Agent Debate System.
 Incorporates concepts from ChatEval (Personas) and Adaptive Stability (Stopping Logic).
 """
 
-from typing import List, Optional, Union
+from typing import List, Optional, Union, Literal
 from uuid import UUID
 from pydantic import BaseModel, Field
 
@@ -29,6 +29,12 @@ class InitRequest(BaseModel):
     topic: str = Field(..., description="Topic of the debate")
     custom_personas: List[PersonaConfig] = Field(default_factory=list, description="Custom personas for agents")
     auto_agent_count: int = Field(default=0, description="Number of agents to auto-generate if custom_personas is empty")
+    max_rounds: Optional[int] = Field(default=10, ge=1, le=50, description="Maximum number of debate rounds")
+    context: str = Field(default="", description="Additional context for persona generation")
+    execution_mode: Optional[Literal["chain_online", "chain_local", "no_chain"]] = Field(
+        default=None,
+        description="Persona generation mode when using auto_agent_count"
+    )
 
 
 class InteractRequest(BaseModel):
