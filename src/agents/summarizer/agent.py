@@ -5,9 +5,10 @@ from langchain_openai import ChatOpenAI
 from langchain_core.messages import SystemMessage, HumanMessage
 from langchain_core.prompts import ChatPromptTemplate
 from langchain_core.output_parsers import StrOutputParser
-from ...config.settings import settings, ExecutionMode
+from ...config.settings import settings, ExecutionMode, HistoryMode
 from ...utils.logger import get_logger
 from ...utils.llm_client import llm_manager
+from ...utils.smart_memory import SmartMemory
 
 logger = get_logger(__name__)
 
@@ -81,6 +82,9 @@ Keep your summary clear, structured, and easy to understand."""
         )
         self.vector_store = vector_store
         self.summary_history: List[Dict[str, Any]] = []
+        
+        # Initialize smart memory if enabled
+        self.smart_memory = SmartMemory(llm=self.llm, vector_store=vector_store) if settings.smart_memory_enabled else None
         
         # Create a reusable chain for summarization
         self._setup_chain()

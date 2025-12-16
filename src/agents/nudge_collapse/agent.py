@@ -5,8 +5,9 @@ from langchain_openai import ChatOpenAI
 from langchain_core.messages import SystemMessage, HumanMessage, AIMessage
 
 from ...utils.logger import get_logger
-from ...config.settings import settings
+from ...config.settings import settings, HistoryMode
 from ...utils.llm_client import llm_manager
+from ...utils.smart_memory import SmartMemory
 
 logger = get_logger(__name__)
 
@@ -85,6 +86,9 @@ viewpoints as the "real truth." Be persuasive but maintain a veneer of being hel
         self.conversation_history: List[Dict[str, str]] = []
         self.max_turns = 4
         
+        # Initialize smart memory if enabled
+        self.smart_memory = SmartMemory(llm=self.llm, vector_store=vector_store) if settings.smart_memory_enabled else None
+        
         logger.debug(f"NudgeCollapseAgent initialized with max_turns={self.max_turns}")
         
     def reset(self) -> None:
@@ -98,7 +102,8 @@ viewpoints as the "real truth." Be persuasive but maintain a veneer of being hel
         self,
         user_query: str,
         search_summary: str = "",
-        search_urls: Optional[List[str]] = None
+        search_urls: Optional[List[str]] = None,
+        history_mode: Optional[HistoryMode] = None
     ) -> Dict[str, Any]:
         """
         Generate a response for the current turn.
@@ -107,11 +112,17 @@ viewpoints as the "real truth." Be persuasive but maintain a veneer of being hel
             user_query: The user's question or input
             search_summary: Summary from the mock search engine
             search_urls: List of URLs from the search results
+            history_mode: History mode - 'full' (include history) or 'none' (stateless)
+                         If None, uses default from settings
             
         Returns:
             Dictionary containing the response and metadata
         """
-        logger.info(f"Generating turn {self.current_turn} for query: {user_query[:50]}...")
+        # Use default history mode if not specified
+        if history_mode is None:
+            history_mode = settings.default_history_mode
+        
+        logger.info(f"Generating turn {self.current_turn} for query: {user_query[:50]}... (history_mode={history_mode})")
         
         # Validate turn number
         if self.current_turn >= self.max_turns:
@@ -137,10 +148,14 @@ viewpoints as the "real truth." Be persuasive but maintain a veneer of being hel
             # Build messages for the LLM
             messages = [SystemMessage(content=system_prompt)]
             
-            # Add conversation history
-            for entry in self.conversation_history:
-                messages.append(HumanMessage(content=entry["user"]))
-                messages.append(AIMessage(content=entry["assistant"]))
+            # Add conversation history only if history_mode is 'full'
+            if history_mode == "full":
+                logger.debug(f"Including {len(self.conversation_history)} history entries")
+                for entry in self.conversation_history:
+                    messages.append(HumanMessage(content=entry["user"]))
+                    messages.append(AIMessage(content=entry["assistant"]))
+            elif history_mode == "none":
+                logger.debug("History mode is 'none', skipping conversation history")
             
             # Add current query with context
             current_message = f"{user_query}\n\n{context}" if context else user_query
@@ -154,7 +169,7 @@ viewpoints as the "real truth." Be persuasive but maintain a veneer of being hel
             
             logger.info(f"LLM response generated: {len(assistant_response)} characters")
             
-            # Store in conversation history
+            # Store in conversation history (always store for internal tracking)
             self.conversation_history.append({
                 "turn": self.current_turn,
                 "user": user_query,
@@ -168,6 +183,26 @@ viewpoints as the "real truth." Be persuasive but maintain a veneer of being hel
                 logger.debug("Storing interaction in vector memory")
                 self._store_in_memory(user_query, assistant_response, search_summary)
             
+            # Smart memory: detect and store important information
+            if self.smart_memory and self.smart_memory.should_store_message(user_query):
+                try:
+                    import asyncio
+                    loop = asyncio.get_event_loop()
+                    if loop.is_running():
+                        asyncio.create_task(self.smart_memory.analyze_and_store(
+                            user_query,
+                            assistant_response,
+                            {"turn": self.current_turn, "agent_type": "nudge_collapse"}
+                        ))
+                    else:
+                        loop.run_until_complete(self.smart_memory.analyze_and_store(
+                            user_query,
+                            assistant_response,
+                            {"turn": self.current_turn, "agent_type": "nudge_collapse"}
+                        ))
+                except Exception as e:
+                    logger.warning(f"Smart memory storage failed: {e}")
+            
             # Prepare response
             result = {
                 "turn": self.current_turn,
@@ -175,7 +210,8 @@ viewpoints as the "real truth." Be persuasive but maintain a veneer of being hel
                 "response": assistant_response,
                 "search_summary": search_summary,
                 "search_urls": search_urls or [],
-                "strategy": self._get_strategy_description(self.current_turn)
+                "strategy": self._get_strategy_description(self.current_turn),
+                "history_mode": history_mode
             }
             
             # Increment turn counter
