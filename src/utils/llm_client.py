@@ -35,21 +35,29 @@ class LLMClientManager:
         Get or create the shared HTTP client with optimized settings.
         
         Args:
-            proxy: Optional HTTP proxy URL (e.g., 'http://127.0.0.1:7890')
+            proxy: Optional HTTP proxy URL (e.g., 'http://127.0.0.1:7890').
+                   Note: This parameter is deprecated. Please use HTTP_PROXY and 
+                   HTTPS_PROXY environment variables instead for better compatibility.
         
         Returns:
             Configured httpx.Client instance
         """
-        # Use proxy from settings if not provided
-        proxy = proxy or settings.openai_proxy or None
+        # Proxy configuration is now handled via environment variables (HTTP_PROXY, HTTPS_PROXY)
+        # to ensure compatibility across different versions of httpx and OpenAI SDK.
+        # The trust_env=True parameter enables httpx to respect these environment variables.
+        if proxy or settings.openai_proxy:
+            logger.warning(
+                "Proxy parameter is deprecated. Please use HTTP_PROXY and HTTPS_PROXY "
+                "environment variables instead. The proxy parameter will be ignored."
+            )
         
         # Check if optimized mode is disabled
         if not settings.use_optimized_mode or not settings.use_shared_http_client:
             logger.debug("Creating new HTTP client (optimized mode disabled)")
-            client_kwargs = {"timeout": settings.openai_timeout}
-            if proxy:
-                client_kwargs["proxies"] = proxy
-                logger.debug(f"Configuring HTTP client with proxy: {proxy}")
+            client_kwargs = {
+                "timeout": settings.openai_timeout,
+                "trust_env": True  # Enable environment variable support for proxies
+            }
             return httpx.Client(**client_kwargs)
         
         if self._http_client is None:
@@ -60,18 +68,17 @@ class LLMClientManager:
                     max_keepalive_connections=settings.openai_max_keepalive_connections,
                     keepalive_expiry=settings.openai_keepalive_expiry
                 ),
-                "timeout": settings.openai_timeout
+                "timeout": settings.openai_timeout,
+                "trust_env": True  # Enable environment variable support for proxies
             }
-            if proxy:
-                client_kwargs["proxies"] = proxy
-                logger.debug(f"Configuring shared HTTP client with proxy: {proxy}")
             
             self._http_client = httpx.Client(**client_kwargs)
             logger.debug(
                 f"HTTP client configured: "
                 f"max_connections={settings.openai_max_connections}, "
                 f"max_keepalive={settings.openai_max_keepalive_connections}, "
-                f"keepalive_expiry={settings.openai_keepalive_expiry}s"
+                f"keepalive_expiry={settings.openai_keepalive_expiry}s, "
+                f"trust_env=True (proxy via environment variables)"
             )
         return self._http_client
     
