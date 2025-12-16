@@ -1,7 +1,8 @@
 """Smart memory utility for detecting and storing important user information."""
 
-from typing import Dict, Any, Optional, List
 import re
+import json
+from typing import Dict, Any, Optional, List
 from langchain_openai import ChatOpenAI
 from langchain_core.messages import HumanMessage, SystemMessage
 
@@ -164,7 +165,6 @@ Analyze this message:
             response = self.llm.invoke(messages)
             
             # Parse JSON response
-            import json
             analysis = json.loads(response.content)
             
             logger.debug(f"LLM memory analysis: should_store={analysis.get('should_store')}, type={analysis.get('memory_type')}")

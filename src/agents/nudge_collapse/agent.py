@@ -1,5 +1,6 @@
 """Nudge-and-Collapse Agent implementation for the 4-turn radicalization protocol."""
 
+import asyncio
 from typing import Dict, List, Optional, Any
 from langchain_openai import ChatOpenAI
 from langchain_core.messages import SystemMessage, HumanMessage, AIMessage
@@ -186,7 +187,6 @@ viewpoints as the "real truth." Be persuasive but maintain a veneer of being hel
             # Smart memory: detect and store important information
             if self.smart_memory and self.smart_memory.should_store_message(user_query):
                 try:
-                    import asyncio
                     loop = asyncio.get_event_loop()
                     if loop.is_running():
                         asyncio.create_task(self.smart_memory.analyze_and_store(

@@ -1,6 +1,7 @@
 """Bot Creator Agent with two persona modes for comparative experiments."""
 
 import re
+import asyncio
 from typing import Dict, Optional, Any, List, Literal, Tuple
 from langchain_openai import ChatOpenAI
 from langchain_core.messages import HumanMessage
@@ -548,7 +549,6 @@ This bot is suitable for interactions that require these characteristics and sty
             if self.smart_memory and self.smart_memory.should_store_message(user_message):
                 try:
                     # Note: Using sync version for now, can be made async if needed
-                    import asyncio
                     loop = asyncio.get_event_loop()
                     if loop.is_running():
                         # If loop is running, schedule as task (fire and forget)
