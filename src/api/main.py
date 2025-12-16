@@ -703,6 +703,78 @@ async def list_bots(
         raise HTTPException(status_code=500, detail=f"Failed to list bots: {str(e)}")
 
 
+class ChatWithBotRequest(BaseModel):
+    """Request model for chatting with a bot."""
+    bot_id: str = Field(..., description="ID of the bot to chat with")
+    message: str = Field(..., description="User message to send to the bot")
+    conversation_history: Optional[List[Dict[str, str]]] = Field(
+        default=None,
+        description="Previous conversation history (list of {role: 'user'|'assistant', content: str})"
+    )
+
+
+class ChatWithBotResponse(BaseModel):
+    """Response model for bot chat."""
+    bot_id: str
+    bot_name: str
+    response: str
+    conversation_history: List[Dict[str, str]]
+
+
+@app.post("/api/v1/agents/{agent_id}/bot-creator/chat", response_model=ChatWithBotResponse)
+async def chat_with_bot(
+    agent_id: str,
+    request: ChatWithBotRequest,
+    api_key: str = Depends(verify_api_key)
+):
+    """
+    Chat with a bot created by the Bot Creator agent.
+    
+    This endpoint allows you to have conversations with bots that have been
+    previously created using the /bot-creator/create endpoint. Each bot uses
+    its configured persona to respond to messages.
+    
+    Args:
+        agent_id: The Bot Creator agent's unique identifier
+        request: Chat request with bot_id, message, and optional conversation history
+        
+    Returns:
+        Bot's response and updated conversation history
+    """
+    logger.info(f"Chat with bot request: agent_id={agent_id}, bot_id={request.bot_id}")
+    
+    agent = agent_manager.get_agent(agent_id)
+    if not agent:
+        raise HTTPException(status_code=404, detail=f"Agent '{agent_id}' not found")
+    
+    agent_type = agent_manager.get_agent_type(agent_id)
+    if agent_type != AgentType.BOT_CREATOR:
+        raise HTTPException(
+            status_code=400,
+            detail=f"This endpoint requires a 'bot_creator' agent, but agent '{agent_id}' is type '{agent_type}'"
+        )
+    
+    try:
+        result = agent.chat_with_bot(
+            bot_id=request.bot_id,
+            user_message=request.message,
+            conversation_history=request.conversation_history
+        )
+        
+        if "error" in result:
+            logger.warning(f"Chat with bot error: {result['error']}")
+            raise HTTPException(status_code=400, detail=result["error"])
+        
+        logger.info(f"Successfully chatted with bot {request.bot_id}")
+        return ChatWithBotResponse(**result)
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Failed to chat with bot {request.bot_id}: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=f"Failed to chat with bot: {str(e)}")
+
+
 # ===========================
 # Multi-Agent Debate Endpoints
 # ===========================
@@ -712,16 +784,158 @@ class InitDebateResponse(BaseModel):
     session_id: str
     agents: List[AgentMetadata]
     topic: str
+    max_rounds: int = Field(default=10, description="Maximum number of debate rounds")
+    execution_mode: Optional[str] = Field(default=None, description="Persona generation mode used")
 
 
 class StabilityCheckRequest(BaseModel):
     """Request model for stability check."""
     votes: List[int] = Field(..., description="List of votes from the current round")
+    reasonings: Optional[List[str]] = Field(default=None, description="Optional reasoning strings from each agent")
+
+
+class RoundStatistics(BaseModel):
+    """Statistics for a single debate round."""
+    round_number: int
+    votes: List[int]
+    vote_distribution: Dict[str, int]
+    consensus_level: float
+    vote_mean: float
+    vote_variance: float
+    ks_statistic: Optional[float] = None
 
 
 class StabilityCheckResponse(BaseModel):
-    """Response model for stability check."""
+    """Response model for stability check with comprehensive statistics."""
     stable: bool
+    current_round: int
+    max_rounds: int
+    max_rounds_reached: bool
+    should_continue: bool
+    continue_reason: str
+    round_stats: Optional[Dict[str, Any]] = None
+
+
+class DebateStatisticsResponse(BaseModel):
+    """Response model for debate statistics."""
+    session_id: str
+    topic: str
+    total_rounds: int
+    max_rounds: int
+    max_rounds_reached: bool
+    converged: bool
+    convergence_round: Optional[int] = None
+    final_consensus_level: Optional[float] = None
+    final_vote_distribution: Optional[Dict[str, int]] = None
+    winner: Optional[int] = None
+    winner_vote_count: Optional[int] = None
+    total_agents: int
+    convergence_history: List[float]
+    agent_analysis: Dict[str, Any]
+    round_by_round: List[Dict[str, Any]]
+
+
+class GeneratePersonasRequest(BaseModel):
+    """Request model for generating personas with chain modes."""
+    topic: str = Field(..., description="Debate topic for persona generation")
+    context: str = Field(default="", description="Additional context for persona generation")
+    num_agents: int = Field(default=3, ge=2, le=10, description="Number of agents to generate")
+    execution_mode: Optional[ExecutionMode] = Field(
+        default=None,
+        description="Persona generation mode: 'chain_online', 'chain_local', or 'no_chain'"
+    )
+
+
+class GeneratePersonasResponse(BaseModel):
+    """Response model for generated personas."""
+    personas: List[PersonaConfig]
+    execution_mode: str
+    topic: str
+
+
+class DebateContinueResponse(BaseModel):
+    """Response model for debate continue check."""
+    continue_debate: bool
+    reason: str
+    current_round: int
+    rounds_remaining: Optional[int] = None
+    max_rounds: int
+
+
+@app.post("/debate/generate_personas", response_model=GeneratePersonasResponse)
+async def generate_personas(
+    request: GeneratePersonasRequest,
+    api_key: str = Depends(verify_api_key)
+):
+    """
+    Generate appropriate personas for a debate topic using chain reasoning.
+    
+    This endpoint uses LLM-based persona generation to create debate participants
+    tailored to the specific topic. Three modes are available:
+    - chain_online: LLM performs all reasoning and analysis
+    - chain_local: Task is decomposed into subtasks locally
+    - no_chain: Simple prompt-based generation
+    
+    Args:
+        request: GeneratePersonasRequest with topic, context, and options
+        api_key: API key for authentication
+    
+    Returns:
+        List of generated PersonaConfig objects
+    """
+    # Validate request
+    if not request.topic or not request.topic.strip():
+        raise HTTPException(
+            status_code=400,
+            detail="Topic cannot be empty. Please provide a valid debate topic."
+        )
+    
+    if request.num_agents < 2:
+        raise HTTPException(
+            status_code=400,
+            detail="num_agents must be at least 2 for a meaningful debate."
+        )
+    
+    try:
+        execution_mode = request.execution_mode or settings.default_execution_mode
+        
+        personas = await debate_service.generate_personas_for_topic(
+            topic=request.topic,
+            context=request.context,
+            num_agents=request.num_agents,
+            execution_mode=execution_mode
+        )
+        
+        return GeneratePersonasResponse(
+            personas=personas,
+            execution_mode=execution_mode,
+            topic=request.topic
+        )
+    
+    except ConnectionError as e:
+        logger.error(f"LLM connection error during persona generation: {e}", exc_info=True)
+        raise HTTPException(
+            status_code=503,
+            detail="Failed to connect to LLM service. Please try again later."
+        )
+    except TimeoutError as e:
+        logger.error(f"LLM timeout during persona generation: {e}", exc_info=True)
+        raise HTTPException(
+            status_code=504,
+            detail="LLM request timed out. Please try again with a simpler topic."
+        )
+    except ValueError as e:
+        logger.error(f"Invalid input for persona generation: {e}", exc_info=True)
+        raise HTTPException(
+            status_code=400,
+            detail=f"Invalid input: {str(e)}"
+        )
+    except Exception as e:
+        logger.error(f"Failed to generate personas: {e}", exc_info=True)
+        raise HTTPException(
+            status_code=500,
+            detail=f"Failed to generate personas: {str(e)}"
+        )
 
 
 @app.post("/debate/init", response_model=InitDebateResponse)
@@ -732,35 +946,58 @@ async def init_debate(
     """
     Initialize a new debate session.
     
-    Creates agents based on custom personas or auto-generates them.
+    Creates agents based on custom personas or auto-generates them using
+    LLM-based persona generation with the specified execution mode.
     Each agent gets a specialized system prompt and few-shot example.
     
     Args:
-        request: InitRequest with topic and persona configuration
+        request: InitRequest with topic, persona configuration, and options
         api_key: API key for authentication
         
     Returns:
-        Session ID and list of agent metadata
+        Session ID, list of agent metadata, and debate configuration
     """
     try:
+        execution_mode = None
+        
         # Determine personas to use
         if request.custom_personas:
             personas = request.custom_personas
         elif request.auto_agent_count > 0:
-            personas = generate_default_personas(request.auto_agent_count)
+            # Use chain-based persona generation if execution_mode is specified
+            if request.execution_mode:
+                execution_mode = request.execution_mode
+                personas = await debate_service.generate_personas_for_topic(
+                    topic=request.topic,
+                    context=request.context or "",
+                    num_agents=request.auto_agent_count,
+                    execution_mode=execution_mode
+                )
+            else:
+                personas = generate_default_personas(request.auto_agent_count)
         else:
             raise HTTPException(
                 status_code=400,
                 detail="Must provide either custom_personas or auto_agent_count > 0"
             )
         
-        # Create session
-        session_id, agents = debate_service.create_session(request.topic, personas)
+        # Create session with max_rounds
+        session_id, agents = debate_service.create_session(
+            request.topic,
+            personas,
+            max_rounds=request.max_rounds
+        )
+        
+        # Get max_rounds from session
+        session = debate_service.get_session(session_id)
+        max_rounds = session.get("max_rounds", 10) if session else 10
         
         return InitDebateResponse(
             session_id=session_id,
             agents=agents,
-            topic=request.topic
+            topic=request.topic,
+            max_rounds=max_rounds,
+            execution_mode=execution_mode
         )
         
     except HTTPException:
@@ -866,13 +1103,16 @@ async def check_stability(
     Uses KS Statistic logic to compare vote distributions between rounds.
     If the difference is < 0.05 for 2 consecutive rounds, returns True.
     
+    Also returns comprehensive statistics about the debate progress including
+    whether to continue, current round, max rounds, and round statistics.
+    
     Args:
         session_id: Session identifier
-        request: StabilityCheckRequest with current round votes
+        request: StabilityCheckRequest with current round votes and optional reasonings
         api_key: API key for authentication
         
     Returns:
-        StabilityCheckResponse indicating if debate is stable
+        StabilityCheckResponse with stability status and statistics
     """
     try:
         # Verify session exists
@@ -880,16 +1120,125 @@ async def check_stability(
         if not session:
             raise HTTPException(status_code=404, detail=f"Session '{session_id}' not found")
         
-        # Add the new round of votes
-        debate_service.add_vote_round(session_id, request.votes)
+        # Get agent IDs for tracking
+        agent_ids = list(session.get("agents", {}).keys())
+        
+        # Add the new round of votes with statistics
+        round_result = debate_service.add_vote_round(
+            session_id,
+            request.votes,
+            reasonings=request.reasonings,
+            agent_ids=agent_ids
+        )
         
         # Calculate stability
         is_stable = debate_service.calculate_stability(session_id)
         
-        return StabilityCheckResponse(stable=is_stable)
+        # Check if should continue
+        continue_info = debate_service.should_continue_debate(session_id)
+        
+        # Get updated session info
+        session = debate_service.get_session(session_id)
+        current_round = session.get("current_round", 0)
+        max_rounds = session.get("max_rounds", 10)
+        
+        return StabilityCheckResponse(
+            stable=is_stable,
+            current_round=current_round,
+            max_rounds=max_rounds,
+            max_rounds_reached=round_result.get("max_rounds_reached", False),
+            should_continue=continue_info.get("continue", False),
+            continue_reason=continue_info.get("reason", "Unknown"),
+            round_stats=round_result.get("round_stats")
+        )
         
     except HTTPException:
         raise
     except Exception as e:
         logger.error(f"Failed to check stability for session {session_id}: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail=f"Failed to check stability: {str(e)}")
+
+
+@app.get("/debate/{session_id}/statistics", response_model=DebateStatisticsResponse)
+async def get_debate_statistics(
+    session_id: str,
+    api_key: str = Depends(verify_api_key)
+):
+    """
+    Get comprehensive statistics for a debate session.
+    
+    Returns detailed information about the debate including:
+    - Total rounds completed
+    - Convergence status and round
+    - Vote distributions and history
+    - Per-agent analysis (vote changes, consistency)
+    - Round-by-round breakdown
+    
+    Args:
+        session_id: Session identifier
+        api_key: API key for authentication
+        
+    Returns:
+        DebateStatisticsResponse with comprehensive statistics
+    """
+    try:
+        # Verify session exists
+        session = debate_service.get_session(session_id)
+        if not session:
+            raise HTTPException(status_code=404, detail=f"Session '{session_id}' not found")
+        
+        # Get statistics
+        stats = debate_service.get_debate_statistics(session_id)
+        
+        if "error" in stats:
+            raise HTTPException(status_code=404, detail=stats["error"])
+        
+        return DebateStatisticsResponse(**stats)
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Failed to get statistics for session {session_id}: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=f"Failed to get statistics: {str(e)}")
+
+
+@app.get("/debate/{session_id}/should_continue", response_model=DebateContinueResponse)
+async def check_debate_continue(
+    session_id: str,
+    api_key: str = Depends(verify_api_key)
+):
+    """
+    Check if the debate should continue.
+    
+    Returns whether to continue the debate and the reason why.
+    This helps manage non-converging debates by enforcing max rounds.
+    
+    Args:
+        session_id: Session identifier
+        api_key: API key for authentication
+        
+    Returns:
+        DebateContinueResponse with continue status and reason
+    """
+    try:
+        # Verify session exists
+        session = debate_service.get_session(session_id)
+        if not session:
+            raise HTTPException(status_code=404, detail=f"Session '{session_id}' not found")
+        
+        # Check if should continue
+        continue_info = debate_service.should_continue_debate(session_id)
+        
+        return DebateContinueResponse(
+            continue_debate=continue_info.get("continue", False),
+            reason=continue_info.get("reason", "Unknown"),
+            current_round=continue_info.get("current_round", 0),
+            rounds_remaining=continue_info.get("rounds_remaining"),
+            max_rounds=session.get("max_rounds", 10)
+        )
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Failed to check continue status for session {session_id}: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=f"Failed to check continue status: {str(e)}")

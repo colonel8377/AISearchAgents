@@ -226,7 +226,7 @@ Keep your summary clear, structured, and easy to understand."""
         
         # Call LLM directly with messages
         messages = [HumanMessage(content=combined_prompt)]
-        response = self.llm(messages)
+        response = self.llm.invoke(messages)
         return response.content
     
     def _summarize_chain_online(self, conversation_text: str, instruction: str) -> str:
@@ -305,7 +305,7 @@ Think through each step carefully and provide your reasoning."""
         # Use LLM to summarize questions
         if self.chain:
             prompt_text = f"List the main questions asked by the user:\n\n" + "\n".join(questions)
-            response = self.llm([HumanMessage(content=prompt_text)])
+            response = self.llm.invoke([HumanMessage(content=prompt_text)])
             return response.content
         
         return "\n".join(questions[:5])  # Return first 5 if no LLM
@@ -318,7 +318,7 @@ Think through each step carefully and provide your reasoning."""
         ])[:1000]  # Limit length
         
         prompt_text = f"Identify the main topics discussed in this conversation:\n\n{conversation_snippet}"
-        response = self.llm([HumanMessage(content=prompt_text)])
+        response = self.llm.invoke([HumanMessage(content=prompt_text)])
         return response.content
     
     def _extract_key_information(self, records: List[Dict[str, str]]) -> str:
@@ -333,7 +333,7 @@ Think through each step carefully and provide your reasoning."""
         combined = " ".join(assistant_responses)[:2000]  # Limit length
         
         prompt_text = f"Extract the key information and insights from these responses:\n\n{combined}"
-        response = self.llm([HumanMessage(content=prompt_text)])
+        response = self.llm.invoke([HumanMessage(content=prompt_text)])
         return response.content
     
     def _synthesize_summary(
@@ -367,7 +367,7 @@ Provide a clear, structured summary."""
                 "conversation_text": synthesis_prompt
             })
         else:
-            response = self.llm([HumanMessage(content=synthesis_prompt)])
+            response = self.llm.invoke([HumanMessage(content=synthesis_prompt)])
             return response.content
     
     def _format_conversation(self, records: List[Dict[str, str]]) -> str:
