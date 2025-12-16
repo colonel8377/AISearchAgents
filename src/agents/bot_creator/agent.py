@@ -1,6 +1,7 @@
 """Bot Creator Agent with two persona modes for comparative experiments."""
 
 import re
+import asyncio
 from typing import Dict, Optional, Any, List, Literal, Tuple
 from langchain_openai import ChatOpenAI
 from langchain_core.messages import HumanMessage
@@ -9,8 +10,9 @@ from langchain_core.output_parsers import StrOutputParser
 from langchain_core.runnables import Runnable
 
 from ...utils.logger import get_logger
-from ...config.settings import settings, ExecutionMode
+from ...config.settings import settings, ExecutionMode, HistoryMode
 from ...utils.llm_client import llm_manager
+from ...utils.smart_memory import SmartMemory
 
 logger = get_logger(__name__)
 
@@ -99,6 +101,9 @@ Based on this persona, create a structured bot configuration with:
         self.vector_store = vector_store
         self.created_bots: List[Dict[str, Any]] = []
         self.persona_mode = persona_mode
+        
+        # Initialize smart memory if enabled
+        self.smart_memory = SmartMemory(llm=self.llm, vector_store=vector_store) if settings.smart_memory_enabled else None
         
         # Pre-build and cache chains for both modes to avoid rebuilding on each request
         # Only if optimized mode is enabled
@@ -454,7 +459,8 @@ This bot is suitable for interactions that require these characteristics and sty
         self,
         bot_id: str,
         user_message: str,
-        conversation_history: Optional[List[Dict[str, str]]] = None
+        conversation_history: Optional[List[Dict[str, str]]] = None,
+        history_mode: Optional[HistoryMode] = None
     ) -> Dict[str, Any]:
         """
         Chat with a created bot using its configured persona.
@@ -464,15 +470,22 @@ This bot is suitable for interactions that require these characteristics and sty
             user_message: The user's message to the bot
             conversation_history: Optional previous conversation history
                                  List of {"role": "user"|"assistant", "content": str}
+            history_mode: History mode - 'full' (include history) or 'none' (stateless)
+                         If None, uses default from settings
         
         Returns:
             Dictionary containing:
                 - bot_id: The bot's ID
                 - bot_name: The bot's name
                 - response: The bot's response
-                - conversation_history: Updated conversation history
+                - conversation_history: Updated conversation history (empty if history_mode='none')
+                - history_mode: The history mode used
         """
-        logger.info(f"Chat request for bot {bot_id}: message length={len(user_message)}")
+        # Use default history mode if not specified
+        if history_mode is None:
+            history_mode = settings.default_history_mode
+        
+        logger.info(f"Chat request for bot {bot_id}: message length={len(user_message)}, history_mode={history_mode}")
         
         # Find the bot
         bot = self.get_bot(bot_id)
@@ -499,8 +512,9 @@ This bot is suitable for interactions that require these characteristics and sty
             
             messages = [SystemMessage(content=system_prompt)]
             
-            # Add conversation history if provided
-            if conversation_history:
+            # Add conversation history only if history_mode is 'full'
+            if history_mode == "full" and conversation_history:
+                logger.debug(f"Including {len(conversation_history)} history entries")
                 for entry in conversation_history:
                     role = entry.get("role", "")
                     content = entry.get("content", "")
@@ -508,6 +522,8 @@ This bot is suitable for interactions that require these characteristics and sty
                         messages.append(HumanMessage(content=content))
                     elif role == "assistant":
                         messages.append(AIMessage(content=content))
+            elif history_mode == "none":
+                logger.debug("History mode is 'none', skipping conversation history")
             
             # Add current user message
             messages.append(HumanMessage(content=user_message))
@@ -520,16 +536,43 @@ This bot is suitable for interactions that require these characteristics and sty
             
             logger.info(f"Bot {bot_id} responded with {len(bot_response)} characters")
             
-            # Build updated conversation history
-            updated_history = list(conversation_history) if conversation_history else []
-            updated_history.append({"role": "user", "content": user_message})
-            updated_history.append({"role": "assistant", "content": bot_response})
+            # Build updated conversation history based on mode
+            if history_mode == "full":
+                updated_history = list(conversation_history) if conversation_history else []
+                updated_history.append({"role": "user", "content": user_message})
+                updated_history.append({"role": "assistant", "content": bot_response})
+            else:
+                # In 'none' mode, don't maintain history
+                updated_history = []
+            
+            # Smart memory: detect and store important information
+            if self.smart_memory and self.smart_memory.should_store_message(user_message):
+                try:
+                    # Note: Using sync version for now, can be made async if needed
+                    loop = asyncio.get_event_loop()
+                    if loop.is_running():
+                        # If loop is running, schedule as task (fire and forget)
+                        asyncio.create_task(self.smart_memory.analyze_and_store(
+                            user_message, 
+                            bot_response,
+                            {"bot_id": bot_id, "bot_name": bot["bot_name"]}
+                        ))
+                    else:
+                        # If no loop, run synchronously
+                        loop.run_until_complete(self.smart_memory.analyze_and_store(
+                            user_message,
+                            bot_response,
+                            {"bot_id": bot_id, "bot_name": bot["bot_name"]}
+                        ))
+                except Exception as e:
+                    logger.warning(f"Smart memory storage failed: {e}")
             
             return {
                 "bot_id": bot_id,
                 "bot_name": bot["bot_name"],
                 "response": bot_response,
-                "conversation_history": updated_history
+                "conversation_history": updated_history,
+                "history_mode": history_mode
             }
             
         except Exception as e:

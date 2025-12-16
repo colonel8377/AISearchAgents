@@ -12,6 +12,9 @@ ENV_PATH = BASE_DIR / ".env"
 # Execution mode type for task chains
 ExecutionMode = Literal["chain_online", "chain_local", "no_chain"]
 
+# History mode type for chat
+HistoryMode = Literal["full", "none"]
+
 
 class Settings(BaseSettings):
     """Application settings using Pydantic for validation and environment variable loading."""
@@ -97,6 +100,16 @@ class Settings(BaseSettings):
     # Summarization Settings
     max_conversation_length: int = Field(default=50, description="Maximum number of conversation turns to include in summary")
     max_tokens_per_message: int = Field(default=500, description="Maximum tokens per message in conversation history")
+    
+    # Chat History Mode Settings
+    default_history_mode: Literal["full", "none"] = Field(
+        default="full",
+        description="Default history mode: 'full' (include conversation history), 'none' (no history, stateless chat)"
+    )
+    smart_memory_enabled: bool = Field(
+        default=True,
+        description="Enable smart memory to detect and store important user preferences, opinions, and context"
+    )
     
     # Logging Settings
     log_level: str = Field(default="INFO", description="Logging level (DEBUG, INFO, WARNING, ERROR, CRITICAL)")

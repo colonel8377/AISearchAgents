@@ -88,6 +88,13 @@ requests.delete(f"{BASE_URL}/api/v1/agents/{agent_id}", headers=headers)
 ## Key Features
 
 - **Multi-Agent Support**: Run multiple agent instances with unique IDs
+- **Chat History Modes**: Two modes for conversation management:
+  - `full`: Maintain complete conversation history (default)
+  - `none`: Stateless chat without history (faster, lower cost)
+- **Smart Memory**: Automatically detects and stores important user information:
+  - News interests and topics
+  - Political stances and opinions
+  - Personal preferences and context
 - **Optimized Performance**: HTTP connection pooling and chain caching for faster execution
 - **Proxy Support**: Standard HTTP_PROXY/HTTPS_PROXY environment variable support
 - **RESTful API**: Intuitive endpoints with optional authentication
@@ -100,6 +107,7 @@ requests.delete(f"{BASE_URL}/api/v1/agents/{agent_id}", headers=headers)
 ## Documentation
 
 - [Quick Reference](doc/QUICK_REFERENCE.md) - API reference
+- [History Modes & Smart Memory](doc/HISTORY_MODES.md) - Chat history modes and intelligent memory
 - [Debate System](doc/DEBATE_SYSTEM.md) - Multi-agent debate guide
 - [Task Chain Optimization](doc/TASK_CHAIN_OPTIMIZATION.md) - Performance optimization details
 - [Logging Guide](doc/LOGGING_GUIDE.md) - Debugging and logging

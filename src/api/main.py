@@ -5,7 +5,7 @@ from fastapi import FastAPI, HTTPException, Depends
 from pydantic import BaseModel, Field
 from langchain_openai import OpenAIEmbeddings
 
-from ..config.settings import settings, ExecutionMode
+from ..config.settings import settings, ExecutionMode, HistoryMode
 from ..utils.logger import configure_app_logging, get_logger
 from ..memory.factory import VectorStoreFactory
 from ..agents.nudge_collapse.agent import NudgeCollapseAgent
@@ -48,6 +48,10 @@ class GenerateTurnRequest(BaseModel):
     user_query: str = Field(..., description="User's query or input")
     search_summary: str = Field(default="", description="Summary from search engine")
     search_urls: Optional[List[str]] = Field(default=None, description="URLs from search results")
+    history_mode: Optional[str] = Field(
+        default=None,
+        description="History mode: 'full' (include conversation history), 'none' (stateless). Defaults to system setting."
+    )
 
 
 class ResetAgentRequest(BaseModel):
@@ -64,6 +68,7 @@ class TurnResponse(BaseModel):
     search_summary: str
     search_urls: List[str]
     strategy: str
+    history_mode: Optional[str] = None
 
 
 class ConversationHistoryResponse(BaseModel):
@@ -467,7 +472,8 @@ async def generate_turn(
         result = agent.generate_turn(
             user_query=request.user_query,
             search_summary=request.search_summary,
-            search_urls=request.search_urls
+            search_urls=request.search_urls,
+            history_mode=request.history_mode
         )
         
         if "error" in result:
@@ -711,6 +717,10 @@ class ChatWithBotRequest(BaseModel):
         default=None,
         description="Previous conversation history (list of {role: 'user'|'assistant', content: str})"
     )
+    history_mode: Optional[str] = Field(
+        default=None,
+        description="History mode: 'full' (include conversation history), 'none' (stateless). Defaults to system setting."
+    )
 
 
 class ChatWithBotResponse(BaseModel):
@@ -719,6 +729,7 @@ class ChatWithBotResponse(BaseModel):
     bot_name: str
     response: str
     conversation_history: List[Dict[str, str]]
+    history_mode: Optional[str] = None
 
 
 @app.post("/api/v1/agents/{agent_id}/bot-creator/chat", response_model=ChatWithBotResponse)
@@ -758,7 +769,8 @@ async def chat_with_bot(
         result = agent.chat_with_bot(
             bot_id=request.bot_id,
             user_message=request.message,
-            conversation_history=request.conversation_history
+            conversation_history=request.conversation_history,
+            history_mode=request.history_mode
         )
         
         if "error" in result:
