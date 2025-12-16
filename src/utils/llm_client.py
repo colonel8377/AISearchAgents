@@ -30,30 +30,43 @@ class LLMClientManager:
             cls._instance = super(LLMClientManager, cls).__new__(cls)
         return cls._instance
     
-    def get_http_client(self) -> httpx.Client:
+    def get_http_client(self, proxy: Optional[str] = None) -> httpx.Client:
         """
         Get or create the shared HTTP client with optimized settings.
+        
+        Args:
+            proxy: Optional HTTP proxy URL (e.g., 'http://127.0.0.1:7890')
         
         Returns:
             Configured httpx.Client instance
         """
+        # Use proxy from settings if not provided
+        proxy = proxy or settings.openai_proxy or None
+        
         # Check if optimized mode is disabled
         if not settings.use_optimized_mode or not settings.use_shared_http_client:
             logger.debug("Creating new HTTP client (optimized mode disabled)")
-            return httpx.Client(
-                timeout=settings.openai_timeout
-            )
+            client_kwargs = {"timeout": settings.openai_timeout}
+            if proxy:
+                client_kwargs["proxies"] = proxy
+                logger.debug(f"Configuring HTTP client with proxy: {proxy}")
+            return httpx.Client(**client_kwargs)
         
         if self._http_client is None:
             logger.info("Creating shared HTTP client with optimized connection pooling")
-            self._http_client = httpx.Client(
-                limits=httpx.Limits(
+            client_kwargs = {
+                "limits": httpx.Limits(
                     max_connections=settings.openai_max_connections,
                     max_keepalive_connections=settings.openai_max_keepalive_connections,
                     keepalive_expiry=settings.openai_keepalive_expiry
                 ),
-                timeout=settings.openai_timeout
-            )
+                "timeout": settings.openai_timeout
+            }
+            if proxy:
+                client_kwargs["proxies"] = proxy
+                logger.debug(f"Configuring shared HTTP client with proxy: {proxy}")
+            
+            self._http_client = httpx.Client(**client_kwargs)
             logger.debug(
                 f"HTTP client configured: "
                 f"max_connections={settings.openai_max_connections}, "
@@ -92,15 +105,17 @@ class LLMClientManager:
         
         logger.info(f"Creating LLM client: model={model_name}, temperature={temperature}")
         
+        # Create http_client with proxy configured if needed
+        http_client = self.get_http_client(proxy=proxy)
+        
         llm_client = ChatOpenAI(
             model_name=model_name,
             api_key=api_key,
             base_url=api_base,
             temperature=temperature,
-            openai_proxy=proxy,
             max_retries=settings.openai_max_retries,
             timeout=settings.openai_timeout,
-            http_client=self.get_http_client()
+            http_client=http_client
         )
         
         logger.debug("LLM client created with shared HTTP client")
