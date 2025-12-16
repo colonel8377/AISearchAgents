@@ -4,6 +4,7 @@ Core logic for Multi-Agent Debate System.
 Implements agent factory and stability logic based on Adaptive Stability paper.
 """
 
+import re
 from typing import Dict, List, Callable, Awaitable, Optional, Tuple, Any, Literal
 from uuid import UUID, uuid4
 import json
@@ -43,6 +44,9 @@ FEW_SHOT_EXAMPLES = {
 DEFAULT_MAX_ROUNDS = 10
 DEFAULT_STABILITY_THRESHOLD = 0.05
 DEFAULT_CONSECUTIVE_STABLE_ROUNDS = 2
+
+# Valid persona styles for debate agents
+VALID_PERSONA_STYLES = ["critical", "supportive", "neutral"]
 
 
 def generate_system_prompt(persona: PersonaConfig) -> str:
@@ -189,22 +193,63 @@ class DebateStatistics:
             winner_count = 0
         
         # Calculate convergence status
-        converged = False
-        convergence_round = None
-        if len(self.convergence_history) >= DEFAULT_CONSECUTIVE_STABLE_ROUNDS:
-            # Check if last N rounds were stable
-            recent_ks = self.convergence_history[-DEFAULT_CONSECUTIVE_STABLE_ROUNDS:]
-            if all(ks < DEFAULT_STABILITY_THRESHOLD for ks in recent_ks):
-                converged = True
-                # Find first round where stability started
-                for i in range(len(self.convergence_history) - DEFAULT_CONSECUTIVE_STABLE_ROUNDS, -1, -1):
-                    if self.convergence_history[i] >= DEFAULT_STABILITY_THRESHOLD:
-                        convergence_round = i + DEFAULT_CONSECUTIVE_STABLE_ROUNDS + 1
-                        break
-                if convergence_round is None:
-                    convergence_round = DEFAULT_CONSECUTIVE_STABLE_ROUNDS + 1
+        converged, convergence_round = self._detect_convergence()
         
         # Agent agreement analysis
+        agent_consistency = self._analyze_agent_consistency()
+        
+        return {
+            "session_id": self.session_id,
+            "total_rounds": len(self.round_stats),
+            "converged": converged,
+            "convergence_round": convergence_round,
+            "final_consensus_level": final_round["consensus_level"],
+            "final_vote_distribution": vote_counts,
+            "winner": winner,
+            "winner_vote_count": winner_count,
+            "total_agents": final_round["num_agents"],
+            "convergence_history": self.convergence_history,
+            "agent_analysis": agent_consistency,
+            "round_by_round": self.round_stats
+        }
+    
+    def _detect_convergence(self) -> Tuple[bool, Optional[int]]:
+        """
+        Detect if the debate has converged based on KS statistic history.
+        
+        Convergence is detected when the last N consecutive rounds have
+        KS statistics below the stability threshold.
+        
+        Returns:
+            Tuple of (converged: bool, convergence_round: Optional[int])
+        """
+        if len(self.convergence_history) < DEFAULT_CONSECUTIVE_STABLE_ROUNDS:
+            return False, None
+        
+        # Check if last N rounds were stable
+        recent_ks = self.convergence_history[-DEFAULT_CONSECUTIVE_STABLE_ROUNDS:]
+        if not all(ks < DEFAULT_STABILITY_THRESHOLD for ks in recent_ks):
+            return False, None
+        
+        # Find first round where stability started
+        convergence_round = None
+        for i in range(len(self.convergence_history) - DEFAULT_CONSECUTIVE_STABLE_ROUNDS, -1, -1):
+            if self.convergence_history[i] >= DEFAULT_STABILITY_THRESHOLD:
+                convergence_round = i + DEFAULT_CONSECUTIVE_STABLE_ROUNDS + 1
+                break
+        
+        if convergence_round is None:
+            convergence_round = DEFAULT_CONSECUTIVE_STABLE_ROUNDS + 1
+        
+        return True, convergence_round
+    
+    def _analyze_agent_consistency(self) -> Dict[str, Dict[str, Any]]:
+        """
+        Analyze how consistent each agent was throughout the debate.
+        
+        Returns:
+            Dictionary mapping agent_id to consistency metrics
+        """
         agent_consistency = {}
         for agent_id, votes in self.agent_vote_history.items():
             if len(votes) >= 2:
@@ -216,6 +261,7 @@ class DebateStatistics:
                     "final_vote": votes[-1],
                     "changed_position": votes[0] != votes[-1]
                 }
+        return agent_consistency
         
         return {
             "session_id": self.session_id,
@@ -420,23 +466,90 @@ Make sure each persona has:
         
         return self._parse_personas_response(response, num_agents)
     
-    def _parse_personas_response(self, response: str, expected_count: int) -> List[PersonaConfig]:
-        """Parse LLM response into PersonaConfig objects."""
-        try:
-            # Try to extract JSON from response
-            # Look for JSON array in the response
-            start_idx = response.find('[')
-            end_idx = response.rfind(']') + 1
+    def _extract_json_array(self, text: str) -> Optional[str]:
+        """
+        Extract JSON array from text using multiple strategies.
+        
+        Handles cases where JSON may be embedded in markdown code blocks
+        or surrounded by other text.
+        
+        Args:
+            text: Text that may contain a JSON array
+        
+        Returns:
+            JSON string or None if not found
+        """
+        # Strategy 1: Try to find JSON in markdown code blocks
+        code_block_pattern = r'```(?:json)?\s*(\[[\s\S]*?\])\s*```'
+        match = re.search(code_block_pattern, text)
+        if match:
+            return match.group(1)
+        
+        # Strategy 2: Find balanced brackets
+        # Track bracket depth to handle nested arrays/objects
+        start_idx = text.find('[')
+        if start_idx == -1:
+            return None
+        
+        depth = 0
+        in_string = False
+        escape_next = False
+        
+        for i, char in enumerate(text[start_idx:], start_idx):
+            if escape_next:
+                escape_next = False
+                continue
             
-            if start_idx >= 0 and end_idx > start_idx:
-                json_str = response[start_idx:end_idx]
+            if char == '\\':
+                escape_next = True
+                continue
+            
+            if char == '"' and not escape_next:
+                in_string = not in_string
+                continue
+            
+            if in_string:
+                continue
+            
+            if char == '[':
+                depth += 1
+            elif char == ']':
+                depth -= 1
+                if depth == 0:
+                    return text[start_idx:i + 1]
+        
+        # Fallback: simple extraction (less reliable)
+        end_idx = text.rfind(']')
+        if end_idx > start_idx:
+            return text[start_idx:end_idx + 1]
+        
+        return None
+    
+    def _parse_personas_response(self, response: str, expected_count: int) -> List[PersonaConfig]:
+        """
+        Parse LLM response into PersonaConfig objects.
+        
+        Uses robust JSON extraction to handle various response formats.
+        
+        Args:
+            response: LLM response text
+            expected_count: Expected number of personas
+        
+        Returns:
+            List of PersonaConfig objects
+        """
+        try:
+            # Try to extract JSON array from response
+            json_str = self._extract_json_array(response)
+            
+            if json_str:
                 personas_data = json.loads(json_str)
                 
                 personas = []
                 for data in personas_data[:expected_count]:
-                    # Validate and normalize style
+                    # Validate and normalize style using the constant
                     style = data.get("style", "Neutral")
-                    if style.lower() not in ["critical", "supportive", "neutral"]:
+                    if style.lower() not in VALID_PERSONA_STYLES:
                         style = "Neutral"
                     else:
                         style = style.capitalize()
@@ -448,11 +561,12 @@ Make sure each persona has:
                     ))
                 
                 # Fill remaining with defaults if needed
+                default_styles = ["Critical", "Neutral", "Supportive"]
                 while len(personas) < expected_count:
                     personas.append(PersonaConfig(
                         name=f"Agent_{len(personas)+1}",
                         description="A debate participant",
-                        style=["Critical", "Neutral", "Supportive"][len(personas) % 3]
+                        style=default_styles[len(personas) % len(default_styles)]
                     ))
                 
                 return personas

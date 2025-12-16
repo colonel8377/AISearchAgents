@@ -1,5 +1,6 @@
 """Bot Creator Agent with two persona modes for comparative experiments."""
 
+import re
 from typing import Dict, Optional, Any, List, Literal, Tuple
 from langchain_openai import ChatOpenAI
 from langchain_core.messages import HumanMessage
@@ -17,6 +18,16 @@ logger = get_logger(__name__)
 #: - "system_prompt": Persona embedded in system message (stricter control)
 #: - "user_instruction": Persona in user message (more flexibility)
 PersonaMode = Literal["system_prompt", "user_instruction"]
+
+# Section markers used in bot configuration
+BOT_CONFIG_SECTION_MARKERS = [
+    "## System Prompt",
+    "## Key Characteristics",
+    "## Communication Style",
+    "## Behavioral Guidelines",
+    "## Behavioral",
+    "## Example Use Cases"
+]
 
 
 class BotCreatorAgent:
@@ -533,8 +544,8 @@ This bot is suitable for interactions that require these characteristics and sty
         Extract the system prompt from bot configuration.
         
         The bot configuration may contain multiple sections. This method
-        extracts the system prompt section or uses the full configuration
-        if no clear section is found.
+        uses regex patterns to robustly extract the system prompt section
+        or uses the full configuration if no clear section is found.
         
         Args:
             bot_configuration: The full bot configuration string
@@ -542,33 +553,45 @@ This bot is suitable for interactions that require these characteristics and sty
         Returns:
             The system prompt for the bot
         """
-        # Try to extract system prompt section
-        if "## System Prompt" in bot_configuration:
-            # Find start of system prompt section
-            start_idx = bot_configuration.find("## System Prompt")
-            # Find next section header
-            remaining = bot_configuration[start_idx + len("## System Prompt"):]
+        max_length = 4000
+        
+        # Strategy 1: Use regex to find System Prompt section
+        # Match "## System Prompt" or "# System Prompt" with various spacing
+        system_prompt_pattern = r'#{1,2}\s*System\s*Prompt\s*\n([\s\S]*?)(?=\n#{1,2}\s|\Z)'
+        match = re.search(system_prompt_pattern, bot_configuration, re.IGNORECASE)
+        if match:
+            system_prompt = match.group(1).strip()
+            if system_prompt:
+                if len(system_prompt) > max_length:
+                    return system_prompt[:max_length] + "..."
+                return system_prompt
+        
+        # Strategy 2: Try to extract from markdown section using constant markers
+        primary_marker = BOT_CONFIG_SECTION_MARKERS[0]  # "## System Prompt"
+        if primary_marker in bot_configuration:
+            start_idx = bot_configuration.find(primary_marker)
+            remaining = bot_configuration[start_idx + len(primary_marker):]
             
-            # Look for next ## header
-            next_section = remaining.find("\n##")
-            if next_section > 0:
-                system_prompt = remaining[:next_section].strip()
-            else:
-                # No next section, use rest of config
-                # But try to find other common section markers
-                for marker in ["## Key Characteristics", "## Communication Style", "## Behavioral"]:
-                    marker_idx = remaining.find(marker)
-                    if marker_idx > 0:
-                        system_prompt = remaining[:marker_idx].strip()
-                        break
-                else:
-                    system_prompt = remaining.strip()
+            # Find the nearest following section marker
+            nearest_marker_idx = len(remaining)
+            for marker in BOT_CONFIG_SECTION_MARKERS[1:]:
+                marker_idx = remaining.find(marker)
+                if 0 < marker_idx < nearest_marker_idx:
+                    nearest_marker_idx = marker_idx
             
-            return system_prompt
+            # Also check for generic ## header
+            generic_header_idx = remaining.find("\n##")
+            if 0 < generic_header_idx < nearest_marker_idx:
+                nearest_marker_idx = generic_header_idx
+            
+            system_prompt = remaining[:nearest_marker_idx].strip()
+            if system_prompt:
+                if len(system_prompt) > max_length:
+                    return system_prompt[:max_length] + "..."
+                return system_prompt
         
         # Fallback: use the entire configuration as system prompt
         # Truncate if too long
-        max_length = 4000
         if len(bot_configuration) > max_length:
             return bot_configuration[:max_length] + "..."
         return bot_configuration

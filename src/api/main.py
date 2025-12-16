@@ -883,6 +883,19 @@ async def generate_personas(
     Returns:
         List of generated PersonaConfig objects
     """
+    # Validate request
+    if not request.topic or not request.topic.strip():
+        raise HTTPException(
+            status_code=400,
+            detail="Topic cannot be empty. Please provide a valid debate topic."
+        )
+    
+    if request.num_agents < 2:
+        raise HTTPException(
+            status_code=400,
+            detail="num_agents must be at least 2 for a meaningful debate."
+        )
+    
     try:
         execution_mode = request.execution_mode or settings.default_execution_mode
         
@@ -898,10 +911,31 @@ async def generate_personas(
             execution_mode=execution_mode,
             topic=request.topic
         )
-        
+    
+    except ConnectionError as e:
+        logger.error(f"LLM connection error during persona generation: {e}", exc_info=True)
+        raise HTTPException(
+            status_code=503,
+            detail="Failed to connect to LLM service. Please try again later."
+        )
+    except TimeoutError as e:
+        logger.error(f"LLM timeout during persona generation: {e}", exc_info=True)
+        raise HTTPException(
+            status_code=504,
+            detail="LLM request timed out. Please try again with a simpler topic."
+        )
+    except ValueError as e:
+        logger.error(f"Invalid input for persona generation: {e}", exc_info=True)
+        raise HTTPException(
+            status_code=400,
+            detail=f"Invalid input: {str(e)}"
+        )
     except Exception as e:
         logger.error(f"Failed to generate personas: {e}", exc_info=True)
-        raise HTTPException(status_code=500, detail=f"Failed to generate personas: {str(e)}")
+        raise HTTPException(
+            status_code=500,
+            detail=f"Failed to generate personas: {str(e)}"
+        )
 
 
 @app.post("/debate/init", response_model=InitDebateResponse)
