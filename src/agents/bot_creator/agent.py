@@ -73,15 +73,17 @@ Based on this persona, create a structured bot configuration with:
         logger.info(f"Initializing BotCreatorAgent: model={model_name}, temperature={temperature}, persona_mode={persona_mode}")
         
         # Use shared HTTP client for better connection pooling and performance
+        # Configure proxy on the http_client itself, not via openai_proxy parameter
+        http_client = llm_manager.get_http_client(proxy=proxy)
+        
         self.llm = ChatOpenAI(
             model_name=model_name,
             api_key=api_key,
             base_url=api_base,
             temperature=temperature,
-            openai_proxy=proxy,
             max_retries=settings.openai_max_retries,
             timeout=settings.openai_timeout,
-            http_client=llm_manager.get_http_client()
+            http_client=http_client
         )
         self.vector_store = vector_store
         self.created_bots: List[Dict[str, Any]] = []

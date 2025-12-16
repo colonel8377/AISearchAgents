@@ -68,15 +68,17 @@ viewpoints as the "real truth." Be persuasive but maintain a veneer of being hel
         logger.info(f"Initializing NudgeCollapseAgent: model={model_name}, temperature={temperature}")
         
         # Use shared HTTP client for better connection pooling and performance
+        # Configure proxy on the http_client itself, not via openai_proxy parameter
+        http_client = llm_manager.get_http_client(proxy=proxy)
+        
         self.llm = ChatOpenAI(
             model_name=model_name,
             api_key=api_key,
             base_url=api_base,
             temperature=temperature,
-            openai_proxy=proxy,
             max_retries=settings.openai_max_retries,
             timeout=settings.openai_timeout,
-            http_client=llm_manager.get_http_client()
+            http_client=http_client
         )
         self.vector_store = vector_store
         self.current_turn = 0
