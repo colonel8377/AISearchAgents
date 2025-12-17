@@ -607,5 +607,199 @@ class TestWebOpinionExtractorNetworkErrors:
         assert "this.domain.definitely.does.not.exist.xyz" in exc_info.value.url
 
 
+class TestChainOfThoughtSupport:
+    """Tests for Chain of Thought (CoT) reasoning support."""
+    
+    def test_atomic_opinion_with_reasoning(self):
+        """Test that AtomicOpinion can include reasoning field."""
+        bias = BiasDistribution(left=0.7, right=0.1, neutral=0.2)
+        opinion = AtomicOpinion(
+            text="Support for universal healthcare",
+            opinion_type="opinion",
+            bias_probabilities=bias,
+            reasoning="This expresses support for universal healthcare, which aligns with progressive/left ideology. High left probability (0.7) due to policy alignment."
+        )
+        assert opinion.reasoning is not None
+        assert "progressive" in opinion.reasoning.lower()
+        assert opinion.bias_probabilities.left == 0.7
+    
+    def test_atomic_opinion_without_reasoning(self):
+        """Test that reasoning field is optional."""
+        bias = BiasDistribution(left=0.3, right=0.3, neutral=0.4)
+        opinion = AtomicOpinion(
+            text="Test opinion",
+            opinion_type="opinion",
+            bias_probabilities=bias
+        )
+        assert opinion.reasoning is None
+    
+    def test_extractor_with_chain_local_mode(self):
+        """Test WebOpinionExtractor with chain_local execution mode."""
+        with patch.object(WebOpinionExtractor, '__init__', lambda self, **kwargs: None):
+            extractor = WebOpinionExtractor()
+            extractor.execution_mode = "chain_local"
+            extractor.request_timeout = 30.0
+            extractor._extraction_history = []
+            extractor.llm = Mock()
+            extractor.llm.model_name = "test-model"
+            extractor.llm.temperature = 0.3
+            
+            # Mock response with reasoning field
+            mock_response = Mock()
+            mock_response.content = '''
+            {
+                "atomic_opinions": [
+                    {
+                        "text": "Support for tax reform",
+                        "opinion_type": "opinion",
+                        "bias_probabilities": {"left": 0.2, "right": 0.6, "neutral": 0.2},
+                        "reasoning": "This statement supports tax reform, typically associated with conservative fiscal policy. Right probability is 0.6 due to policy alignment.",
+                        "confidence": 0.85
+                    }
+                ]
+            }
+            '''
+            extractor.llm.invoke = Mock(return_value=mock_response)
+            
+            result = extractor.extract_from_text("I support tax reform.")
+            
+            assert len(result.opinions) == 1
+            assert result.opinions[0].reasoning is not None
+            assert "conservative" in result.opinions[0].reasoning.lower()
+    
+    def test_extractor_with_no_chain_mode(self):
+        """Test WebOpinionExtractor with no_chain execution mode (no CoT)."""
+        with patch.object(WebOpinionExtractor, '__init__', lambda self, **kwargs: None):
+            extractor = WebOpinionExtractor()
+            extractor.execution_mode = "no_chain"
+            extractor.request_timeout = 30.0
+            extractor._extraction_history = []
+            extractor.llm = Mock()
+            extractor.llm.model_name = "test-model"
+            extractor.llm.temperature = 0.3
+            
+            # Mock response without reasoning field
+            mock_response = Mock()
+            mock_response.content = '''
+            {
+                "atomic_opinions": [
+                    {
+                        "text": "Support for tax reform",
+                        "opinion_type": "opinion",
+                        "bias_probabilities": {"left": 0.2, "right": 0.6, "neutral": 0.2},
+                        "confidence": 0.85
+                    }
+                ]
+            }
+            '''
+            extractor.llm.invoke = Mock(return_value=mock_response)
+            
+            result = extractor.extract_from_text("I support tax reform.")
+            
+            assert len(result.opinions) == 1
+            # Reasoning may be None in no_chain mode
+            assert result.opinions[0].reasoning is None
+
+
+class TestWebOpinionAnalyzer:
+    """Tests for WebOpinionAnalyzer high-level API."""
+    
+    def test_analyzer_initialization(self):
+        """Test WebOpinionAnalyzer initialization."""
+        with patch.object(WebOpinionExtractor, '__init__', return_value=None):
+            from src.agents.web_opinion_extractor import WebOpinionAnalyzer
+            analyzer = WebOpinionAnalyzer(execution_mode="chain_local")
+            # Should initialize without errors
+    
+    def test_extract_and_analyze_with_network_error(self):
+        """Test that extract_and_analyze returns error state on network failure."""
+        from src.agents.web_opinion_extractor import WebOpinionAnalyzer
+        
+        with patch.object(WebOpinionExtractor, '__init__', return_value=None):
+            analyzer = WebOpinionAnalyzer()
+            analyzer._extractor = Mock()
+            analyzer._extractor.extract_and_analyze = Mock(
+                side_effect=NetworkError("Connection failed", "http://example.com", 500)
+            )
+            
+            result = analyzer.extract_and_analyze("http://example.com")
+            
+            # Should return valid result with error metadata
+            assert result.extraction_metadata is not None
+            assert result.extraction_metadata["error"] == "network_error"
+            assert "Connection failed" in result.extraction_metadata["error_message"]
+            assert result.extraction_metadata["status_code"] == 500
+            assert len(result.opinions) == 0
+    
+    def test_extract_and_analyze_with_content_error(self):
+        """Test that extract_and_analyze returns error state on content extraction failure."""
+        from src.agents.web_opinion_extractor import WebOpinionAnalyzer
+        
+        with patch.object(WebOpinionExtractor, '__init__', return_value=None):
+            analyzer = WebOpinionAnalyzer()
+            analyzer._extractor = Mock()
+            analyzer._extractor.extract_and_analyze = Mock(
+                side_effect=ContentExtractionError("No content found", "http://example.com")
+            )
+            
+            result = analyzer.extract_and_analyze("http://example.com")
+            
+            # Should return valid result with error metadata
+            assert result.extraction_metadata is not None
+            assert result.extraction_metadata["error"] == "content_extraction_error"
+            assert "No content found" in result.extraction_metadata["error_message"]
+            assert len(result.opinions) == 0
+    
+    def test_extract_html_verification_api(self):
+        """Test extract_html verification method."""
+        from src.agents.web_opinion_extractor import WebOpinionAnalyzer
+        
+        with patch.object(WebOpinionExtractor, '__init__', return_value=None):
+            analyzer = WebOpinionAnalyzer()
+            analyzer._extractor = Mock()
+            analyzer._extractor.extract_html = Mock(return_value="<html>test</html>")
+            
+            html = analyzer.extract_html("http://example.com")
+            
+            assert html == "<html>test</html>"
+            analyzer._extractor.extract_html.assert_called_once_with("http://example.com")
+    
+    def test_clean_html_verification_api(self):
+        """Test clean_html verification method."""
+        from src.agents.web_opinion_extractor import WebOpinionAnalyzer
+        
+        with patch.object(WebOpinionExtractor, '__init__', return_value=None):
+            analyzer = WebOpinionAnalyzer()
+            analyzer._extractor = Mock()
+            analyzer._extractor.clean_html = Mock(return_value=("Clean text", "Title"))
+            
+            text, title = analyzer.clean_html("<html>test</html>")
+            
+            assert text == "Clean text"
+            assert title == "Title"
+    
+    def test_analyze_text_verification_api(self):
+        """Test analyze_text verification method."""
+        from src.agents.web_opinion_extractor import WebOpinionAnalyzer
+        
+        with patch.object(WebOpinionExtractor, '__init__', return_value=None):
+            analyzer = WebOpinionAnalyzer()
+            analyzer._extractor = Mock()
+            
+            # Create a mock result
+            mock_result = OpinionExtractionResult(
+                atomic_opinions=[],
+                facts=[],
+                opinions=[],
+                text_length=100
+            )
+            analyzer._extractor.analyze_text = Mock(return_value=mock_result)
+            
+            result = analyzer.analyze_text("Test text")
+            
+            assert result == mock_result
+            analyzer._extractor.analyze_text.assert_called_once()
+
+
 if __name__ == "__main__":
     pytest.main([__file__, "-v"])

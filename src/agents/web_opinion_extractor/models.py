@@ -96,6 +96,10 @@ class AtomicOpinion(BaseModel):
         le=1.0,
         description="Confidence score for the extraction (0.0 to 1.0)"
     )
+    reasoning: Optional[str] = Field(
+        default=None,
+        description="Chain of Thought (CoT) reasoning explaining the analysis step-by-step"
+    )
     
     @property
     def bias_score(self) -> float:
