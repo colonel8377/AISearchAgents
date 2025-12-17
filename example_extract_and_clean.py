@@ -22,12 +22,6 @@ def example_extractandclean():
         "url": "https://example.com/article"
     }
     
-    # With custom proxy
-    payload_with_proxy = {
-        "url": "https://example.com/article",
-        "proxy": "http://proxy.example.com:8080"
-    }
-    
     headers = {
         "Content-Type": "application/json",
         # "X-API-Key": "your-api-key-here"  # Uncomment if authentication is enabled
@@ -36,6 +30,9 @@ def example_extractandclean():
     print("=== Example: Extract and Clean ===")
     print(f"Requesting: {url}")
     print(f"Payload: {json.dumps(payload, indent=2)}")
+    print()
+    print("Note: To use a custom proxy, add 'proxy' parameter:")
+    print('  {"url": "...", "proxy": "http://proxy.example.com:8080"}')
     print()
     
     try:
