@@ -186,6 +186,7 @@ async def root():
             "debate_stability": "/debate/{session_id}/stability_check (POST to check stability)",
             "web_opinion_extract_html": "/api/v1/web-opinion/extract-html (POST - extract HTML from URL)",
             "web_opinion_clean_html": "/api/v1/web-opinion/clean-html (POST - clean HTML to text)",
+            "web_opinion_extract_and_clean": "/api/v1/web-opinion/extract-and-clean (POST - combined: extract HTML from URL and clean to text in one step)",
             "web_opinion_extract_opinions": "/api/v1/web-opinion/extract-opinions (POST - extract atomic opinions from text)",
             "web_opinion_analyze": "/api/v1/web-opinion/analyze (POST - complete analysis from URL)",
             "web_opinion_bias_score": "/api/v1/web-opinion/bias-score (POST - get overall bias score from URL)"
@@ -1300,6 +1301,21 @@ class CleanHtmlResponse(BaseModel):
     error_message: Optional[str] = None
 
 
+class ExtractAndCleanRequest(BaseModel):
+    """Request model for combined HTML extraction and cleaning from URL."""
+    url: str = Field(..., description="The URL to fetch and clean")
+
+
+class ExtractAndCleanResponse(BaseModel):
+    """Response model for combined HTML extraction and cleaning."""
+    url: str
+    text: Optional[str] = None
+    title: Optional[str] = None
+    text_length: Optional[int] = None
+    error: Optional[str] = None
+    error_message: Optional[str] = None
+
+
 class ExtractOpinionsRequest(BaseModel):
     """Request model for extracting atomic opinions from text."""
     text: str = Field(..., description="Text content to analyze")
@@ -1490,6 +1506,71 @@ async def clean_html_content(
         logger.error(f"Failed to clean HTML: {e}", exc_info=True)
         return CleanHtmlResponse(
             error="cleaning_failed",
+            error_message=str(e)
+        )
+
+
+@app.post("/api/v1/web-opinion/extract-and-clean", response_model=ExtractAndCleanResponse)
+async def extract_and_clean_from_url(
+    request: ExtractAndCleanRequest,
+    api_key: str = Depends(verify_api_key)
+):
+    """
+    Combined API: Extract HTML from URL and clean to text in one step.
+    
+    This endpoint combines HTML extraction and cleaning into a single API call,
+    saving tokens by avoiding the need to pass large HTML content between calls.
+    It fetches HTML from the URL and directly returns cleaned text using BeautifulSoup.
+    
+    This is more efficient than calling extract-html followed by clean-html separately.
+    
+    Args:
+        request: ExtractAndCleanRequest with URL
+        api_key: API key for authentication
+        
+    Returns:
+        ExtractAndCleanResponse with cleaned text and title or error
+    """
+    logger.info(f"Extracting and cleaning HTML from URL: {request.url}")
+    
+    try:
+        analyzer = WebOpinionAnalyzer(
+            execution_mode=settings.default_execution_mode,
+            proxy=settings.openai_proxy if settings.openai_proxy else None
+        )
+        
+        # Step 1: Extract HTML from URL
+        html = analyzer.extract_html(request.url)
+        
+        if html is None:
+            return ExtractAndCleanResponse(
+                url=request.url,
+                error="fetch_failed",
+                error_message="Failed to fetch HTML from URL"
+            )
+        
+        # Step 2: Clean HTML to extract text
+        text, title = analyzer.clean_html(html)
+        
+        if text is None:
+            return ExtractAndCleanResponse(
+                url=request.url,
+                error="cleaning_failed",
+                error_message="Failed to clean HTML content"
+            )
+        
+        return ExtractAndCleanResponse(
+            url=request.url,
+            text=text,
+            title=title,
+            text_length=len(text) if text else 0
+        )
+        
+    except Exception as e:
+        logger.error(f"Failed to extract and clean from {request.url}: {e}", exc_info=True)
+        return ExtractAndCleanResponse(
+            url=request.url,
+            error="extraction_failed",
             error_message=str(e)
         )
 
