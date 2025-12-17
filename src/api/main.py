@@ -1563,7 +1563,7 @@ async def extract_and_clean_from_url(
             url=request.url,
             text=text,
             title=title,
-            text_length=len(text) if text else 0
+            text_length=len(text)
         )
         
     except Exception as e:
