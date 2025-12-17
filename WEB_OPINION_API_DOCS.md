@@ -79,7 +79,45 @@ Extract clean text from raw HTML, removing scripts, styles, navigation, and othe
 
 ---
 
-### 3. Extract Atomic Opinions from Text
+### 3. Combined Extract and Clean (NEW - Token Efficient)
+
+**Recommended for production use:** Extract HTML from URL and clean to text in a single API call.
+
+**Endpoint:** `POST /api/v1/web-opinion/extract-and-clean`
+
+**Request Body:**
+```json
+{
+  "url": "https://example.com/article"
+}
+```
+
+**Response:**
+```json
+{
+  "url": "https://example.com/article",
+  "text": "Cleaned article text...",
+  "title": "Article Title",
+  "text_length": 1234,
+  "error": null,
+  "error_message": null
+}
+```
+
+**Use Case:**
+- **Primary use case**: Efficient text extraction from URLs
+- **Token savings**: Avoids passing large HTML content between API calls
+- **Simplicity**: Single call replaces the two-step extract-html → clean-html process
+- Processing is done server-side with BeautifulSoup
+
+**Token Savings:**
+- Old two-step approach: ~50,000 tokens (HTML sent twice)
+- New combined approach: ~550 tokens (URL sent once)
+- **Savings: 99% token reduction** for typical web pages
+
+---
+
+### 4. Extract Atomic Opinions from Text
 
 Analyze text to extract atomic opinions with bias scores.
 
@@ -146,7 +184,7 @@ Analyze text to extract atomic opinions with bias scores.
 
 ---
 
-### 4. Complete URL Analysis
+### 5. Complete URL Analysis
 
 One-step complete pipeline: fetch HTML, clean, extract opinions, and calculate bias scores.
 
@@ -180,7 +218,7 @@ One-step complete pipeline: fetch HTML, clean, extract opinions, and calculate b
 
 ---
 
-### 5. Get Overall Bias Score from URL
+### 6. Get Overall Bias Score from URL
 
 Simplified API that returns only the overall bias score without detailed opinion breakdowns.
 
@@ -322,7 +360,30 @@ The API supports three Chain of Thought (CoT) execution modes:
 
 ## Usage Examples
 
-### Example 1: Quick Bias Check
+### Example 1: Extract and Clean (Token Efficient - Recommended)
+
+```bash
+# New combined endpoint - most efficient for getting cleaned text
+curl -X POST http://localhost:8000/api/v1/web-opinion/extract-and-clean \
+  -H "Content-Type: application/json" \
+  -d '{
+    "url": "https://example.com/article"
+  }'
+```
+
+**Response:**
+```json
+{
+  "url": "https://example.com/article",
+  "text": "Article content...",
+  "title": "Article Title",
+  "text_length": 1234
+}
+```
+
+**Why use this:** Saves ~99% tokens compared to separate extract-html + clean-html calls.
+
+### Example 2: Quick Bias Check
 
 ```bash
 curl -X POST http://localhost:8000/api/v1/web-opinion/bias-score \
@@ -332,7 +393,7 @@ curl -X POST http://localhost:8000/api/v1/web-opinion/bias-score \
   }'
 ```
 
-### Example 2: Complete Analysis with CoT
+### Example 3: Complete Analysis with CoT
 
 ```bash
 curl -X POST http://localhost:8000/api/v1/web-opinion/analyze \
@@ -343,7 +404,7 @@ curl -X POST http://localhost:8000/api/v1/web-opinion/analyze \
   }'
 ```
 
-### Example 3: Manual Pipeline
+### Example 4: Manual Pipeline
 
 ```bash
 # Step 1: Extract HTML
@@ -362,7 +423,7 @@ curl -X POST http://localhost:8000/api/v1/web-opinion/extract-opinions \
   -d '{"text": "..."}' > response3.json
 ```
 
-### Example 4: Python Client
+### Example 5: Python Client
 
 ```python
 import requests
