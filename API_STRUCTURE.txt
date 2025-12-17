@@ -1,0 +1,156 @@
+═══════════════════════════════════════════════════════════════════════════════
+                    Web Opinion Extract API Structure
+═══════════════════════════════════════════════════════════════════════════════
+
+┌─────────────────────────────────────────────────────────────────────────────┐
+│                         Base: /api/v1/web-opinion                           │
+└─────────────────────────────────────────────────────────────────────────────┘
+
+┌─────────────────────────────────────────────────────────────────────────────┐
+│ 1. Extract HTML API                                                         │
+├─────────────────────────────────────────────────────────────────────────────┤
+│ Endpoint:  POST /extract-html                                               │
+│ Input:     {"url": "https://example.com"}                                   │
+│ Output:    {"html": "...", "html_length": 12345}                            │
+│ Use:       Fetch raw HTML from URL                                          │
+└─────────────────────────────────────────────────────────────────────────────┘
+
+┌─────────────────────────────────────────────────────────────────────────────┐
+│ 2. Clean HTML API                                                           │
+├─────────────────────────────────────────────────────────────────────────────┤
+│ Endpoint:  POST /clean-html                                                 │
+│ Input:     {"html": "<html>...</html>"}                                     │
+│ Output:    {"text": "...", "title": "..."}                                  │
+│ Use:       Extract main content from HTML                                   │
+└─────────────────────────────────────────────────────────────────────────────┘
+
+┌─────────────────────────────────────────────────────────────────────────────┐
+│ 3. Extract Opinions API ⭐                                                  │
+├─────────────────────────────────────────────────────────────────────────────┤
+│ Endpoint:  POST /extract-opinions                                           │
+│ Input:     {"text": "...", "execution_mode": "chain_local"}                 │
+│ Output:    {                                                                │
+│              "atomic_opinions": [                                           │
+│                {                                                            │
+│                  "text": "Opinion text",                                    │
+│                  "bias_probabilities": {                                    │
+│                    "left": 0.6, "right": 0.2, "neutral": 0.2               │
+│                  }                                                          │
+│                }                                                            │
+│              ],                                                             │
+│              "overall_bias_distribution": {...}                             │
+│            }                                                                │
+│ Use:       Analyze text for atomic opinions with bias scores                │
+└─────────────────────────────────────────────────────────────────────────────┘
+
+┌─────────────────────────────────────────────────────────────────────────────┐
+│ 4. Complete Analysis API ⭐⭐                                                │
+├─────────────────────────────────────────────────────────────────────────────┤
+│ Endpoint:  POST /analyze                                                    │
+│ Input:     {"url": "https://example.com", "execution_mode": "chain_local"} │
+│ Output:    Same as Extract Opinions API                                     │
+│ Pipeline:  URL → HTML → Clean Text → Atomic Opinions → Bias Scores         │
+│ Use:       One-step complete analysis (RECOMMENDED)                         │
+└─────────────────────────────────────────────────────────────────────────────┘
+
+┌─────────────────────────────────────────────────────────────────────────────┐
+│ 5. Bias Score API ⭐⭐⭐                                                     │
+├─────────────────────────────────────────────────────────────────────────────┤
+│ Endpoint:  POST /bias-score                                                 │
+│ Input:     {"url": "https://example.com"}                                   │
+│ Output:    {                                                                │
+│              "overall_bias_distribution": {                                 │
+│                "left": 0.45, "right": 0.35, "neutral": 0.20,               │
+│                "dominant_bias": "left", "bias_score": -0.1                  │
+│              },                                                             │
+│              "opinions_count": 5,                                           │
+│              "facts_count": 3                                               │
+│            }                                                                │
+│ Use:       Quick bias check without opinion details (FASTEST)               │
+└─────────────────────────────────────────────────────────────────────────────┘
+
+═══════════════════════════════════════════════════════════════════════════════
+                              Usage Patterns
+═══════════════════════════════════════════════════════════════════════════════
+
+Pattern 1: Quick Bias Check (Simplest)
+─────────────────────────────────────
+┌─────────┐      ┌──────────────┐      ┌────────────────┐
+│   URL   │─────▶│  bias-score  │─────▶│  Bias Score    │
+└─────────┘      └──────────────┘      └────────────────┘
+
+Pattern 2: Complete Analysis (Recommended)
+──────────────────────────────────────────
+┌─────────┐      ┌──────────┐      ┌─────────────────────┐
+│   URL   │─────▶│  analyze │─────▶│  Atomic Opinions +  │
+└─────────┘      └──────────┘      │  Bias Scores        │
+                                    └─────────────────────┘
+
+Pattern 3: Step-by-Step (Debug)
+────────────────────────────────
+┌─────────┐   ┌──────────────┐   ┌────────────┐   ┌─────────────────┐
+│   URL   │──▶│ extract-html │──▶│ clean-html │──▶│ extract-opinions│
+└─────────┘   └──────────────┘   └────────────┘   └─────────────────┘
+                   │                    │                    │
+                   ▼                    ▼                    ▼
+                 HTML                 Text            Atomic Opinions
+
+═══════════════════════════════════════════════════════════════════════════════
+                          Response Structure
+═══════════════════════════════════════════════════════════════════════════════
+
+Bias Probability Distribution (per opinion & overall):
+{
+  "left": 0.45,          // Progressive bias probability (0.0-1.0)
+  "right": 0.35,         // Conservative bias probability (0.0-1.0)
+  "neutral": 0.20,       // Neutral/Centrist probability (0.0-1.0)
+  "dominant_bias": "left", // Category with highest probability
+  "bias_score": -0.1     // Single score: -1.0 (left) to +1.0 (right)
+}
+
+Atomic Opinion Structure:
+{
+  "text": "Support for universal healthcare",
+  "opinion_type": "opinion",  // "fact" or "opinion"
+  "bias_probabilities": {...},
+  "original_sentence": "I strongly support universal healthcare",
+  "confidence": 0.9,
+  "reasoning": "This expresses support for..." // Optional (with CoT)
+}
+
+═══════════════════════════════════════════════════════════════════════════════
+                          Execution Modes
+═══════════════════════════════════════════════════════════════════════════════
+
+┌────────────┬────────────────┬──────────────────┬─────────────────────────┐
+│    Mode    │   Reasoning    │      Speed       │       Best For          │
+├────────────┼────────────────┼──────────────────┼─────────────────────────┤
+│ no_chain   │ No reasoning   │ Fastest (~5s)    │ Production/High-volume  │
+│ chain_local│ Includes       │ Balanced (~10s)  │ Most use cases (DEFAULT)│
+│ chain_online│ Full LLM CoT  │ Detailed (~15s)  │ Research/Analysis       │
+└────────────┴────────────────┴──────────────────┴─────────────────────────┘
+
+═══════════════════════════════════════════════════════════════════════════════
+                              Quick Examples
+═══════════════════════════════════════════════════════════════════════════════
+
+1. Quick Bias Check:
+   curl -X POST http://localhost:8000/api/v1/web-opinion/bias-score \
+     -H "Content-Type: application/json" \
+     -d '{"url": "https://example.com/article"}'
+
+2. Complete Analysis:
+   curl -X POST http://localhost:8000/api/v1/web-opinion/analyze \
+     -H "Content-Type: application/json" \
+     -d '{"url": "https://example.com/article", "execution_mode": "chain_local"}'
+
+3. Python Example:
+   import requests
+   response = requests.post(
+       "http://localhost:8000/api/v1/web-opinion/bias-score",
+       json={"url": "https://example.com/article"}
+   )
+   result = response.json()
+   print(f"Bias: {result['overall_bias_distribution']['dominant_bias']}")
+
+═══════════════════════════════════════════════════════════════════════════════
