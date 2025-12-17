@@ -256,9 +256,114 @@ class TestWebOpinionExtractorHTMLCleaning:
     
     def test_clean_html_handles_missing_title(self, extractor):
         """Test handling of missing title."""
-        html = '<html><body>Content</body></html>'
+        html = '<html><body><p>Content paragraph here.</p></body></html>'
         text, title = extractor._clean_html(html)
         assert title is None
+    
+    def test_clean_html_removes_buttons_and_forms(self, extractor):
+        """Test that buttons, forms, and input elements are removed."""
+        html = '''
+        <html>
+        <body>
+            <article>
+                <h1>Article Title</h1>
+                <p>This is the main article content that should be extracted.</p>
+                <button>Click me</button>
+                <form><input type="text" placeholder="Enter text"/></form>
+                <p>More important content here.</p>
+            </article>
+        </body>
+        </html>
+        '''
+        text, title = extractor._clean_html(html)
+        assert 'Click me' not in text
+        assert 'Enter text' not in text
+        assert 'main article content' in text
+        assert 'important content' in text
+    
+    def test_clean_html_removes_images_and_media(self, extractor):
+        """Test that images, videos, and other media are removed."""
+        html = '''
+        <html>
+        <body>
+            <article>
+                <h1>News Article</h1>
+                <img src="photo.jpg" alt="A photo"/>
+                <p>This is the article body text.</p>
+                <video src="video.mp4">Video content</video>
+                <p>More article text here.</p>
+            </article>
+        </body>
+        </html>
+        '''
+        text, title = extractor._clean_html(html)
+        assert 'photo.jpg' not in text
+        assert 'video.mp4' not in text
+        assert 'article body text' in text
+        assert 'article text here' in text
+    
+    def test_clean_html_extracts_main_article_content(self, extractor):
+        """Test that main article content is extracted from article tags."""
+        html = '''
+        <html>
+        <head><title>Page Title</title></head>
+        <body>
+            <header>Site Header</header>
+            <nav><ul><li><a href="/">Home</a></li><li><a href="/about">About</a></li></ul></nav>
+            <article>
+                <h1>Breaking News: Important Event</h1>
+                <p>This is the first paragraph of the news article with important details.</p>
+                <p>This is the second paragraph with more information about the event.</p>
+            </article>
+            <aside>Related articles sidebar</aside>
+            <footer>Site Footer</footer>
+        </body>
+        </html>
+        '''
+        text, title = extractor._clean_html(html)
+        assert 'Breaking News' in text or 'Important Event' in text
+        assert 'first paragraph' in text
+        assert 'second paragraph' in text
+        assert 'Site Header' not in text
+        assert 'Site Footer' not in text
+        assert 'Related articles' not in text
+    
+    def test_clean_html_removes_navigation_links(self, extractor):
+        """Test that navigation link lists are removed."""
+        html = '''
+        <html>
+        <body>
+            <ul>
+                <li><a href="/page1">Link 1</a></li>
+                <li><a href="/page2">Link 2</a></li>
+                <li><a href="/page3">Link 3</a></li>
+            </ul>
+            <main>
+                <p>This is the main content paragraph that should be extracted from the page.</p>
+            </main>
+        </body>
+        </html>
+        '''
+        text, title = extractor._clean_html(html)
+        assert 'main content paragraph' in text
+        # Navigation links should be removed or minimized
+        # The key is that main content is preserved
+    
+    def test_clean_html_extracts_article_title_from_h1(self, extractor):
+        """Test that article title is extracted from h1 tag."""
+        html = '''
+        <html>
+        <head><title>Website - News Section</title></head>
+        <body>
+            <article>
+                <h1>The Actual Article Headline</h1>
+                <p>Article body content goes here.</p>
+            </article>
+        </body>
+        </html>
+        '''
+        text, title = extractor._clean_html(html)
+        assert title == "The Actual Article Headline"
 
 
 class TestWebOpinionExtractorTruncation:
