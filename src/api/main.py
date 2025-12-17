@@ -1407,7 +1407,7 @@ async def extract_and_clean_from_url(
     
     try:
         # Reuse OpenAI proxy settings if configured
-        proxy = settings.openai_proxy if settings.openai_proxy else None
+        proxy = settings.openai_proxy or None
         
         analyzer = WebOpinionAnalyzer(
             execution_mode=settings.default_execution_mode,
