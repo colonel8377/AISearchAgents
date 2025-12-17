@@ -79,59 +79,69 @@ class TestWebOpinionExtractApi:
             truncated=False
         )
     
-    def test_extract_html_success(self, mock_analyzer, sample_html):
-        """Test successful HTML extraction."""
+    def test_extractandclean_success(self, mock_analyzer, sample_html):
+        """Test successful combined extract and clean."""
         mock_analyzer.extract_html.return_value = sample_html
+        mock_analyzer.clean_html.return_value = ("Clean text content", "Test Title")
         
         response = client.post(
-            "/api/v1/web-opinion/extract-html",
+            "/api/v1/web-opinion/extractandclean",
             json={"url": "https://example.com"}
         )
         
         assert response.status_code == 200
         data = response.json()
         assert data["url"] == "https://example.com"
-        assert data["html"] is not None
-        assert data["html_length"] == len(sample_html)
-        assert data["error"] is None
-    
-    def test_extract_html_failure(self, mock_analyzer):
-        """Test HTML extraction failure."""
-        mock_analyzer.extract_html.return_value = None
-        
-        response = client.post(
-            "/api/v1/web-opinion/extract-html",
-            json={"url": "https://invalid.url"}
-        )
-        
-        assert response.status_code == 200  # Returns 200 with error in body
-        data = response.json()
-        assert data["error"] == "fetch_failed"
-        assert data["html"] is None
-    
-    def test_clean_html_success(self, mock_analyzer):
-        """Test successful HTML cleaning."""
-        mock_analyzer.clean_html.return_value = ("Clean text content", "Test Title")
-        
-        response = client.post(
-            "/api/v1/web-opinion/clean-html",
-            json={"html": "<html><body>Test</body></html>"}
-        )
-        
-        assert response.status_code == 200
-        data = response.json()
         assert data["text"] == "Clean text content"
         assert data["title"] == "Test Title"
         assert data["text_length"] == len("Clean text content")
         assert data["error"] is None
+        
+        # Verify both methods were called
+        mock_analyzer.extract_html.assert_called_once_with("https://example.com")
+        mock_analyzer.clean_html.assert_called_once_with(sample_html)
     
-    def test_clean_html_failure(self, mock_analyzer):
-        """Test HTML cleaning failure."""
+    def test_extractandclean_with_proxy(self, mock_analyzer, sample_html):
+        """Test combined extract and clean with custom proxy."""
+        mock_analyzer.extract_html.return_value = sample_html
+        mock_analyzer.clean_html.return_value = ("Clean text content", "Test Title")
+        
+        response = client.post(
+            "/api/v1/web-opinion/extractandclean",
+            json={
+                "url": "https://example.com",
+                "proxy": "http://proxy.example.com:8080"
+            }
+        )
+        
+        assert response.status_code == 200
+        data = response.json()
+        assert data["url"] == "https://example.com"
+        assert data["text"] == "Clean text content"
+        assert data["error"] is None
+    
+    def test_extractandclean_fetch_failure(self, mock_analyzer):
+        """Test combined extract and clean with fetch failure."""
+        mock_analyzer.extract_html.return_value = None
+        
+        response = client.post(
+            "/api/v1/web-opinion/extractandclean",
+            json={"url": "https://invalid.url"}
+        )
+        
+        assert response.status_code == 200
+        data = response.json()
+        assert data["error"] == "fetch_failed"
+        assert data["text"] is None
+    
+    def test_extractandclean_cleaning_failure(self, mock_analyzer, sample_html):
+        """Test combined extract and clean with cleaning failure."""
+        mock_analyzer.extract_html.return_value = sample_html
         mock_analyzer.clean_html.return_value = (None, None)
         
         response = client.post(
-            "/api/v1/web-opinion/clean-html",
-            json={"html": "<html></html>"}
+            "/api/v1/web-opinion/extractandclean",
+            json={"url": "https://example.com"}
         )
         
         assert response.status_code == 200

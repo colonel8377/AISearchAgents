@@ -17,16 +17,17 @@ If API key authentication is enabled:
 
 ## API Endpoints
 
-### 1. Extract HTML from URL
+### 1. Extract and Clean HTML (Primary Endpoint)
 
-Extract raw HTML content from a URL.
+**Recommended for all use cases:** Extract HTML from URL and clean to text in a single API call with optional proxy support.
 
-**Endpoint:** `POST /api/v1/web-opinion/extract-html`
+**Endpoint:** `POST /api/v1/web-opinion/extractandclean`
 
 **Request Body:**
 ```json
 {
-  "url": "https://example.com/article"
+  "url": "https://example.com/article",
+  "proxy": "http://proxy.example.com:8080"  // Optional: custom proxy for fetching and LLM requests
 }
 ```
 
@@ -34,36 +35,6 @@ Extract raw HTML content from a URL.
 ```json
 {
   "url": "https://example.com/article",
-  "html": "<html>...</html>",
-  "html_length": 12345,
-  "error": null,
-  "error_message": null
-}
-```
-
-**Use Case:** 
-- Step 1 of manual pipeline
-- Verify HTML fetching independently
-- Debug content extraction issues
-
----
-
-### 2. Clean HTML Content
-
-Extract clean text from raw HTML, removing scripts, styles, navigation, and other non-content elements.
-
-**Endpoint:** `POST /api/v1/web-opinion/clean-html`
-
-**Request Body:**
-```json
-{
-  "html": "<html><body><article>...</article></body></html>"
-}
-```
-
-**Response:**
-```json
-{
   "text": "Cleaned article text...",
   "title": "Article Title",
   "text_length": 1234,
@@ -72,14 +43,20 @@ Extract clean text from raw HTML, removing scripts, styles, navigation, and othe
 }
 ```
 
+**Features:**
+- **Token efficient**: Single API call instead of multiple steps
+- **Proxy support**: Optional proxy parameter for fetching URL and LLM requests
+- **Server-side processing**: BeautifulSoup filtering done server-side
+- **Robust error handling**: Returns detailed error states
+
 **Use Case:**
-- Step 2 of manual pipeline
-- Verify HTML cleaning process
-- Extract main content for further processing
+- Primary endpoint for extracting cleaned text from URLs
+- Supports custom proxy for corporate environments or rate limiting
+- Token savings: ~99% reduction compared to multi-step approaches
 
 ---
 
-### 3. Extract Atomic Opinions from Text
+### 2. Extract Atomic Opinions from Text
 
 Analyze text to extract atomic opinions with bias scores.
 
@@ -146,7 +123,7 @@ Analyze text to extract atomic opinions with bias scores.
 
 ---
 
-### 4. Complete URL Analysis
+### 3. Complete URL Analysis
 
 One-step complete pipeline: fetch HTML, clean, extract opinions, and calculate bias scores.
 
@@ -180,7 +157,7 @@ One-step complete pipeline: fetch HTML, clean, extract opinions, and calculate b
 
 ---
 
-### 5. Get Overall Bias Score from URL
+### 4. Get Overall Bias Score from URL
 
 Simplified API that returns only the overall bias score without detailed opinion breakdowns.
 
@@ -322,7 +299,40 @@ The API supports three Chain of Thought (CoT) execution modes:
 
 ## Usage Examples
 
-### Example 1: Quick Bias Check
+### Example 1: Extract and Clean (Recommended)
+
+```bash
+# Primary endpoint for extracting cleaned text from URLs
+curl -X POST http://localhost:8000/api/v1/web-opinion/extractandclean \
+  -H "Content-Type: application/json" \
+  -d '{
+    "url": "https://example.com/article"
+  }'
+```
+
+**Response:**
+```json
+{
+  "url": "https://example.com/article",
+  "text": "Article content...",
+  "title": "Article Title",
+  "text_length": 1234
+}
+```
+
+### Example 1b: Extract and Clean with Custom Proxy
+
+```bash
+# Use custom proxy for fetching and LLM requests
+curl -X POST http://localhost:8000/api/v1/web-opinion/extractandclean \
+  -H "Content-Type: application/json" \
+  -d '{
+    "url": "https://example.com/article",
+    "proxy": "http://proxy.example.com:8080"
+  }'
+```
+
+### Example 2: Quick Bias Check
 
 ```bash
 curl -X POST http://localhost:8000/api/v1/web-opinion/bias-score \
@@ -332,7 +342,7 @@ curl -X POST http://localhost:8000/api/v1/web-opinion/bias-score \
   }'
 ```
 
-### Example 2: Complete Analysis with CoT
+### Example 3: Complete Analysis with CoT
 
 ```bash
 curl -X POST http://localhost:8000/api/v1/web-opinion/analyze \
@@ -341,25 +351,6 @@ curl -X POST http://localhost:8000/api/v1/web-opinion/analyze \
     "url": "https://example.com/article",
     "execution_mode": "chain_local"
   }'
-```
-
-### Example 3: Manual Pipeline
-
-```bash
-# Step 1: Extract HTML
-curl -X POST http://localhost:8000/api/v1/web-opinion/extract-html \
-  -H "Content-Type: application/json" \
-  -d '{"url": "https://example.com"}' > response1.json
-
-# Step 2: Clean HTML (use html from response1)
-curl -X POST http://localhost:8000/api/v1/web-opinion/clean-html \
-  -H "Content-Type: application/json" \
-  -d '{"html": "..."}' > response2.json
-
-# Step 3: Extract opinions (use text from response2)
-curl -X POST http://localhost:8000/api/v1/web-opinion/extract-opinions \
-  -H "Content-Type: application/json" \
-  -d '{"text": "..."}' > response3.json
 ```
 
 ### Example 4: Python Client
