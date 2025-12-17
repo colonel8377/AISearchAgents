@@ -1,7 +1,8 @@
 """
 Example usage of the extractandclean API endpoint.
 
-This demonstrates how the endpoint saves tokens and supports optional proxy configuration.
+This demonstrates how the endpoint saves tokens by processing HTML server-side.
+Proxy configuration is handled via OPENAI_PROXY setting or environment variables.
 """
 
 import requests
@@ -12,8 +13,9 @@ def example_extractandclean():
     """
     Example: Use the extractandclean endpoint.
     
-    This single endpoint handles both HTML extraction and cleaning,
-    with optional proxy support for fetching and LLM requests.
+    This single endpoint handles both HTML extraction and cleaning.
+    Proxy configuration is handled via OPENAI_PROXY setting or 
+    HTTP_PROXY/HTTPS_PROXY environment variables.
     """
     url = "http://localhost:8000/api/v1/web-opinion/extractandclean"
     
@@ -31,8 +33,8 @@ def example_extractandclean():
     print(f"Requesting: {url}")
     print(f"Payload: {json.dumps(payload, indent=2)}")
     print()
-    print("Note: To use a custom proxy, add 'proxy' parameter:")
-    print('  {"url": "...", "proxy": "http://proxy.example.com:8080"}')
+    print("Note: To use a proxy, configure OPENAI_PROXY in .env or set")
+    print("      HTTP_PROXY/HTTPS_PROXY environment variables")
     print()
     
     try:
@@ -68,20 +70,20 @@ def compare_approaches():
     
     Benefits:
     - Single API call
-    - Optional proxy support for fetching and LLM
     - Server-side processing with BeautifulSoup
     - Token efficient
+    - Proxy support via settings/environment variables
     """
     print("\n=== API Approach ===")
     print("\nSINGLE ENDPOINT:")
     print("  POST /extractandclean")
-    print("    Request: ~50 tokens (URL + optional proxy)")
+    print("    Request: ~50 tokens (URL)")
     print("    Response: ~500 tokens (cleaned text)")
     print("  TOTAL: ~550 tokens")
     print()
     print("FEATURES:")
     print("  - Single API call")
-    print("  - Optional proxy parameter")
+    print("  - Proxy via OPENAI_PROXY or HTTP_PROXY env vars")
     print("  - Server-side BeautifulSoup filtering")
     print("  - No HTML transmission required")
     print("\nNote: HTML is processed server-side with BeautifulSoup,")

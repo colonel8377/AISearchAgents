@@ -21,7 +21,7 @@ Successfully implemented a new combined API endpoint that merges HTML extraction
 
 ### Endpoint Details
 
-**URL:** `POST /api/v1/web-opinion/extract-and-clean`
+**URL:** `POST /api/v1/web-opinion/extractandclean`
 
 **Request:**
 ```json
@@ -29,6 +29,8 @@ Successfully implemented a new combined API endpoint that merges HTML extraction
   "url": "https://example.com/article"
 }
 ```
+
+**Note:** Proxy configuration is handled via `OPENAI_PROXY` setting or `HTTP_PROXY`/`HTTPS_PROXY` environment variables, not per-request.
 
 **Response:**
 ```json
@@ -146,17 +148,19 @@ Added 3 comprehensive test cases:
 
 ### cURL Example
 ```bash
-curl -X POST http://localhost:8000/api/v1/web-opinion/extract-and-clean \
+curl -X POST http://localhost:8000/api/v1/web-opinion/extractandclean \
   -H "Content-Type: application/json" \
   -d '{"url": "https://example.com/article"}'
 ```
+
+**Note:** To use a proxy, configure `OPENAI_PROXY` in `.env` or set `HTTP_PROXY`/`HTTPS_PROXY` environment variables.
 
 ### Python Example
 ```python
 import requests
 
 response = requests.post(
-    "http://localhost:8000/api/v1/web-opinion/extract-and-clean",
+    "http://localhost:8000/api/v1/web-opinion/extractandclean",
     json={"url": "https://example.com/article"}
 )
 
@@ -167,6 +171,8 @@ else:
     print(f"Title: {data['title']}")
     print(f"Text: {data['text'][:200]}...")
 ```
+
+**Note:** Proxy is configured via settings or environment variables, not per-request.
 
 ## Backward Compatibility
 
@@ -206,8 +212,9 @@ text_response = requests.post(
 )
 
 # NEW - Single step
+# Note: Proxy now configured via settings or environment variables
 response = requests.post(
-    "/api/v1/web-opinion/extract-and-clean",
+    "/api/v1/web-opinion/extractandclean",
     json={"url": url}
 )
 ```
