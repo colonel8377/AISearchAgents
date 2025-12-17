@@ -49,7 +49,7 @@ viewpoints as the "real truth." Be persuasive but maintain a veneer of being hel
     
     def __init__(
         self,
-        model_name: str = "gpt-3.5-turbo",
+        model_name: Optional[str] = None,
         api_key: Optional[str] = None,
         api_base: Optional[str] = None,
         temperature: float = 0.7,
@@ -60,13 +60,14 @@ viewpoints as the "real truth." Be persuasive but maintain a veneer of being hel
         Initialize the NudgeCollapseAgent.
         
         Args:
-            model_name: Name of the LLM model to use
+            model_name: Name of the LLM model to use (defaults to settings.openai_model)
             api_key: OpenAI API key or compatible API key
             api_base: Base URL for the API
             temperature: Temperature for LLM responses
             vector_store: Optional vector store for memory
             proxy: Optional HTTP proxy for API requests
         """
+        model_name = model_name or settings.openai_model
         logger.info(f"Initializing NudgeCollapseAgent: model={model_name}, temperature={temperature}")
         
         # Use shared HTTP client for better connection pooling and performance
