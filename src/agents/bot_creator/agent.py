@@ -63,7 +63,7 @@ Based on this persona, create a structured bot configuration with:
     
     def __init__(
         self,
-        model_name: str = "gpt-3.5-turbo",
+        model_name: Optional[str] = None,
         api_key: Optional[str] = None,
         api_base: Optional[str] = None,
         temperature: float = 0.5,
@@ -75,7 +75,7 @@ Based on this persona, create a structured bot configuration with:
         Initialize the BotCreatorAgent.
         
         Args:
-            model_name: Name of the LLM model to use
+            model_name: Name of the LLM model to use (defaults to settings.openai_model)
             api_key: OpenAI API key or compatible API key
             api_base: Base URL for the API
             temperature: Temperature for LLM responses
@@ -83,6 +83,7 @@ Based on this persona, create a structured bot configuration with:
             proxy: Optional HTTP proxy for API requests
             persona_mode: Mode for handling persona - 'system_prompt' or 'user_instruction'
         """
+        model_name = model_name or settings.openai_model
         logger.info(f"Initializing BotCreatorAgent: model={model_name}, temperature={temperature}, persona_mode={persona_mode}")
         
         # Use shared HTTP client for better connection pooling and performance

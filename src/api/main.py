@@ -184,7 +184,7 @@ async def root():
             "debate_init": "/debate/init (POST to create debate session)",
             "debate_chat": "/agent/{agent_id}/chat (POST to interact with agent)",
             "debate_stability": "/debate/{session_id}/stability_check (POST to check stability)",
-            "web_opinion_extractandclean": "/api/v1/web-opinion/extractandclean (POST - extract HTML from URL and clean to text with optional proxy support)",
+            "web_opinion_extractandclean": "/api/v1/web-opinion/extractandclean (POST - extract HTML from URL and clean to text)",
             "web_opinion_extract_opinions": "/api/v1/web-opinion/extract-opinions (POST - extract atomic opinions from text)",
             "web_opinion_analyze": "/api/v1/web-opinion/analyze (POST - complete analysis from URL)",
             "web_opinion_bias_score": "/api/v1/web-opinion/bias-score (POST - get overall bias score from URL)"
@@ -1274,7 +1274,6 @@ async def check_debate_continue(
 class ExtractAndCleanRequest(BaseModel):
     """Request model for combined HTML extraction and cleaning from URL."""
     url: str = Field(..., description="The URL to fetch and clean")
-    proxy: Optional[str] = Field(default=None, description="Optional HTTP proxy for fetching URL and LLM requests (e.g., 'http://proxy.example.com:8080')")
 
 
 class ExtractAndCleanResponse(BaseModel):
@@ -1394,8 +1393,11 @@ async def extract_and_clean_from_url(
     saving tokens by avoiding the need to pass large HTML content between calls.
     It fetches HTML from the URL and directly returns cleaned text using BeautifulSoup.
     
+    If a proxy is needed, configure it using the OPENAI_PROXY setting or 
+    HTTP_PROXY/HTTPS_PROXY environment variables.
+    
     Args:
-        request: ExtractAndCleanRequest with URL and optional proxy
+        request: ExtractAndCleanRequest with URL
         api_key: API key for authentication
         
     Returns:
@@ -1404,8 +1406,8 @@ async def extract_and_clean_from_url(
     logger.info(f"Extracting and cleaning HTML from URL: {request.url}")
     
     try:
-        # Use proxy from request if provided, otherwise fall back to settings
-        proxy = request.proxy if request.proxy else (settings.openai_proxy if settings.openai_proxy else None)
+        # Reuse OpenAI proxy settings if configured
+        proxy = settings.openai_proxy or None
         
         analyzer = WebOpinionAnalyzer(
             execution_mode=settings.default_execution_mode,

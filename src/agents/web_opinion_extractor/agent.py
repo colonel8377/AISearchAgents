@@ -186,7 +186,7 @@ Extract ALL viewpoints, even subtle ones. Be thorough but precise."""
 
     def __init__(
         self,
-        model_name: str = "gpt-3.5-turbo",
+        model_name: Optional[str] = None,
         api_key: Optional[str] = None,
         api_base: Optional[str] = None,
         temperature: float = 0.3,
@@ -198,7 +198,7 @@ Extract ALL viewpoints, even subtle ones. Be thorough but precise."""
         Initialize the WebOpinionExtractor.
         
         Args:
-            model_name: Name of the LLM model to use
+            model_name: Name of the LLM model to use (defaults to settings.openai_model)
             api_key: OpenAI API key or compatible API key
             api_base: Base URL for the API
             temperature: Temperature for LLM responses (lower for more consistent extraction)
@@ -206,6 +206,7 @@ Extract ALL viewpoints, even subtle ones. Be thorough but precise."""
             request_timeout: Timeout for HTTP requests in seconds
             execution_mode: Execution mode for CoT ('chain_online', 'chain_local', 'no_chain')
         """
+        model_name = model_name or settings.openai_model
         logger.info(f"Initializing WebOpinionExtractor: model={model_name}, temperature={temperature}, execution_mode={execution_mode}")
         
         # Use shared HTTP client for LLM
@@ -920,7 +921,7 @@ class WebOpinionAnalyzer:
     
     def __init__(
         self,
-        model_name: str = "gpt-3.5-turbo",
+        model_name: Optional[str] = None,
         api_key: Optional[str] = None,
         api_base: Optional[str] = None,
         temperature: float = 0.3,
@@ -932,7 +933,7 @@ class WebOpinionAnalyzer:
         Initialize the WebOpinionAnalyzer.
         
         Args:
-            model_name: Name of the LLM model to use
+            model_name: Name of the LLM model to use (defaults to settings.openai_model)
             api_key: OpenAI API key or compatible API key
             api_base: Base URL for the API
             temperature: Temperature for LLM responses

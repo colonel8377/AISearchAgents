@@ -101,16 +101,15 @@ class TestWebOpinionExtractApi:
         mock_analyzer.extract_html.assert_called_once_with("https://example.com")
         mock_analyzer.clean_html.assert_called_once_with(sample_html)
     
-    def test_extractandclean_with_proxy(self, mock_analyzer, sample_html):
-        """Test combined extract and clean with custom proxy."""
+    def test_extractandclean_reuses_settings_proxy(self, mock_analyzer, sample_html):
+        """Test combined extract and clean reuses proxy from settings."""
         mock_analyzer.extract_html.return_value = sample_html
         mock_analyzer.clean_html.return_value = ("Clean text content", "Test Title")
         
         response = client.post(
             "/api/v1/web-opinion/extractandclean",
             json={
-                "url": "https://example.com",
-                "proxy": "http://proxy.example.com:8080"
+                "url": "https://example.com"
             }
         )
         
@@ -119,6 +118,7 @@ class TestWebOpinionExtractApi:
         assert data["url"] == "https://example.com"
         assert data["text"] == "Clean text content"
         assert data["error"] is None
+        # Proxy is configured via settings.openai_proxy or environment variables
     
     def test_extractandclean_fetch_failure(self, mock_analyzer):
         """Test combined extract and clean with fetch failure."""

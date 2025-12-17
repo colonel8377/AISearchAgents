@@ -19,17 +19,18 @@ If API key authentication is enabled:
 
 ### 1. Extract and Clean HTML (Primary Endpoint)
 
-**Recommended for all use cases:** Extract HTML from URL and clean to text in a single API call with optional proxy support.
+**Recommended for all use cases:** Extract HTML from URL and clean to text in a single API call.
 
 **Endpoint:** `POST /api/v1/web-opinion/extractandclean`
 
 **Request Body:**
 ```json
 {
-  "url": "https://example.com/article",
-  "proxy": "http://proxy.example.com:8080"  // Optional: custom proxy for fetching and LLM requests
+  "url": "https://example.com/article"
 }
 ```
+
+**Note:** Proxy configuration is handled via `OPENAI_PROXY` setting or `HTTP_PROXY`/`HTTPS_PROXY` environment variables. It is not configured per-request.
 
 **Response:**
 ```json
@@ -45,13 +46,12 @@ If API key authentication is enabled:
 
 **Features:**
 - **Token efficient**: Single API call instead of multiple steps
-- **Proxy support**: Optional proxy parameter for fetching URL and LLM requests
 - **Server-side processing**: BeautifulSoup filtering done server-side
 - **Robust error handling**: Returns detailed error states
+- **Proxy support**: Configured via settings or environment variables
 
 **Use Case:**
 - Primary endpoint for extracting cleaned text from URLs
-- Supports custom proxy for corporate environments or rate limiting
 - Token savings: ~99% reduction compared to multi-step approaches
 
 ---
@@ -303,6 +303,7 @@ The API supports three Chain of Thought (CoT) execution modes:
 
 ```bash
 # Primary endpoint for extracting cleaned text from URLs
+# Proxy configuration via OPENAI_PROXY setting or HTTP_PROXY/HTTPS_PROXY env vars
 curl -X POST http://localhost:8000/api/v1/web-opinion/extractandclean \
   -H "Content-Type: application/json" \
   -d '{
@@ -318,18 +319,6 @@ curl -X POST http://localhost:8000/api/v1/web-opinion/extractandclean \
   "title": "Article Title",
   "text_length": 1234
 }
-```
-
-### Example 1b: Extract and Clean with Custom Proxy
-
-```bash
-# Use custom proxy for fetching and LLM requests
-curl -X POST http://localhost:8000/api/v1/web-opinion/extractandclean \
-  -H "Content-Type: application/json" \
-  -d '{
-    "url": "https://example.com/article",
-    "proxy": "http://proxy.example.com:8080"
-  }'
 ```
 
 ### Example 2: Quick Bias Check
