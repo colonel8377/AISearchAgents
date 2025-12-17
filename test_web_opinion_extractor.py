@@ -7,15 +7,64 @@ without requiring external network or LLM API access.
 
 import pytest
 from unittest.mock import Mock, patch, MagicMock
+from pydantic import ValidationError
 
 from src.agents.web_opinion_extractor import (
     WebOpinionExtractor,
     AtomicOpinion,
     OpinionExtractionResult,
+    BiasDistribution,
     WebExtractionError,
     NetworkError,
     ContentExtractionError,
 )
+
+
+class TestBiasDistribution:
+    """Tests for BiasDistribution model."""
+    
+    def test_create_bias_distribution(self):
+        """Test creating a bias distribution with valid probabilities."""
+        bias = BiasDistribution(left=0.3, right=0.6, neutral=0.1)
+        assert bias.left == 0.3
+        assert bias.right == 0.6
+        assert bias.neutral == 0.1
+    
+    def test_probabilities_normalized(self):
+        """Test that probabilities are normalized to sum to 1.0 after validation."""
+        # Input values within bounds but not summing to 1.0
+        bias = BiasDistribution(left=0.4, right=0.4, neutral=0.4)  # Sum = 1.2
+        total = bias.left + bias.right + bias.neutral
+        assert abs(total - 1.0) < 0.01  # Should be normalized
+    
+    def test_dominant_bias(self):
+        """Test getting the dominant bias category."""
+        bias = BiasDistribution(left=0.7, right=0.2, neutral=0.1)
+        assert bias.dominant_bias == "left"
+        
+        bias = BiasDistribution(left=0.1, right=0.8, neutral=0.1)
+        assert bias.dominant_bias == "right"
+        
+        bias = BiasDistribution(left=0.2, right=0.2, neutral=0.6)
+        assert bias.dominant_bias == "neutral"
+    
+    def test_bias_score_property(self):
+        """Test converting probability distribution to single score."""
+        # Fully left should be -1.0
+        bias = BiasDistribution(left=1.0, right=0.0, neutral=0.0)
+        assert bias.bias_score == -1.0
+        
+        # Fully right should be +1.0
+        bias = BiasDistribution(left=0.0, right=1.0, neutral=0.0)
+        assert bias.bias_score == 1.0
+        
+        # Fully neutral should be 0.0
+        bias = BiasDistribution(left=0.0, right=0.0, neutral=1.0)
+        assert bias.bias_score == 0.0
+        
+        # Mixed should be weighted average
+        bias = BiasDistribution(left=0.5, right=0.5, neutral=0.0)
+        assert bias.bias_score == 0.0  # -0.5 + 0.5 = 0
 
 
 class TestAtomicOpinion:
@@ -23,48 +72,51 @@ class TestAtomicOpinion:
     
     def test_create_atomic_opinion(self):
         """Test creating an atomic opinion with all fields."""
+        bias = BiasDistribution(left=0.2, right=0.6, neutral=0.2)
         opinion = AtomicOpinion(
             text="I support the tax cut",
             opinion_type="opinion",
-            bias_score=0.6,
+            bias_probabilities=bias,
             original_sentence="I support the tax cut but oppose the trade war",
             confidence=0.9
         )
         assert opinion.text == "I support the tax cut"
         assert opinion.opinion_type == "opinion"
-        assert opinion.bias_score == 0.6
+        # bias_score = -1*left + 0*neutral + 1*right = -0.2 + 0 + 0.6 = 0.4
+        assert abs(opinion.bias_score - 0.4) < 0.01
         assert opinion.original_sentence == "I support the tax cut but oppose the trade war"
         assert opinion.confidence == 0.9
+        assert opinion.bias_probabilities.right == 0.6
     
-    def test_bias_score_bounds(self):
-        """Test that bias score is within valid bounds."""
-        # Valid scores
-        opinion = AtomicOpinion(text="test", opinion_type="opinion", bias_score=-1.0)
-        assert opinion.bias_score == -1.0
+    def test_bias_probabilities_bounds(self):
+        """Test that bias probabilities are within valid bounds."""
+        # Valid probabilities
+        bias = BiasDistribution(left=0.5, right=0.3, neutral=0.2)
+        opinion = AtomicOpinion(text="test", opinion_type="opinion", bias_probabilities=bias)
+        assert opinion.bias_probabilities.left == 0.5
         
-        opinion = AtomicOpinion(text="test", opinion_type="opinion", bias_score=1.0)
-        assert opinion.bias_score == 1.0
+        # Out of bounds (negative) should fail validation
+        with pytest.raises(ValidationError):
+            BiasDistribution(left=-0.1, right=0.5, neutral=0.6)
         
-        opinion = AtomicOpinion(text="test", opinion_type="opinion", bias_score=0.0)
-        assert opinion.bias_score == 0.0
-        
-        # Out of bounds should fail validation
-        with pytest.raises(Exception):  # Pydantic ValidationError
-            AtomicOpinion(text="test", opinion_type="opinion", bias_score=-1.5)
-        
-        with pytest.raises(Exception):
-            AtomicOpinion(text="test", opinion_type="opinion", bias_score=1.5)
+        # Values > 1.0 are normalized, not rejected
+        # This tests that normalization works correctly
+        bias = BiasDistribution(left=1.5, right=0.5, neutral=0.0)
+        # 1.5 + 0.5 + 0.0 = 2.0, normalized: left=0.75, right=0.25, neutral=0.0
+        assert abs(bias.left - 0.75) < 0.01
+        assert abs(bias.right - 0.25) < 0.01
     
     def test_opinion_type_values(self):
         """Test that opinion_type only accepts valid values."""
-        opinion = AtomicOpinion(text="test", opinion_type="fact", bias_score=0.0)
+        bias = BiasDistribution(left=0.33, right=0.33, neutral=0.34)
+        opinion = AtomicOpinion(text="test", opinion_type="fact", bias_probabilities=bias)
         assert opinion.opinion_type == "fact"
         
-        opinion = AtomicOpinion(text="test", opinion_type="opinion", bias_score=0.0)
+        opinion = AtomicOpinion(text="test", opinion_type="opinion", bias_probabilities=bias)
         assert opinion.opinion_type == "opinion"
         
-        with pytest.raises(Exception):  # Pydantic ValidationError
-            AtomicOpinion(text="test", opinion_type="invalid", bias_score=0.0)
+        with pytest.raises(ValidationError):
+            AtomicOpinion(text="test", opinion_type="invalid", bias_probabilities=bias)
 
 
 class TestOpinionExtractionResult:
@@ -72,24 +124,27 @@ class TestOpinionExtractionResult:
     
     def test_create_result(self):
         """Test creating an extraction result."""
+        opinion_bias = BiasDistribution(left=0.2, right=0.6, neutral=0.2)
         opinion = AtomicOpinion(
             text="I support the tax cut",
             opinion_type="opinion",
-            bias_score=0.6
+            bias_probabilities=opinion_bias
         )
+        fact_bias = BiasDistribution(left=0.1, right=0.1, neutral=0.8)
         fact = AtomicOpinion(
             text="The bill was passed",
             opinion_type="fact",
-            bias_score=0.0
+            bias_probabilities=fact_bias
         )
         
+        overall_bias = BiasDistribution(left=0.2, right=0.6, neutral=0.2)
         result = OpinionExtractionResult(
             url="https://example.com",
             title="Test Article",
             atomic_opinions=[opinion, fact],
             facts=[fact],
             opinions=[opinion],
-            overall_bias_score=0.6,
+            overall_bias_distribution=overall_bias,
             text_length=100,
             truncated=False
         )
@@ -98,12 +153,14 @@ class TestOpinionExtractionResult:
         assert len(result.atomic_opinions) == 2
         assert len(result.facts) == 1
         assert len(result.opinions) == 1
-        assert result.overall_bias_score == 0.6
+        assert result.overall_bias_distribution.right == 0.6
     
     def test_calculate_overall_bias(self):
         """Test overall bias calculation."""
-        opinion1 = AtomicOpinion(text="test1", opinion_type="opinion", bias_score=-0.5)
-        opinion2 = AtomicOpinion(text="test2", opinion_type="opinion", bias_score=0.5)
+        bias1 = BiasDistribution(left=0.7, right=0.1, neutral=0.2)
+        bias2 = BiasDistribution(left=0.1, right=0.7, neutral=0.2)
+        opinion1 = AtomicOpinion(text="test1", opinion_type="opinion", bias_probabilities=bias1)
+        opinion2 = AtomicOpinion(text="test2", opinion_type="opinion", bias_probabilities=bias2)
         
         result = OpinionExtractionResult(
             opinions=[opinion1, opinion2],
@@ -111,7 +168,10 @@ class TestOpinionExtractionResult:
         )
         
         bias = result.calculate_overall_bias()
-        assert bias == 0.0  # Average of -0.5 and 0.5
+        # Average: left=(0.7+0.1)/2=0.4, right=(0.1+0.7)/2=0.4, neutral=(0.2+0.2)/2=0.2
+        assert abs(bias.left - 0.4) < 0.01
+        assert abs(bias.right - 0.4) < 0.01
+        assert abs(bias.neutral - 0.2) < 0.01
 
 
 class TestExceptions:
@@ -248,50 +308,72 @@ class TestWebOpinionExtractorAtomicOpinionCreation:
         return TestExtractor()
     
     def test_create_atomic_opinion_valid_data(self, extractor):
-        """Test creating atomic opinion from valid data."""
+        """Test creating atomic opinion from valid probability data."""
         data = {
             "text": "I support the policy",
             "opinion_type": "opinion",
-            "bias_score": 0.5,
+            "bias_probabilities": {
+                "left": 0.2,
+                "right": 0.6,
+                "neutral": 0.2
+            },
             "original_sentence": "I support the policy strongly",
             "confidence": 0.9
         }
         opinion = extractor._create_atomic_opinion(data)
         assert opinion.text == "I support the policy"
         assert opinion.opinion_type == "opinion"
-        assert opinion.bias_score == 0.5
+        assert opinion.bias_probabilities.right == 0.6
         assert opinion.confidence == 0.9
     
+    def test_create_atomic_opinion_from_legacy_bias_score(self, extractor):
+        """Test creating atomic opinion from legacy single bias score."""
+        data = {
+            "text": "I support the policy",
+            "opinion_type": "opinion",
+            "bias_score": 0.5,  # Old format
+            "confidence": 0.9
+        }
+        opinion = extractor._create_atomic_opinion(data)
+        # Should convert to probability distribution
+        assert opinion.bias_probabilities.right == 0.5
+        assert opinion.bias_probabilities.neutral == 0.5
+        assert opinion.bias_probabilities.left == 0.0
+    
     def test_create_atomic_opinion_string_bias_score(self, extractor):
-        """Test handling of string bias score."""
+        """Test handling of string bias score (legacy format)."""
         data = {
             "text": "Test",
             "opinion_type": "opinion",
             "bias_score": "0.7"
         }
         opinion = extractor._create_atomic_opinion(data)
-        assert opinion.bias_score == 0.7
+        # Converted to probability: right=0.7, neutral=0.3, left=0.0
+        assert opinion.bias_probabilities.right == 0.7
+        assert abs(opinion.bias_probabilities.neutral - 0.3) < 0.01
     
-    def test_create_atomic_opinion_clamps_bias_score(self, extractor):
-        """Test that bias score is clamped to valid range."""
+    def test_create_atomic_opinion_clamps_legacy_bias_score(self, extractor):
+        """Test that legacy bias score is clamped to valid range."""
         data = {
             "text": "Test",
             "opinion_type": "opinion",
-            "bias_score": 2.5  # Out of range
+            "bias_score": 2.5  # Out of range, should be clamped to 1.0
         }
         opinion = extractor._create_atomic_opinion(data)
-        assert opinion.bias_score == 1.0  # Clamped to max
+        # Clamped to 1.0, which means right=1.0
+        assert opinion.bias_probabilities.right == 1.0
         
-        data["bias_score"] = -2.5
+        data["bias_score"] = -2.5  # Should be clamped to -1.0
         opinion = extractor._create_atomic_opinion(data)
-        assert opinion.bias_score == -1.0  # Clamped to min
+        # Clamped to -1.0, which means left=1.0
+        assert opinion.bias_probabilities.left == 1.0
     
     def test_create_atomic_opinion_invalid_type_defaults_to_opinion(self, extractor):
         """Test that invalid opinion_type defaults to opinion."""
         data = {
             "text": "Test",
             "opinion_type": "invalid_type",
-            "bias_score": 0.0
+            "bias_probabilities": {"left": 0.33, "right": 0.33, "neutral": 0.34}
         }
         opinion = extractor._create_atomic_opinion(data)
         assert opinion.opinion_type == "opinion"
@@ -302,7 +384,7 @@ class TestWebOpinionExtractorIntegration:
     
     def test_extract_from_html_with_mocked_llm(self):
         """Test full extraction flow with mocked LLM."""
-        # Mock response from LLM
+        # Mock response from LLM with new bias_probabilities format
         mock_response = Mock()
         mock_response.content = '''
         {
@@ -310,14 +392,14 @@ class TestWebOpinionExtractorIntegration:
                 {
                     "text": "Support for tax cuts",
                     "opinion_type": "opinion",
-                    "bias_score": 0.7,
+                    "bias_probabilities": {"left": 0.1, "right": 0.7, "neutral": 0.2},
                     "original_sentence": "I support the tax cut",
                     "confidence": 0.9
                 },
                 {
                     "text": "The bill was passed on Monday",
                     "opinion_type": "fact",
-                    "bias_score": 0.0,
+                    "bias_probabilities": {"left": 0.1, "right": 0.1, "neutral": 0.8},
                     "original_sentence": "The bill was passed on Monday",
                     "confidence": 0.95
                 }
@@ -354,8 +436,8 @@ class TestWebOpinionExtractorIntegration:
         assert len(result.atomic_opinions) == 2
         assert len(result.facts) == 1
         assert len(result.opinions) == 1
-        assert result.opinions[0].bias_score == 0.7
-        assert result.facts[0].bias_score == 0.0
+        assert result.opinions[0].bias_probabilities.right == 0.7
+        assert result.facts[0].bias_probabilities.neutral == 0.8
     
     def test_extract_from_text_compound_sentences(self):
         """Test that compound sentences are properly handled."""
@@ -366,13 +448,13 @@ class TestWebOpinionExtractorIntegration:
                 {
                     "text": "Support for tax cuts",
                     "opinion_type": "opinion",
-                    "bias_score": 0.6,
+                    "bias_probabilities": {"left": 0.2, "right": 0.6, "neutral": 0.2},
                     "original_sentence": "I support the tax cut but oppose the trade war"
                 },
                 {
                     "text": "Opposition to trade war",
                     "opinion_type": "opinion",
-                    "bias_score": -0.3,
+                    "bias_probabilities": {"left": 0.5, "right": 0.2, "neutral": 0.3},
                     "original_sentence": "I support the tax cut but oppose the trade war"
                 }
             ]

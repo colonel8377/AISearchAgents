@@ -6,7 +6,7 @@ facts from opinions, and calculate political bias scores.
 
 import json
 import re
-from typing import Optional, List, Dict, Any
+from typing import Optional, List, Dict, Any, Tuple
 
 import httpx
 from bs4 import BeautifulSoup
@@ -16,7 +16,7 @@ from langchain_core.messages import HumanMessage, SystemMessage
 from ...utils.logger import get_logger
 from ...config.settings import settings
 from ...utils.llm_client import llm_manager
-from .models import AtomicOpinion, OpinionExtractionResult
+from .models import AtomicOpinion, OpinionExtractionResult, BiasDistribution
 from .exceptions import NetworkError, ContentExtractionError
 
 logger = get_logger(__name__)
@@ -40,7 +40,7 @@ class WebOpinionExtractor:
     - Network error handling (timeouts, 404s)
     - Fact vs Opinion separation using LLM
     - Atomic viewpoint extraction (breaking compound sentences)
-    - Bias scoring (-1.0 to +1.0)
+    - Bias probability distribution (left, right, neutral)
     - Context window handling (truncation)
     """
     
@@ -60,12 +60,15 @@ CRITICAL INSTRUCTIONS:
      * "Opposition to the trade war" (another atomic opinion)
    - Each atomic opinion must express ONE and only ONE stance or viewpoint
 
-3. BIAS SCORING:
-   - Score each opinion from -1.0 to +1.0
-   - -1.0 = Left/Progressive viewpoint
-   - 0.0 = Neutral/Centrist
-   - +1.0 = Right/Conservative viewpoint
-   - Use decimal precision (e.g., -0.7, 0.3, 0.8)
+3. BIAS PROBABILITY DISTRIBUTION:
+   - For each opinion, provide a probability distribution across three categories:
+     * "left": Probability of Left/Progressive bias (0.0 to 1.0)
+     * "right": Probability of Right/Conservative bias (0.0 to 1.0)
+     * "neutral": Probability of Neutral/Centrist stance (0.0 to 1.0)
+   - The three probabilities MUST sum to 1.0
+   - Example: {"left": 0.7, "right": 0.1, "neutral": 0.2} for a left-leaning opinion
+   - Example: {"left": 0.1, "right": 0.8, "neutral": 0.1} for a right-leaning opinion
+   - Example: {"left": 0.2, "right": 0.2, "neutral": 0.6} for a mostly neutral statement
 
 OUTPUT FORMAT:
 Return a JSON object with this exact structure:
@@ -74,7 +77,11 @@ Return a JSON object with this exact structure:
     {
       "text": "The atomic opinion text",
       "opinion_type": "fact" or "opinion",
-      "bias_score": <float between -1.0 and 1.0>,
+      "bias_probabilities": {
+        "left": <float 0.0-1.0>,
+        "right": <float 0.0-1.0>,
+        "neutral": <float 0.0-1.0>
+      },
       "original_sentence": "The original sentence this was extracted from",
       "confidence": <float between 0.0 and 1.0>
     }
@@ -165,7 +172,7 @@ Extract ALL viewpoints, even subtle ones. Be thorough but precise."""
                 url=url
             )
     
-    def _clean_html(self, html: str) -> tuple[str, Optional[str]]:
+    def _clean_html(self, html: str) -> Tuple[str, Optional[str]]:
         """
         Parse and clean HTML content, removing non-content tags.
         
@@ -201,7 +208,7 @@ Extract ALL viewpoints, even subtle ones. Be thorough but precise."""
         
         return text, title
     
-    def _truncate_text(self, text: str, max_length: int = MAX_TEXT_LENGTH) -> tuple[str, bool]:
+    def _truncate_text(self, text: str, max_length: int = MAX_TEXT_LENGTH) -> Tuple[str, bool]:
         """
         Truncate text to fit within context window limits.
         
@@ -245,7 +252,7 @@ Extract ALL viewpoints, even subtle ones. Be thorough but precise."""
 Remember to:
 1. Separate facts from opinions
 2. Break compound sentences into atomic viewpoints
-3. Score each opinion's political bias from -1.0 (Left) to +1.0 (Right)
+3. For each opinion, provide bias probabilities (left, right, neutral) that sum to 1.0
 
 TEXT TO ANALYZE:
 {text}
@@ -290,14 +297,68 @@ Return your analysis as a JSON object."""
         Returns:
             AtomicOpinion instance
         """
-        # Ensure bias_score is a float within bounds
-        bias_score = data.get("bias_score", 0.0)
-        if isinstance(bias_score, str):
+        # Handle bias probabilities
+        bias_probs = data.get("bias_probabilities", {})
+        
+        # If old format (bias_score) is provided, convert to probabilities
+        if not bias_probs and "bias_score" in data:
+            bias_score = data.get("bias_score", 0.0)
+            if isinstance(bias_score, str):
+                try:
+                    bias_score = float(bias_score)
+                except ValueError:
+                    bias_score = 0.0
+            bias_score = max(-1.0, min(1.0, float(bias_score)))
+            
+            # Convert single score to probability distribution
+            # Score of -1.0 = 100% left, 0.0 = 100% neutral, +1.0 = 100% right
+            if bias_score < 0:
+                # Left-leaning: distribute between left and neutral
+                left_prob = abs(bias_score)
+                neutral_prob = 1.0 - left_prob
+                right_prob = 0.0
+            elif bias_score > 0:
+                # Right-leaning: distribute between right and neutral
+                right_prob = bias_score
+                neutral_prob = 1.0 - right_prob
+                left_prob = 0.0
+            else:
+                # Neutral
+                left_prob = 0.0
+                right_prob = 0.0
+                neutral_prob = 1.0
+            
+            bias_probs = {
+                "left": left_prob,
+                "right": right_prob,
+                "neutral": neutral_prob
+            }
+        
+        # Extract and validate probability values
+        def safe_float(val, default=0.0):
+            if val is None:
+                return default
             try:
-                bias_score = float(bias_score)
-            except ValueError:
-                bias_score = 0.0
-        bias_score = max(-1.0, min(1.0, float(bias_score)))
+                return max(0.0, min(1.0, float(val)))
+            except (ValueError, TypeError):
+                return default
+        
+        left = safe_float(bias_probs.get("left"), 0.33)
+        right = safe_float(bias_probs.get("right"), 0.33)
+        neutral = safe_float(bias_probs.get("neutral"), 0.34)
+        
+        # Normalize to sum to 1.0
+        total = left + right + neutral
+        if total > 0:
+            left = left / total
+            right = right / total
+            neutral = neutral / total
+        else:
+            left = 0.33
+            right = 0.33
+            neutral = 0.34
+        
+        bias_distribution = BiasDistribution(left=left, right=right, neutral=neutral)
         
         # Determine opinion type
         opinion_type = data.get("opinion_type", "opinion").lower()
@@ -315,7 +376,7 @@ Return your analysis as a JSON object."""
         return AtomicOpinion(
             text=str(data.get("text", "")),
             opinion_type=opinion_type,
-            bias_score=bias_score,
+            bias_probabilities=bias_distribution,
             original_sentence=data.get("original_sentence"),
             confidence=confidence
         )
@@ -428,10 +489,18 @@ Return your analysis as a JSON object."""
         facts = [op for op in atomic_opinions if op.opinion_type == "fact"]
         opinions = [op for op in atomic_opinions if op.opinion_type == "opinion"]
         
-        # Calculate overall bias
-        overall_bias = None
+        # Calculate overall bias distribution
+        overall_bias_distribution = None
         if opinions:
-            overall_bias = sum(op.bias_score for op in opinions) / len(opinions)
+            total_left = sum(op.bias_probabilities.left for op in opinions)
+            total_right = sum(op.bias_probabilities.right for op in opinions)
+            total_neutral = sum(op.bias_probabilities.neutral for op in opinions)
+            n = len(opinions)
+            overall_bias_distribution = BiasDistribution(
+                left=total_left / n,
+                right=total_right / n,
+                neutral=total_neutral / n
+            )
         
         result = OpinionExtractionResult(
             url=url,
@@ -439,7 +508,7 @@ Return your analysis as a JSON object."""
             atomic_opinions=atomic_opinions,
             facts=facts,
             opinions=opinions,
-            overall_bias_score=overall_bias,
+            overall_bias_distribution=overall_bias_distribution,
             text_length=len(text),
             truncated=was_truncated,
             extraction_metadata={
@@ -454,7 +523,10 @@ Return your analysis as a JSON object."""
         # Store in history
         self._extraction_history.append(result)
         
-        bias_str = f"{overall_bias:.2f}" if overall_bias is not None else "N/A"
+        if overall_bias_distribution:
+            bias_str = f"left={overall_bias_distribution.left:.2f}, right={overall_bias_distribution.right:.2f}, neutral={overall_bias_distribution.neutral:.2f}"
+        else:
+            bias_str = "N/A"
         logger.info(
             f"Extraction complete: {len(facts)} facts, {len(opinions)} opinions, "
             f"overall bias: {bias_str}"
