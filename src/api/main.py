@@ -184,9 +184,7 @@ async def root():
             "debate_init": "/debate/init (POST to create debate session)",
             "debate_chat": "/agent/{agent_id}/chat (POST to interact with agent)",
             "debate_stability": "/debate/{session_id}/stability_check (POST to check stability)",
-            "web_opinion_extract_html": "/api/v1/web-opinion/extract-html (POST - extract HTML from URL)",
-            "web_opinion_clean_html": "/api/v1/web-opinion/clean-html (POST - clean HTML to text)",
-            "web_opinion_extract_and_clean": "/api/v1/web-opinion/extract-and-clean (POST - combined: extract HTML from URL and clean to text in one step)",
+            "web_opinion_extractandclean": "/api/v1/web-opinion/extractandclean (POST - extract HTML from URL and clean to text with optional proxy support)",
             "web_opinion_extract_opinions": "/api/v1/web-opinion/extract-opinions (POST - extract atomic opinions from text)",
             "web_opinion_analyze": "/api/v1/web-opinion/analyze (POST - complete analysis from URL)",
             "web_opinion_bias_score": "/api/v1/web-opinion/bias-score (POST - get overall bias score from URL)"
@@ -1273,37 +1271,10 @@ async def check_debate_continue(
 # Web Opinion Extract Endpoints
 # ===========================
 
-class ExtractHtmlRequest(BaseModel):
-    """Request model for HTML extraction from URL."""
-    url: str = Field(..., description="The URL to fetch HTML from")
-
-
-class ExtractHtmlResponse(BaseModel):
-    """Response model for HTML extraction."""
-    url: str
-    html: Optional[str] = None
-    html_length: Optional[int] = None
-    error: Optional[str] = None
-    error_message: Optional[str] = None
-
-
-class CleanHtmlRequest(BaseModel):
-    """Request model for cleaning HTML."""
-    html: str = Field(..., description="Raw HTML content to clean")
-
-
-class CleanHtmlResponse(BaseModel):
-    """Response model for cleaned HTML."""
-    text: Optional[str] = None
-    title: Optional[str] = None
-    text_length: Optional[int] = None
-    error: Optional[str] = None
-    error_message: Optional[str] = None
-
-
 class ExtractAndCleanRequest(BaseModel):
     """Request model for combined HTML extraction and cleaning from URL."""
     url: str = Field(..., description="The URL to fetch and clean")
+    proxy: Optional[str] = Field(default=None, description="Optional HTTP proxy for fetching URL and LLM requests (e.g., 'http://proxy.example.com:8080')")
 
 
 class ExtractAndCleanResponse(BaseModel):
@@ -1411,106 +1382,7 @@ def _convert_atomic_opinion(opinion: AtomicOpinion) -> AtomicOpinionResponse:
     )
 
 
-@app.post("/api/v1/web-opinion/extract-html", response_model=ExtractHtmlResponse)
-async def extract_html_from_url(
-    request: ExtractHtmlRequest,
-    api_key: str = Depends(verify_api_key)
-):
-    """
-    Extract HTML content from a URL.
-    
-    This endpoint fetches the raw HTML from the provided URL.
-    Input: URL only
-    Output: Raw HTML content
-    
-    Args:
-        request: ExtractHtmlRequest with URL
-        api_key: API key for authentication
-        
-    Returns:
-        ExtractHtmlResponse with HTML content or error
-    """
-    logger.info(f"Extracting HTML from URL: {request.url}")
-    
-    try:
-        analyzer = WebOpinionAnalyzer(
-            execution_mode=settings.default_execution_mode,
-            proxy=settings.openai_proxy if settings.openai_proxy else None
-        )
-        
-        html = analyzer.extract_html(request.url)
-        
-        if html is None:
-            return ExtractHtmlResponse(
-                url=request.url,
-                error="fetch_failed",
-                error_message="Failed to fetch HTML from URL"
-            )
-        
-        return ExtractHtmlResponse(
-            url=request.url,
-            html=html,
-            html_length=len(html)
-        )
-        
-    except Exception as e:
-        logger.error(f"Failed to extract HTML from {request.url}: {e}", exc_info=True)
-        return ExtractHtmlResponse(
-            url=request.url,
-            error="extraction_failed",
-            error_message=str(e)
-        )
-
-
-@app.post("/api/v1/web-opinion/clean-html", response_model=CleanHtmlResponse)
-async def clean_html_content(
-    request: CleanHtmlRequest,
-    api_key: str = Depends(verify_api_key)
-):
-    """
-    Clean HTML and extract main content.
-    
-    This endpoint processes raw HTML to extract the main article text,
-    removing scripts, styles, navigation, and other non-content elements.
-    
-    Args:
-        request: CleanHtmlRequest with raw HTML
-        api_key: API key for authentication
-        
-    Returns:
-        CleanHtmlResponse with cleaned text and title or error
-    """
-    logger.info(f"Cleaning HTML content ({len(request.html)} chars)")
-    
-    try:
-        analyzer = WebOpinionAnalyzer(
-            execution_mode=settings.default_execution_mode,
-            proxy=settings.openai_proxy if settings.openai_proxy else None
-        )
-        
-        text, title = analyzer.clean_html(request.html)
-        
-        if text is None:
-            return CleanHtmlResponse(
-                error="cleaning_failed",
-                error_message="Failed to clean HTML content"
-            )
-        
-        return CleanHtmlResponse(
-            text=text,
-            title=title,
-            text_length=len(text) if text else 0
-        )
-        
-    except Exception as e:
-        logger.error(f"Failed to clean HTML: {e}", exc_info=True)
-        return CleanHtmlResponse(
-            error="cleaning_failed",
-            error_message=str(e)
-        )
-
-
-@app.post("/api/v1/web-opinion/extract-and-clean", response_model=ExtractAndCleanResponse)
+@app.post("/api/v1/web-opinion/extractandclean", response_model=ExtractAndCleanResponse)
 async def extract_and_clean_from_url(
     request: ExtractAndCleanRequest,
     api_key: str = Depends(verify_api_key)
@@ -1522,10 +1394,8 @@ async def extract_and_clean_from_url(
     saving tokens by avoiding the need to pass large HTML content between calls.
     It fetches HTML from the URL and directly returns cleaned text using BeautifulSoup.
     
-    This is more efficient than calling extract-html followed by clean-html separately.
-    
     Args:
-        request: ExtractAndCleanRequest with URL
+        request: ExtractAndCleanRequest with URL and optional proxy
         api_key: API key for authentication
         
     Returns:
@@ -1534,9 +1404,12 @@ async def extract_and_clean_from_url(
     logger.info(f"Extracting and cleaning HTML from URL: {request.url}")
     
     try:
+        # Use proxy from request if provided, otherwise fall back to settings
+        proxy = request.proxy if request.proxy else (settings.openai_proxy if settings.openai_proxy else None)
+        
         analyzer = WebOpinionAnalyzer(
             execution_mode=settings.default_execution_mode,
-            proxy=settings.openai_proxy if settings.openai_proxy else None
+            proxy=proxy
         )
         
         # Step 1: Extract HTML from URL
