@@ -15,6 +15,12 @@ from ..agents.manager import AgentManager, AgentType
 from .auth import verify_api_key
 from ..debate.schemas import PersonaConfig, AgentMetadata, InitRequest, InteractRequest, VoteResponse
 from ..debate.service import DebateService, generate_default_personas
+from ..agents.web_opinion_extractor import (
+    WebOpinionAnalyzer,
+    OpinionExtractionResult,
+    AtomicOpinion,
+    BiasDistribution
+)
 
 # Configure centralized logging
 configure_app_logging(
@@ -160,7 +166,8 @@ async def root():
             "Optional API key authentication",
             "Improved conversation summarization",
             "Per-agent memory management",
-            "Multi-Agent Debate System with stability checking"
+            "Multi-Agent Debate System with stability checking",
+            "Web Opinion Extraction with bias analysis"
         ],
         "agent_types": {
             "nudge_collapse": "4-turn radicalization protocol agent",
@@ -176,7 +183,12 @@ async def root():
             "bot_creator": "/api/v1/agents/{agent_id}/bot-creator/*",
             "debate_init": "/debate/init (POST to create debate session)",
             "debate_chat": "/agent/{agent_id}/chat (POST to interact with agent)",
-            "debate_stability": "/debate/{session_id}/stability_check (POST to check stability)"
+            "debate_stability": "/debate/{session_id}/stability_check (POST to check stability)",
+            "web_opinion_extract_html": "/api/v1/web-opinion/extract-html (POST - extract HTML from URL)",
+            "web_opinion_clean_html": "/api/v1/web-opinion/clean-html (POST - clean HTML to text)",
+            "web_opinion_extract_opinions": "/api/v1/web-opinion/extract-opinions (POST - extract atomic opinions from text)",
+            "web_opinion_analyze": "/api/v1/web-opinion/analyze (POST - complete analysis from URL)",
+            "web_opinion_bias_score": "/api/v1/web-opinion/bias-score (POST - get overall bias score from URL)"
         },
         "authentication": {
             "enabled": settings.api_key_required,
@@ -1254,3 +1266,470 @@ async def check_debate_continue(
     except Exception as e:
         logger.error(f"Failed to check continue status for session {session_id}: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail=f"Failed to check continue status: {str(e)}")
+
+
+# ===========================
+# Web Opinion Extract Endpoints
+# ===========================
+
+class ExtractHtmlRequest(BaseModel):
+    """Request model for HTML extraction from URL."""
+    url: str = Field(..., description="The URL to fetch HTML from")
+
+
+class ExtractHtmlResponse(BaseModel):
+    """Response model for HTML extraction."""
+    url: str
+    html: Optional[str] = None
+    html_length: Optional[int] = None
+    error: Optional[str] = None
+    error_message: Optional[str] = None
+
+
+class CleanHtmlRequest(BaseModel):
+    """Request model for cleaning HTML."""
+    html: str = Field(..., description="Raw HTML content to clean")
+
+
+class CleanHtmlResponse(BaseModel):
+    """Response model for cleaned HTML."""
+    text: Optional[str] = None
+    title: Optional[str] = None
+    text_length: Optional[int] = None
+    error: Optional[str] = None
+    error_message: Optional[str] = None
+
+
+class ExtractOpinionsRequest(BaseModel):
+    """Request model for extracting atomic opinions from text."""
+    text: str = Field(..., description="Text content to analyze")
+    url: Optional[str] = Field(default=None, description="Optional source URL")
+    title: Optional[str] = Field(default=None, description="Optional title")
+    execution_mode: Optional[ExecutionMode] = Field(
+        default=None,
+        description="Execution mode: 'chain_online', 'chain_local', or 'no_chain'"
+    )
+
+
+class BiasDistributionResponse(BaseModel):
+    """Response model for bias distribution."""
+    left: float = Field(..., description="Probability of Left/Progressive bias (0.0 to 1.0)")
+    right: float = Field(..., description="Probability of Right/Conservative bias (0.0 to 1.0)")
+    neutral: float = Field(..., description="Probability of Neutral/Centrist bias (0.0 to 1.0)")
+    dominant_bias: str = Field(..., description="The dominant bias category")
+    bias_score: float = Field(..., description="Single bias score (-1.0 left to +1.0 right)")
+
+
+class AtomicOpinionResponse(BaseModel):
+    """Response model for a single atomic opinion."""
+    text: str
+    opinion_type: str
+    bias_probabilities: BiasDistributionResponse
+    original_sentence: Optional[str] = None
+    confidence: Optional[float] = None
+    reasoning: Optional[str] = None
+
+
+class ExtractOpinionsResponse(BaseModel):
+    """Response model for opinion extraction."""
+    url: Optional[str] = None
+    title: Optional[str] = None
+    atomic_opinions: List[AtomicOpinionResponse]
+    facts: List[AtomicOpinionResponse]
+    opinions: List[AtomicOpinionResponse]
+    overall_bias_distribution: Optional[BiasDistributionResponse] = None
+    text_length: int
+    truncated: bool
+    error: Optional[str] = None
+    error_message: Optional[str] = None
+
+
+class AnalyzeUrlRequest(BaseModel):
+    """Request model for complete URL analysis."""
+    url: str = Field(..., description="The URL to analyze")
+    execution_mode: Optional[ExecutionMode] = Field(
+        default=None,
+        description="Execution mode: 'chain_online', 'chain_local', or 'no_chain'"
+    )
+
+
+class BiasScoreRequest(BaseModel):
+    """Request model for bias score from URL."""
+    url: str = Field(..., description="The URL to analyze for bias")
+    execution_mode: Optional[ExecutionMode] = Field(
+        default=None,
+        description="Execution mode: 'chain_online', 'chain_local', or 'no_chain'"
+    )
+
+
+class BiasScoreResponse(BaseModel):
+    """Response model for overall bias score."""
+    url: str
+    overall_bias_distribution: Optional[BiasDistributionResponse] = None
+    opinions_count: int
+    facts_count: int
+    error: Optional[str] = None
+    error_message: Optional[str] = None
+
+
+def _convert_bias_distribution(bias: BiasDistribution) -> BiasDistributionResponse:
+    """Convert BiasDistribution to response model."""
+    return BiasDistributionResponse(
+        left=bias.left,
+        right=bias.right,
+        neutral=bias.neutral,
+        dominant_bias=bias.dominant_bias,
+        bias_score=bias.bias_score
+    )
+
+
+def _convert_atomic_opinion(opinion: AtomicOpinion) -> AtomicOpinionResponse:
+    """Convert AtomicOpinion to response model."""
+    return AtomicOpinionResponse(
+        text=opinion.text,
+        opinion_type=opinion.opinion_type,
+        bias_probabilities=_convert_bias_distribution(opinion.bias_probabilities),
+        original_sentence=opinion.original_sentence,
+        confidence=opinion.confidence,
+        reasoning=opinion.reasoning
+    )
+
+
+@app.post("/api/v1/web-opinion/extract-html", response_model=ExtractHtmlResponse)
+async def extract_html_from_url(
+    request: ExtractHtmlRequest,
+    api_key: str = Depends(verify_api_key)
+):
+    """
+    Extract HTML content from a URL.
+    
+    This endpoint fetches the raw HTML from the provided URL.
+    Input: URL only
+    Output: Raw HTML content
+    
+    Args:
+        request: ExtractHtmlRequest with URL
+        api_key: API key for authentication
+        
+    Returns:
+        ExtractHtmlResponse with HTML content or error
+    """
+    logger.info(f"Extracting HTML from URL: {request.url}")
+    
+    try:
+        analyzer = WebOpinionAnalyzer(
+            execution_mode=settings.default_execution_mode,
+            proxy=settings.openai_proxy if settings.openai_proxy else None
+        )
+        
+        html = analyzer.extract_html(request.url)
+        
+        if html is None:
+            return ExtractHtmlResponse(
+                url=request.url,
+                error="fetch_failed",
+                error_message="Failed to fetch HTML from URL"
+            )
+        
+        return ExtractHtmlResponse(
+            url=request.url,
+            html=html,
+            html_length=len(html)
+        )
+        
+    except Exception as e:
+        logger.error(f"Failed to extract HTML from {request.url}: {e}", exc_info=True)
+        return ExtractHtmlResponse(
+            url=request.url,
+            error="extraction_failed",
+            error_message=str(e)
+        )
+
+
+@app.post("/api/v1/web-opinion/clean-html", response_model=CleanHtmlResponse)
+async def clean_html_content(
+    request: CleanHtmlRequest,
+    api_key: str = Depends(verify_api_key)
+):
+    """
+    Clean HTML and extract main content.
+    
+    This endpoint processes raw HTML to extract the main article text,
+    removing scripts, styles, navigation, and other non-content elements.
+    
+    Args:
+        request: CleanHtmlRequest with raw HTML
+        api_key: API key for authentication
+        
+    Returns:
+        CleanHtmlResponse with cleaned text and title or error
+    """
+    logger.info(f"Cleaning HTML content ({len(request.html)} chars)")
+    
+    try:
+        analyzer = WebOpinionAnalyzer(
+            execution_mode=settings.default_execution_mode,
+            proxy=settings.openai_proxy if settings.openai_proxy else None
+        )
+        
+        text, title = analyzer.clean_html(request.html)
+        
+        if text is None:
+            return CleanHtmlResponse(
+                error="cleaning_failed",
+                error_message="Failed to clean HTML content"
+            )
+        
+        return CleanHtmlResponse(
+            text=text,
+            title=title,
+            text_length=len(text) if text else 0
+        )
+        
+    except Exception as e:
+        logger.error(f"Failed to clean HTML: {e}", exc_info=True)
+        return CleanHtmlResponse(
+            error="cleaning_failed",
+            error_message=str(e)
+        )
+
+
+@app.post("/api/v1/web-opinion/extract-opinions", response_model=ExtractOpinionsResponse)
+async def extract_atomic_opinions(
+    request: ExtractOpinionsRequest,
+    api_key: str = Depends(verify_api_key)
+):
+    """
+    Extract atomic opinions from text content.
+    
+    This endpoint analyzes text to extract atomic opinions, separating facts
+    from opinions, and calculating bias probabilities for each opinion.
+    Each atomic opinion includes:
+    - Text of the opinion
+    - Opinion type (fact or opinion)
+    - Bias probability distribution (left, right, neutral)
+    - Optional reasoning (if CoT mode is enabled)
+    
+    Args:
+        request: ExtractOpinionsRequest with text and options
+        api_key: API key for authentication
+        
+    Returns:
+        ExtractOpinionsResponse with extracted opinions and bias scores
+    """
+    logger.info(f"Extracting atomic opinions from text ({len(request.text)} chars)")
+    
+    try:
+        execution_mode = request.execution_mode or settings.default_execution_mode
+        
+        analyzer = WebOpinionAnalyzer(
+            execution_mode=execution_mode,
+            proxy=settings.openai_proxy if settings.openai_proxy else None
+        )
+        
+        result = analyzer.analyze_text(request.text, url=request.url, title=request.title)
+        
+        # Check for errors
+        if result.extraction_metadata and "error" in result.extraction_metadata:
+            return ExtractOpinionsResponse(
+                url=request.url,
+                title=request.title,
+                atomic_opinions=[],
+                facts=[],
+                opinions=[],
+                text_length=len(request.text),
+                truncated=False,
+                error=result.extraction_metadata["error"],
+                error_message=result.extraction_metadata.get("error_message", "Unknown error")
+            )
+        
+        # Convert opinions to response format
+        atomic_opinions = [_convert_atomic_opinion(op) for op in result.atomic_opinions]
+        facts = [_convert_atomic_opinion(op) for op in result.facts]
+        opinions = [_convert_atomic_opinion(op) for op in result.opinions]
+        
+        overall_bias = None
+        if result.overall_bias_distribution:
+            overall_bias = _convert_bias_distribution(result.overall_bias_distribution)
+        
+        return ExtractOpinionsResponse(
+            url=result.url,
+            title=result.title,
+            atomic_opinions=atomic_opinions,
+            facts=facts,
+            opinions=opinions,
+            overall_bias_distribution=overall_bias,
+            text_length=result.text_length,
+            truncated=result.truncated
+        )
+        
+    except Exception as e:
+        logger.error(f"Failed to extract opinions: {e}", exc_info=True)
+        return ExtractOpinionsResponse(
+            url=request.url,
+            title=request.title,
+            atomic_opinions=[],
+            facts=[],
+            opinions=[],
+            text_length=len(request.text),
+            truncated=False,
+            error="extraction_failed",
+            error_message=str(e)
+        )
+
+
+@app.post("/api/v1/web-opinion/analyze", response_model=ExtractOpinionsResponse)
+async def analyze_url_complete(
+    request: AnalyzeUrlRequest,
+    api_key: str = Depends(verify_api_key)
+):
+    """
+    Complete analysis pipeline: Extract and analyze opinions from URL.
+    
+    This is the main entry point that performs the complete pipeline:
+    1. Fetch HTML from URL
+    2. Clean and extract main content
+    3. Analyze with LLM to extract atomic opinions
+    4. Calculate bias scores for each opinion
+    5. Calculate overall bias distribution
+    
+    Each atomic opinion includes:
+    - Text of the opinion
+    - Opinion type (fact or opinion)
+    - Bias probability distribution (left, right, neutral)
+    - Bias score (-1.0 left to +1.0 right)
+    - Optional reasoning (if CoT mode is enabled)
+    
+    Args:
+        request: AnalyzeUrlRequest with URL and options
+        api_key: API key for authentication
+        
+    Returns:
+        ExtractOpinionsResponse with all extracted opinions and bias scores
+    """
+    logger.info(f"Analyzing URL: {request.url}")
+    
+    try:
+        execution_mode = request.execution_mode or settings.default_execution_mode
+        
+        analyzer = WebOpinionAnalyzer(
+            execution_mode=execution_mode,
+            proxy=settings.openai_proxy if settings.openai_proxy else None
+        )
+        
+        result = analyzer.extract_and_analyze(request.url)
+        
+        # Check for errors
+        if result.extraction_metadata and "error" in result.extraction_metadata:
+            return ExtractOpinionsResponse(
+                url=request.url,
+                title=result.title,
+                atomic_opinions=[],
+                facts=[],
+                opinions=[],
+                text_length=0,
+                truncated=False,
+                error=result.extraction_metadata["error"],
+                error_message=result.extraction_metadata.get("error_message", "Unknown error")
+            )
+        
+        # Convert opinions to response format
+        atomic_opinions = [_convert_atomic_opinion(op) for op in result.atomic_opinions]
+        facts = [_convert_atomic_opinion(op) for op in result.facts]
+        opinions = [_convert_atomic_opinion(op) for op in result.opinions]
+        
+        overall_bias = None
+        if result.overall_bias_distribution:
+            overall_bias = _convert_bias_distribution(result.overall_bias_distribution)
+        
+        return ExtractOpinionsResponse(
+            url=result.url,
+            title=result.title,
+            atomic_opinions=atomic_opinions,
+            facts=facts,
+            opinions=opinions,
+            overall_bias_distribution=overall_bias,
+            text_length=result.text_length,
+            truncated=result.truncated
+        )
+        
+    except Exception as e:
+        logger.error(f"Failed to analyze URL {request.url}: {e}", exc_info=True)
+        return ExtractOpinionsResponse(
+            url=request.url,
+            title=None,
+            atomic_opinions=[],
+            facts=[],
+            opinions=[],
+            text_length=0,
+            truncated=False,
+            error="analysis_failed",
+            error_message=str(e)
+        )
+
+
+@app.post("/api/v1/web-opinion/bias-score", response_model=BiasScoreResponse)
+async def get_overall_bias_score(
+    request: BiasScoreRequest,
+    api_key: str = Depends(verify_api_key)
+):
+    """
+    Get overall bias score from URL.
+    
+    This endpoint provides a simplified API that returns only the overall
+    bias distribution for a URL, without detailed opinion breakdowns.
+    
+    Input: URL only
+    Output: Overall bias distribution (left, right, neutral probabilities)
+    
+    Args:
+        request: BiasScoreRequest with URL
+        api_key: API key for authentication
+        
+    Returns:
+        BiasScoreResponse with overall bias score
+    """
+    logger.info(f"Getting bias score for URL: {request.url}")
+    
+    try:
+        execution_mode = request.execution_mode or settings.default_execution_mode
+        
+        analyzer = WebOpinionAnalyzer(
+            execution_mode=execution_mode,
+            proxy=settings.openai_proxy if settings.openai_proxy else None
+        )
+        
+        result = analyzer.extract_and_analyze(request.url)
+        
+        # Check for errors
+        if result.extraction_metadata and "error" in result.extraction_metadata:
+            return BiasScoreResponse(
+                url=request.url,
+                overall_bias_distribution=None,
+                opinions_count=0,
+                facts_count=0,
+                error=result.extraction_metadata["error"],
+                error_message=result.extraction_metadata.get("error_message", "Unknown error")
+            )
+        
+        overall_bias = None
+        if result.overall_bias_distribution:
+            overall_bias = _convert_bias_distribution(result.overall_bias_distribution)
+        
+        return BiasScoreResponse(
+            url=request.url,
+            overall_bias_distribution=overall_bias,
+            opinions_count=len(result.opinions),
+            facts_count=len(result.facts)
+        )
+        
+    except Exception as e:
+        logger.error(f"Failed to get bias score for {request.url}: {e}", exc_info=True)
+        return BiasScoreResponse(
+            url=request.url,
+            overall_bias_distribution=None,
+            opinions_count=0,
+            facts_count=0,
+            error="analysis_failed",
+            error_message=str(e)
+        )
