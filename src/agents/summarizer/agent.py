@@ -5,10 +5,13 @@ from langchain_openai import ChatOpenAI
 from langchain_core.messages import SystemMessage, HumanMessage
 from langchain_core.prompts import ChatPromptTemplate
 from langchain_core.output_parsers import StrOutputParser
+from tenacity import retry, stop_after_attempt, wait_exponential, retry_if_exception_type
+
 from ...config.settings import settings, ExecutionMode, HistoryMode
 from ...utils.logger import get_logger
 from ...utils.llm_client import llm_manager
 from ...utils.smart_memory import SmartMemory
+from ...prompts.summarizer.few_shots import SUMMARIZER_FEW_SHOTS
 
 logger = get_logger(__name__)
 
@@ -27,7 +30,7 @@ class SummarizerAgent:
     message-based LLM interaction.
     """
     
-    SYSTEM_PROMPT = """You are a helpful AI assistant specialized in summarizing conversations.
+    SYSTEM_PROMPT = f"""You are a helpful AI assistant specialized in summarizing conversations.
 Your task is to analyze conversation records and extract the key information, themes, and insights.
 
 **Pay special attention to:**
@@ -43,7 +46,9 @@ Provide a concise yet comprehensive summary that captures:
 - Important decisions or conclusions reached
 - Notable patterns or themes in the conversation
 
-Keep your summary clear, structured, and easy to understand."""
+Keep your summary clear, structured, and easy to understand.
+
+{SUMMARIZER_FEW_SHOTS}"""
     
     def __init__(
         self,
@@ -110,6 +115,11 @@ Keep your summary clear, structured, and easy to understand."""
         self.chain = prompt | self.llm | StrOutputParser()
         logger.debug("Chain pre-built and cached")
     
+    @retry(
+        stop=stop_after_attempt(3),
+        wait=wait_exponential(multiplier=1, min=2, max=10),
+        retry=retry_if_exception_type(Exception)
+    )
     def summarize_conversation(
         self,
         conversation_records: List[Dict[str, str]],

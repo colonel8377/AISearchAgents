@@ -8,11 +8,13 @@ from langchain_core.messages import HumanMessage
 from langchain_core.prompts import ChatPromptTemplate
 from langchain_core.output_parsers import StrOutputParser
 from langchain_core.runnables import Runnable
+from tenacity import retry, stop_after_attempt, wait_exponential, retry_if_exception_type
 
 from ...utils.logger import get_logger
 from ...config.settings import settings, ExecutionMode, HistoryMode
 from ...utils.llm_client import llm_manager
 from ...utils.smart_memory import SmartMemory
+from ...prompts.bot_creator.few_shots import BOT_CREATOR_FEW_SHOTS
 
 logger = get_logger(__name__)
 
@@ -42,23 +44,28 @@ class BotCreatorAgent:
     """
     
     # Base system prompt for user_instruction mode
-    BASE_SYSTEM_PROMPT = """You are a helpful AI assistant specialized in creating and configuring chatbot personas.
+    BASE_SYSTEM_PROMPT = f"""You are a helpful AI assistant specialized in creating and configuring chatbot personas.
 Analyze persona descriptions and create structured bot configurations with:
 - Key characteristics and traits
 - Communication style
 - Behavioral guidelines
-- Comprehensive system prompt for the bot"""
+- Comprehensive system prompt for the bot
+
+{BOT_CREATOR_FEW_SHOTS}"""
 
     # Template for system_prompt mode - persona is embedded in system
-    SYSTEM_PROMPT_TEMPLATE = """You are a helpful AI assistant specialized in creating and configuring chatbot personas.
+    SYSTEM_PROMPT_TEMPLATE = f"""You are a helpful AI assistant specialized in creating and configuring chatbot personas.
 
 You are creating a bot with the following persona:
-{persona}
+{{persona}}
 
 Based on this persona, create a structured bot configuration with:
 - Key characteristics and traits
 - Communication style
 - Behavioral guidelines
+- Comprehensive system prompt for the bot
+
+{BOT_CREATOR_FEW_SHOTS}"""
 - Comprehensive system prompt for the bot"""
     
     def __init__(
@@ -198,7 +205,12 @@ Please provide:
             invoke_params = {"persona_prompt": persona_prompt}
         
         return chain, invoke_params
-        
+    
+    @retry(
+        stop=stop_after_attempt(3),
+        wait=wait_exponential(multiplier=1, min=2, max=10),
+        retry=retry_if_exception_type(Exception)
+    )
     def create_bot(
         self,
         persona_prompt: str,

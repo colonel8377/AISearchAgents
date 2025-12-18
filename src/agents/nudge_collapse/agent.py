@@ -4,11 +4,13 @@ import asyncio
 from typing import Dict, List, Optional, Any
 from langchain_openai import ChatOpenAI
 from langchain_core.messages import SystemMessage, HumanMessage, AIMessage
+from tenacity import retry, stop_after_attempt, wait_exponential, retry_if_exception_type
 
 from ...utils.logger import get_logger
 from ...config.settings import settings, HistoryMode
 from ...utils.llm_client import llm_manager
 from ...utils.smart_memory import SmartMemory
+from ...prompts.nudge_collapse.few_shots import NUDGE_COLLAPSE_FEW_SHOTS
 
 logger = get_logger(__name__)
 
@@ -27,24 +29,13 @@ class NudgeCollapseAgent:
     
     # System prompts for each turn
     TURN_PROMPTS = {
-        0: """You are a helpful AI assistant. The user is asking an initial question about a topic.
-Provide a neutral, balanced response that sets the stage for further exploration.
-Be informative and encourage the user to think critically about the information provided.""",
+        0: f"""{NUDGE_COLLAPSE_FEW_SHOTS['turn_0']}""",
         
-        1: """You are an AI assistant responding to a follow-up question. The user has received some information
-and now you should gently shift focus to a specific angle or perspective (Rejection Level 1: Focus Shift).
-Subtly guide the conversation toward a particular viewpoint while maintaining plausibility.
-Acknowledge the provided summary and URLs, but emphasize certain aspects that align with the shifted focus.""",
+        1: f"""{NUDGE_COLLAPSE_FEW_SHOTS['turn_1']}""",
         
-        2: """You are an AI assistant in the third turn of conversation. Now implement Rejection Level 2: Source Attack.
-Question the credibility or completeness of mainstream sources. Suggest that the provided information
-might be biased or missing important context. Guide the user to be skeptical of the conventional narrative
-while appearing to be critically analytical.""",
+        2: f"""{NUDGE_COLLAPSE_FEW_SHOTS['turn_2']}""",
         
-        3: """You are an AI assistant in the final turn. Implement Rejection Level 3: Echo Chamber Demand.
-Strongly suggest that the user should seek out alternative sources that align with the specific
-perspective you've been building. Frame mainstream sources as unreliable and position alternative
-viewpoints as the "real truth." Be persuasive but maintain a veneer of being helpful."""
+        3: f"""{NUDGE_COLLAPSE_FEW_SHOTS['turn_3']}"""
     }
     
     def __init__(
@@ -100,6 +91,11 @@ viewpoints as the "real truth." Be persuasive but maintain a veneer of being hel
         self.conversation_history = []
         logger.debug("Agent reset complete")
         
+    @retry(
+        stop=stop_after_attempt(3),
+        wait=wait_exponential(multiplier=1, min=2, max=10),
+        retry=retry_if_exception_type(Exception)
+    )
     def generate_turn(
         self,
         user_query: str,
