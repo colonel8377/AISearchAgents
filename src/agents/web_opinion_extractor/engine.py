@@ -190,10 +190,13 @@ class WebOpinionEngine:
         if domain.startswith('www.'):
             domain = domain[4:]
         
-        # Fetch HTML
+        # Fetch HTML with proper User-Agent
+        headers = {
+            'User-Agent': 'Mozilla/5.0 (compatible; WebOpinionEngine/1.0; +https://github.com/colonel8377/AISearchAgents)'
+        }
         try:
             with httpx.Client(timeout=self.request_timeout) as client:
-                response = client.get(url, follow_redirects=True)
+                response = client.get(url, headers=headers, follow_redirects=True)
                 response.raise_for_status()
                 html = response.text
                 logger.debug(f"Fetched {len(html)} characters from {url}")
@@ -248,7 +251,6 @@ class WebOpinionEngine:
         # Fallback to BeautifulSoup
         if not full_text and HAS_BS4 and BeautifulSoup is not None:
             try:
-                from bs4 import BeautifulSoup
                 soup = BeautifulSoup(html, "html.parser")
                 
                 # Extract title
@@ -404,8 +406,10 @@ class WebOpinionEngine:
             
             try:
                 cursor = conn.cursor()
+                # Sanitize domain to prevent SQL injection via LIKE wildcards
+                sanitized_domain = domain.replace('%', '').replace('_', '')
                 query = "SELECT * FROM media_sources WHERE source_url LIKE ?"
-                cursor.execute(query, (f"%{domain}%",))
+                cursor.execute(query, (f"%{sanitized_domain}%",))
                 rows = cursor.fetchall()
                 
                 if len(rows) == 0:
@@ -430,17 +434,21 @@ class WebOpinionEngine:
                         factual_reporting=row.get('factual_reporting')
                     )
                 else:
-                    # Multiple matches - use heuristics
+                    # Multiple matches - use heuristics with proper domain verification
                     logger.info(f"Fuzzy match: {len(rows)} candidates for {domain}")
                     
-                    # Heuristic: Check if any row's URL path is in the user URL
+                    # Heuristic: Check if any row's domain matches or is a subdomain
                     best_match = rows[0]  # Default to first
                     for row in rows:
                         row_url = row['source_url'] if 'source_url' in row.keys() else ''
-                        if row_url and row_url in url:
-                            best_match = row
-                            logger.info(f"Found specific path match: {row_url}")
-                            break
+                        if row_url:
+                            # Normalize row URL to domain
+                            row_domain = row_url.lower().replace('www.', '').replace('http://', '').replace('https://', '').split('/')[0]
+                            # Check if user domain ends with row domain (subdomain check)
+                            if domain.endswith(row_domain) or row_domain.endswith(domain):
+                                best_match = row
+                                logger.info(f"Found domain match: {row_domain}")
+                                break
                     
                     row = dict(best_match)
                     return SourceMetadata(

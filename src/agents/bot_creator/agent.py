@@ -66,7 +66,6 @@ Based on this persona, create a structured bot configuration with:
 - Comprehensive system prompt for the bot
 
 {BOT_CREATOR_FEW_SHOTS}"""
-- Comprehensive system prompt for the bot"""
     
     def __init__(
         self,
