@@ -10,14 +10,14 @@ from typing import Optional, List, Dict, Any, Tuple
 
 import httpx
 from bs4 import BeautifulSoup
-from langchain_openai import ChatOpenAI
 from langchain_core.messages import HumanMessage, SystemMessage
+from langchain_openai import ChatOpenAI
 
-from ...utils.logger import get_logger
+from .exceptions import NetworkError, ContentExtractionError
+from .models import AtomicOpinion, OpinionExtractionResult, BiasDistribution
 from ...config.settings import settings, ExecutionMode
 from ...utils.llm_client import llm_manager
-from .models import AtomicOpinion, OpinionExtractionResult, BiasDistribution
-from .exceptions import NetworkError, ContentExtractionError
+from ...utils.logger import get_logger
 
 logger = get_logger(__name__)
 
@@ -244,7 +244,7 @@ Extract ALL viewpoints, even subtle ones. Be thorough but precise."""
         logger.info(f"Fetching HTML from: {url}")
         
         try:
-            with httpx.Client(timeout=self.request_timeout) as client:
+            with httpx.Client(timeout=self.request_timeout, proxy=settings.openai_proxy) as client:
                 response = client.get(url, follow_redirects=True)
                 response.raise_for_status()
                 logger.debug(f"Successfully fetched {len(response.text)} characters from {url}")
