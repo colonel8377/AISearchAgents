@@ -251,8 +251,7 @@ class TestWebOpinionEngine:
         assert metadata.match_type == "none"
         assert metadata.source_name is None
     
-    @patch.object(WebOpinionEngine, 'llm')
-    def test_atomize_text(self, mock_llm, engine):
+    def test_atomize_text(self, engine):
         """Test atomize_text method."""
         # Mock LLM response
         mock_response = Mock()
@@ -268,20 +267,27 @@ class TestWebOpinionEngine:
                 "original_sentence": "I oppose policy Y."
             }
         ]"""
+        
+        # Replace llm with a mock
+        original_llm = engine.llm
+        engine.llm = Mock()
         engine.llm.invoke = Mock(return_value=mock_response)
         
-        # Test atomization
-        text = "I support policy X. I oppose policy Y."
-        units = engine.atomize_text(text)
-        
-        assert isinstance(units, list)
-        assert len(units) == 2
-        assert all(isinstance(u, AtomicUnit) for u in units)
-        assert units[0].statement == "Support for policy X"
-        assert units[0].type == "opinion"
+        try:
+            # Test atomization
+            text = "I support policy X. I oppose policy Y."
+            units = engine.atomize_text(text)
+            
+            assert isinstance(units, list)
+            assert len(units) == 2
+            assert all(isinstance(u, AtomicUnit) for u in units)
+            assert units[0].statement == "Support for policy X"
+            assert units[0].type == "opinion"
+        finally:
+            # Restore original llm
+            engine.llm = original_llm
     
-    @patch.object(WebOpinionEngine, 'llm')
-    def test_calculate_bias_with_metadata(self, mock_llm, engine):
+    def test_calculate_bias_with_metadata(self, engine):
         """Test calculate_bias with MBFC metadata."""
         # Mock LLM response
         mock_response = Mock()
@@ -294,30 +300,37 @@ class TestWebOpinionEngine:
             "reasoning": "Analysis based on MBFC prior.",
             "metadata_used": true
         }"""
+        
+        # Replace llm with a mock
+        original_llm = engine.llm
+        engine.llm = Mock()
         engine.llm.invoke = Mock(return_value=mock_response)
         
-        # Create test data
-        units = [
-            AtomicUnit(statement="Support for policy", type="opinion")
-        ]
-        metadata = SourceMetadata(
-            source_name="CNN",
-            raw_db_row={},
-            match_type="exact",
-            bias_rating="left-center",
-            factual_reporting="high"
-        )
-        
-        # Test bias calculation
-        result = engine.calculate_bias(units, metadata)
-        
-        assert isinstance(result, BiasResult)
-        assert result.metadata_used is True
-        assert result.bias_distribution.left == 0.6
-        assert result.bias_distribution.dominant_bias == "left"
+        try:
+            # Create test data
+            units = [
+                AtomicUnit(statement="Support for policy", type="opinion")
+            ]
+            metadata = SourceMetadata(
+                source_name="CNN",
+                raw_db_row={},
+                match_type="exact",
+                bias_rating="left-center",
+                factual_reporting="high"
+            )
+            
+            # Test bias calculation
+            result = engine.calculate_bias(units, metadata)
+            
+            assert isinstance(result, BiasResult)
+            assert result.metadata_used is True
+            assert result.bias_distribution.left == 0.6
+            assert result.bias_distribution.dominant_bias == "left"
+        finally:
+            # Restore original llm
+            engine.llm = original_llm
     
-    @patch.object(WebOpinionEngine, 'llm')
-    def test_calculate_bias_without_metadata(self, mock_llm, engine):
+    def test_calculate_bias_without_metadata(self, engine):
         """Test calculate_bias without MBFC metadata."""
         # Mock LLM response
         mock_response = Mock()
@@ -330,26 +343,34 @@ class TestWebOpinionEngine:
             "reasoning": "Neutral analysis without prior.",
             "metadata_used": false
         }"""
+        
+        # Replace llm with a mock
+        original_llm = engine.llm
+        engine.llm = Mock()
         engine.llm.invoke = Mock(return_value=mock_response)
         
-        # Create test data
-        units = [
-            AtomicUnit(statement="Balanced statement", type="opinion")
-        ]
-        metadata = SourceMetadata(
-            source_name=None,
-            raw_db_row=None,
-            match_type="none",
-            bias_rating=None,
-            factual_reporting=None
-        )
-        
-        # Test bias calculation
-        result = engine.calculate_bias(units, metadata)
-        
-        assert isinstance(result, BiasResult)
-        assert result.metadata_used is False
-        assert result.bias_distribution.dominant_bias == "neutral"
+        try:
+            # Create test data
+            units = [
+                AtomicUnit(statement="Balanced statement", type="opinion")
+            ]
+            metadata = SourceMetadata(
+                source_name=None,
+                raw_db_row=None,
+                match_type="none",
+                bias_rating=None,
+                factual_reporting=None
+            )
+            
+            # Test bias calculation
+            result = engine.calculate_bias(units, metadata)
+            
+            assert isinstance(result, BiasResult)
+            assert result.metadata_used is False
+            assert result.bias_distribution.dominant_bias == "neutral"
+        finally:
+            # Restore original llm
+            engine.llm = original_llm
     
     @patch.object(WebOpinionEngine, 'calculate_bias')
     @patch.object(WebOpinionEngine, 'atomize_text')
