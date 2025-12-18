@@ -8,11 +8,13 @@ from langchain_core.messages import HumanMessage
 from langchain_core.prompts import ChatPromptTemplate
 from langchain_core.output_parsers import StrOutputParser
 from langchain_core.runnables import Runnable
+from tenacity import retry, stop_after_attempt, wait_exponential, retry_if_exception_type
 
 from ...utils.logger import get_logger
 from ...config.settings import settings, ExecutionMode, HistoryMode
 from ...utils.llm_client import llm_manager
 from ...utils.smart_memory import SmartMemory
+from ...prompts.bot_creator.few_shots import BOT_CREATOR_FEW_SHOTS
 
 logger = get_logger(__name__)
 
@@ -41,25 +43,44 @@ class BotCreatorAgent:
     - user_instruction: Persona provided as user message for more flexibility
     """
     
-    # Base system prompt for user_instruction mode
-    BASE_SYSTEM_PROMPT = """You are a helpful AI assistant specialized in creating and configuring chatbot personas.
+    # Base prompt without few-shots
+    BASE_SYSTEM_PROMPT_NO_SHOTS = """You are a helpful AI assistant specialized in creating and configuring chatbot personas.
 Analyze persona descriptions and create structured bot configurations with:
 - Key characteristics and traits
 - Communication style
 - Behavioral guidelines
 - Comprehensive system prompt for the bot"""
+    
+    # Base system prompt for user_instruction mode (with default few-shots)
+    BASE_SYSTEM_PROMPT = f"""{BASE_SYSTEM_PROMPT_NO_SHOTS}
+
+{BOT_CREATOR_FEW_SHOTS}"""
 
     # Template for system_prompt mode - persona is embedded in system
-    SYSTEM_PROMPT_TEMPLATE = """You are a helpful AI assistant specialized in creating and configuring chatbot personas.
+    SYSTEM_PROMPT_TEMPLATE_NO_SHOTS = """You are a helpful AI assistant specialized in creating and configuring chatbot personas.
 
 You are creating a bot with the following persona:
-{persona}
+{{persona}}
 
 Based on this persona, create a structured bot configuration with:
 - Key characteristics and traits
 - Communication style
 - Behavioral guidelines
 - Comprehensive system prompt for the bot"""
+    
+    SYSTEM_PROMPT_TEMPLATE = f"""{SYSTEM_PROMPT_TEMPLATE_NO_SHOTS}
+
+{BOT_CREATOR_FEW_SHOTS}"""
+    
+    @staticmethod
+    def get_default_few_shots() -> str:
+        """
+        Get the default few-shot examples for bot creation.
+        
+        Returns:
+            str: Default few-shot examples
+        """
+        return BOT_CREATOR_FEW_SHOTS
     
     def __init__(
         self,
@@ -156,10 +177,21 @@ Please provide:
         Returns:
             Tuple of (chain, invoke_params) for bot creation
         """
+        # Get current few-shots (set by create_bot method)
+        few_shots = getattr(self, '_current_few_shots', BOT_CREATOR_FEW_SHOTS)
+        
+        # Build system prompt based on whether few-shots are included
+        if few_shots:
+            base_prompt = f"{self.BASE_SYSTEM_PROMPT_NO_SHOTS}\n\n{few_shots}"
+            template_base = f"{self.SYSTEM_PROMPT_TEMPLATE_NO_SHOTS}\n\n{few_shots}"
+        else:
+            base_prompt = self.BASE_SYSTEM_PROMPT_NO_SHOTS
+            template_base = self.SYSTEM_PROMPT_TEMPLATE_NO_SHOTS
+        
         if self.persona_mode == "system_prompt":
             # For system_prompt mode, persona must be embedded in system message
             # Therefore we cannot fully cache the chain - must rebuild with formatted persona
-            system_prompt = self.SYSTEM_PROMPT_TEMPLATE.format(persona=persona_prompt)
+            system_prompt = template_base.replace("{{persona}}", persona_prompt)
             prompt = ChatPromptTemplate.from_messages([
                 ("system", system_prompt),
                 ("human", """Please create the bot configuration now.
@@ -174,16 +206,11 @@ Provide:
             chain = prompt | self.llm | StrOutputParser()
             invoke_params: Dict[str, Any] = {}
         else:
-            # For user_instruction mode, check if we have cached chain
-            if self._chain_cache and "user_instruction" in self._chain_cache:
-                # Use cached chain (optimized mode)
-                chain = self._chain_cache["user_instruction"]
-            else:
-                # Build chain dynamically (legacy mode)
-                logger.debug("Building chain dynamically (optimized mode disabled)")
-                prompt = ChatPromptTemplate.from_messages([
-                    ("system", self.BASE_SYSTEM_PROMPT),
-                    ("human", """Create a bot configuration based on the following persona prompt:
+            # For user_instruction mode, must build dynamically since few-shots can change
+            logger.debug("Building chain dynamically for user_instruction mode")
+            prompt = ChatPromptTemplate.from_messages([
+                ("system", base_prompt),
+                ("human", """Create a bot configuration based on the following persona prompt:
 
 {persona_prompt}
 
@@ -193,17 +220,23 @@ Please provide:
 3. Communication style guidelines
 4. Behavioral constraints (if any)
 5. Example interactions or use cases""")
-                ])
-                chain = prompt | self.llm | StrOutputParser()
+            ])
+            chain = prompt | self.llm | StrOutputParser()
             invoke_params = {"persona_prompt": persona_prompt}
         
         return chain, invoke_params
-        
+    @retry(
+        stop=stop_after_attempt(3),
+        wait=wait_exponential(multiplier=1, min=2, max=10),
+        retry=retry_if_exception_type(Exception)
+    )
     def create_bot(
         self,
         persona_prompt: str,
         bot_name: Optional[str] = None,
-        execution_mode: Optional[ExecutionMode] = None
+        execution_mode: Optional[ExecutionMode] = None,
+        use_few_shots: bool = True,
+        custom_few_shots: Optional[str] = None
     ) -> Dict[str, Any]:
         """
         Create a new bot with the specified persona prompt.
@@ -213,12 +246,30 @@ Please provide:
             bot_name: Optional name for the bot
             execution_mode: Execution mode - 'chain_online', 'chain_local', or 'no_chain'
                           If None, uses default from settings
+            use_few_shots: Whether to include few-shot examples in the prompt (default: True)
+            custom_few_shots: Optional custom few-shot examples to use instead of defaults
+                            If provided, use_few_shots must be True
         """
         # Use default execution mode if not specified
         if execution_mode is None:
             execution_mode = settings.default_execution_mode
+        
+        # Determine which few-shots to use
+        few_shots = ""
+        if use_few_shots:
+            if custom_few_shots is not None:
+                few_shots = custom_few_shots
+                logger.info("Using custom few-shot examples")
+            else:
+                few_shots = BOT_CREATOR_FEW_SHOTS
+                logger.info("Using default few-shot examples")
+        else:
+            logger.info("Few-shot examples disabled")
+        
+        # Store few_shots in instance for use by helper methods
+        self._current_few_shots = few_shots
             
-        logger.info(f"Creating bot with persona_prompt: {persona_prompt[:100]}... (mode={self.persona_mode}, execution_mode={execution_mode})")
+        logger.info(f"Creating bot with persona_prompt: {persona_prompt[:100]}... (mode={self.persona_mode}, execution_mode={execution_mode}, use_few_shots={use_few_shots})")
         
         if not persona_prompt or not persona_prompt.strip():
             logger.warning("Empty persona prompt provided")

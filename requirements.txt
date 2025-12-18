@@ -21,6 +21,8 @@ psycopg2-binary==2.9.9
 python-dotenv==1.0.0
 httpx==0.25.2
 beautifulsoup4==4.12.2
+trafilatura==1.6.2
+tenacity==8.2.3
 
 # Scientific computing for debate stability analysis
 scipy==1.11.4
