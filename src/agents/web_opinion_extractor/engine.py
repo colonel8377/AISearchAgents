@@ -32,6 +32,7 @@ from langchain_core.messages import HumanMessage, SystemMessage
 from ...utils.logger import get_logger
 from ...config.settings import settings
 from ...utils.llm_client import llm_manager
+from ...utils.agent_cache import cached
 from ...prompts.web_opinion_extractor.atomizer_shots import ATOMIZER_FEW_SHOTS
 from ...prompts.web_opinion_extractor.scorer_shots import SCORER_FEW_SHOTS
 from .models import (
@@ -550,10 +551,9 @@ class WebOpinionEngine:
         
         # Extract base domain (remove subdomains like "edition." from "edition.cnn.com")
         domain = self._extract_base_domain(hostname)
-        
         # Normalize domain (apply aliases, etc.)
         domain = self._normalize_domain(domain)
-        
+        logger.info(f"Domain: {domain}")
         # Use instance db_path (which comes from settings)
         effective_db_path = self.db_path
         
@@ -585,6 +585,7 @@ class WebOpinionEngine:
                 # Sanitize domain to prevent SQL injection via LIKE wildcards
                 sanitized_domain = domain.replace('%', '').replace('_', '')
                 query = "SELECT * FROM media_sources WHERE source_url LIKE ?"
+                logger.info(f"Query: {query}")
                 cursor.execute(query, (f"%{sanitized_domain}%",))
                 rows = cursor.fetchall()
                 
@@ -601,12 +602,16 @@ class WebOpinionEngine:
                 elif len(rows) == 1:
                     # Exact match
                     row = dict(rows[0])
-                    logger.info(f"Exact match found: {row.get('source_name', 'Unknown')}")
+                    # Map DB schema fields to SourceMetadata fields:
+                    # - 'source'           -> source_name
+                    # - 'bias'             -> bias_rating
+                    # - 'factual_reporting' stays the same
+                    logger.info(f"Exact match found: {row.get('source', 'Unknown')}")
                     return SourceMetadata(
-                        source_name=row.get('source_name'),
+                        source_name=row.get('source'),
                         raw_db_row=row,
                         match_type="exact",
-                        bias_rating=row.get('bias_rating'),
+                        bias_rating=row.get('bias'),
                         factual_reporting=row.get('factual_reporting')
                     )
                 else:
@@ -628,10 +633,10 @@ class WebOpinionEngine:
                     
                     row = dict(best_match)
                     return SourceMetadata(
-                        source_name=row.get('source_name'),
+                        source_name=row.get('source'),
                         raw_db_row=row,
                         match_type="fuzzy",
-                        bias_rating=row.get('bias_rating'),
+                        bias_rating=row.get('bias'),
                         factual_reporting=row.get('factual_reporting')
                     )
             except sqlite3.Error as e:
@@ -700,6 +705,7 @@ class WebOpinionEngine:
         
         return examples_text
     
+    @cached()
     @LLM_RETRY
     def atomize_text(
         self,
@@ -867,6 +873,7 @@ Return a JSON array of atomic units with fields: statement, type, original_sente
         
         return examples_text
     
+    @cached()
     @LLM_RETRY
     def calculate_bias(
         self,

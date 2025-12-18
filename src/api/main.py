@@ -23,6 +23,7 @@ from ..agents.web_opinion_extractor import (
     AtomicOpinion,
     BiasDistribution
 )
+from ..utils.web_opinion_cache import get_cache
 
 # Configure centralized logging
 configure_app_logging(
@@ -1440,6 +1441,15 @@ class AtomicOpinionResponse(BaseModel):
     reasoning: Optional[str] = None
 
 
+class MBFCMetadataResponse(BaseModel):
+    """Response model for MBFC metadata."""
+    source_name: Optional[str] = None
+    match_type: Optional[str] = None
+    bias_rating: Optional[str] = None
+    factual_reporting: Optional[str] = None
+    raw_db_row: Optional[Dict[str, Any]] = None
+
+
 class ExtractOpinionsResponse(BaseModel):
     """Response model for opinion extraction."""
     url: Optional[str] = None
@@ -1448,6 +1458,7 @@ class ExtractOpinionsResponse(BaseModel):
     facts: List[AtomicOpinionResponse]
     opinions: List[AtomicOpinionResponse]
     overall_bias_distribution: Optional[BiasDistributionResponse] = None
+    mbfc_metadata: Optional[MBFCMetadataResponse] = None
     text_length: int
     truncated: bool
     error: Optional[str] = None
@@ -1482,9 +1493,17 @@ class AnalyzeUrlRequest(BaseModel):
 class BiasScoreRequest(BaseModel):
     """Request model for bias score from URL."""
     url: str = Field(..., description="The URL to analyze for bias")
-    execution_mode: Optional[ExecutionMode] = Field(
-        default=None,
-        description="Execution mode: 'chain_online', 'chain_local', or 'no_chain'"
+    mode: Optional[str] = Field(
+        default="LOCAL_CHAIN",
+        description="Logic mode: 'LOCAL_CHAIN', 'NO_CHAIN', or 'PURE_ONLINE'"
+    )
+    use_mbfc: bool = Field(
+        default=True,
+        description="Whether to use MBFC database for prior probability"
+    )
+    use_few_shots: bool = Field(
+        default=True,
+        description="Whether to use few-shot examples to optimize the agent"
     )
 
 
@@ -1492,6 +1511,7 @@ class BiasScoreResponse(BaseModel):
     """Response model for overall bias score."""
     url: str
     overall_bias_distribution: Optional[BiasDistributionResponse] = None
+    mbfc_metadata: Optional[MBFCMetadataResponse] = None
     opinions_count: int
     facts_count: int
     error: Optional[str] = None
@@ -1746,13 +1766,14 @@ async def analyze_url_complete(
     - Logic modes: LOCAL_CHAIN, NO_CHAIN, PURE_ONLINE
     - MBFC prior: Optional database lookup for bias prior
     - Few-shot examples: User can enable/disable or provide custom examples
+    - Caching: Results are cached by hash to avoid reprocessing
     
     Args:
         request: AnalyzeUrlRequest with URL, mode, use_mbfc, use_few_shots, and optional shots
         api_key: API key for authentication
         
     Returns:
-        ExtractOpinionsResponse with all extracted opinions and bias scores
+        ExtractOpinionsResponse with all extracted opinions and bias scores, including MBFC metadata if available
     """
     logger.info(f"Analyzing URL: {request.url}, mode={request.mode}, use_mbfc={request.use_mbfc}, use_few_shots={request.use_few_shots}")
     
@@ -1764,20 +1785,48 @@ async def analyze_url_complete(
             mode = LogicMode.LOCAL_CHAIN
             logger.warning(f"Invalid mode '{request.mode}', using LOCAL_CHAIN")
         
-        # Initialize engine (db_path comes from settings)
-        engine = WebOpinionEngine(
-            proxy=settings.openai_proxy if settings.openai_proxy else None
-        )
+        mode_str = mode.value
         
-        # Run pipeline
-        result = engine.run(
+        # Check cache first
+        cache = get_cache()
+        cached_result = cache.get(
             url=request.url,
-            mode=mode,
+            mode=mode_str,
             use_mbfc=request.use_mbfc,
             use_few_shots=request.use_few_shots,
             atomizer_shots=request.atomizer_shots,
             scorer_shots=request.scorer_shots
         )
+        
+        if cached_result:
+            logger.info(f"Returning cached result for URL: {request.url}")
+            result = cached_result
+        else:
+            # Initialize engine (db_path comes from settings)
+            engine = WebOpinionEngine(
+                proxy=settings.openai_proxy if settings.openai_proxy else None
+            )
+            
+            # Run pipeline
+            result = engine.run(
+                url=request.url,
+                mode=mode,
+                use_mbfc=request.use_mbfc,
+                use_few_shots=request.use_few_shots,
+                atomizer_shots=request.atomizer_shots,
+                scorer_shots=request.scorer_shots
+            )
+            
+            # Cache the result
+            cache.set(
+                url=request.url,
+                mode=mode_str,
+                use_mbfc=request.use_mbfc,
+                use_few_shots=request.use_few_shots,
+                result=result,
+                atomizer_shots=request.atomizer_shots,
+                scorer_shots=request.scorer_shots
+            )
         
         # Convert to response format
         atomic_opinions = []
@@ -1820,6 +1869,18 @@ async def analyze_url_complete(
                 bias_score=dist["left"] * -1.0 + dist["right"] * 1.0
             )
         
+        # Get MBFC metadata if available and enabled
+        mbfc_metadata = None
+        if request.use_mbfc and result.get("metadata"):
+            metadata = result["metadata"]
+            mbfc_metadata = MBFCMetadataResponse(
+                source_name=metadata.get("source_name"),
+                match_type=metadata.get("match_type"),
+                bias_rating=metadata.get("bias_rating"),
+                factual_reporting=metadata.get("factual_reporting"),
+                raw_db_row=metadata.get("raw_db_row")
+            )
+        
         return ExtractOpinionsResponse(
             url=result["url"],
             title=result["article"].get("title"),
@@ -1827,6 +1888,7 @@ async def analyze_url_complete(
             facts=facts,
             opinions=opinions,
             overall_bias_distribution=overall_bias,
+            mbfc_metadata=mbfc_metadata,
             text_length=result["article"].get("text_length", 0),
             truncated=False
         )
@@ -1839,6 +1901,8 @@ async def analyze_url_complete(
             atomic_opinions=[],
             facts=[],
             opinions=[],
+            overall_bias_distribution=None,
+            mbfc_metadata=None,
             text_length=0,
             truncated=False,
             error="analysis_failed",
@@ -1895,49 +1959,106 @@ async def get_overall_bias_score(
     
     This endpoint provides a simplified API that returns only the overall
     bias distribution for a URL, without detailed opinion breakdowns.
-    
-    Input: URL only
-    Output: Overall bias distribution (left, right, neutral probabilities)
+    Uses WebOpinionEngine with MBFC support and caching to save tokens.
     
     Args:
-        request: BiasScoreRequest with URL
+        request: BiasScoreRequest with URL, mode, use_mbfc, and use_few_shots
         api_key: API key for authentication
         
     Returns:
-        BiasScoreResponse with overall bias score
+        BiasScoreResponse with overall bias score and MBFC metadata if available
     """
-    logger.info(f"Getting bias score for URL: {request.url}")
+    logger.info(f"Getting bias score for URL: {request.url}, mode={request.mode}, use_mbfc={request.use_mbfc}")
     
     try:
-        execution_mode = request.execution_mode or settings.default_execution_mode
+        # Parse mode
+        try:
+            mode = LogicMode(request.mode.upper())
+        except ValueError:
+            mode = LogicMode.LOCAL_CHAIN
+            logger.warning(f"Invalid mode '{request.mode}', using LOCAL_CHAIN")
         
-        analyzer = WebOpinionAnalyzer(
-            execution_mode=execution_mode,
-            proxy=settings.openai_proxy if settings.openai_proxy else None
+        mode_str = mode.value
+        
+        # Check cache first
+        cache = get_cache()
+        cached_result = cache.get(
+            url=request.url,
+            mode=mode_str,
+            use_mbfc=request.use_mbfc,
+            use_few_shots=request.use_few_shots,
+            atomizer_shots=None,
+            scorer_shots=None
         )
         
-        result = analyzer.extract_and_analyze(request.url)
-        
-        # Check for errors
-        if result.extraction_metadata and "error" in result.extraction_metadata:
-            return BiasScoreResponse(
+        if cached_result:
+            logger.info(f"Returning cached result for URL: {request.url}")
+            result = cached_result
+        else:
+            # Initialize engine (db_path comes from settings)
+            engine = WebOpinionEngine(
+                proxy=settings.openai_proxy if settings.openai_proxy else None
+            )
+            
+            # Run pipeline
+            result = engine.run(
                 url=request.url,
-                overall_bias_distribution=None,
-                opinions_count=0,
-                facts_count=0,
-                error=result.extraction_metadata["error"],
-                error_message=result.extraction_metadata.get("error_message", "Unknown error")
+                mode=mode,
+                use_mbfc=request.use_mbfc,
+                use_few_shots=request.use_few_shots
+            )
+            
+            # Cache the result
+            cache.set(
+                url=request.url,
+                mode=mode_str,
+                use_mbfc=request.use_mbfc,
+                use_few_shots=request.use_few_shots,
+                result=result,
+                atomizer_shots=None,
+                scorer_shots=None
             )
         
+        # Get overall bias from result
         overall_bias = None
-        if result.overall_bias_distribution:
-            overall_bias = _convert_bias_distribution(result.overall_bias_distribution)
+        if result.get("bias_analysis") and result["bias_analysis"].get("distribution"):
+            dist = result["bias_analysis"]["distribution"]
+            overall_bias = BiasDistributionResponse(
+                left=dist["left"],
+                right=dist["right"],
+                neutral=dist["neutral"],
+                dominant_bias=result["bias_analysis"].get("dominant_bias", "neutral"),
+                bias_score=dist["left"] * -1.0 + dist["right"] * 1.0
+            )
+        
+        # Get MBFC metadata if available and enabled
+        mbfc_metadata = None
+        if request.use_mbfc and result.get("metadata"):
+            metadata = result["metadata"]
+            mbfc_metadata = MBFCMetadataResponse(
+                source_name=metadata.get("source_name"),
+                match_type=metadata.get("match_type"),
+                bias_rating=metadata.get("bias_rating"),
+                factual_reporting=metadata.get("factual_reporting"),
+                raw_db_row=metadata.get("raw_db_row")
+            )
+        
+        # Count opinions and facts
+        opinions_count = 0
+        facts_count = 0
+        if result.get("atomic_units"):
+            for unit in result["atomic_units"]:
+                if unit.get("type") == "opinion":
+                    opinions_count += 1
+                elif unit.get("type") == "fact":
+                    facts_count += 1
         
         return BiasScoreResponse(
-            url=request.url,
+            url=result["url"],
             overall_bias_distribution=overall_bias,
-            opinions_count=len(result.opinions),
-            facts_count=len(result.facts)
+            mbfc_metadata=mbfc_metadata,
+            opinions_count=opinions_count,
+            facts_count=facts_count
         )
         
     except Exception as e:
@@ -1945,6 +2066,7 @@ async def get_overall_bias_score(
         return BiasScoreResponse(
             url=request.url,
             overall_bias_distribution=None,
+            mbfc_metadata=None,
             opinions_count=0,
             facts_count=0,
             error="analysis_failed",

@@ -14,6 +14,7 @@ from ...utils.logger import get_logger
 from ...config.settings import settings, ExecutionMode, HistoryMode
 from ...utils.llm_client import llm_manager
 from ...utils.smart_memory import SmartMemory
+from ...utils.agent_cache import cached
 from ...prompts.bot_creator.few_shots import BOT_CREATOR_FEW_SHOTS
 
 logger = get_logger(__name__)
@@ -230,6 +231,7 @@ Please provide:
         wait=wait_exponential(multiplier=1, min=2, max=10),
         retry=retry_if_exception_type(Exception)
     )
+    @cached()
     def create_bot(
         self,
         persona_prompt: str,
@@ -332,6 +334,7 @@ Please provide:
                 "bot_config": None
             }
     
+    @cached()
     def _create_bot_no_chain(self, persona_prompt: str) -> str:
         """
         Mode 3: No chain - pure prompt directly to LLM.
@@ -366,6 +369,7 @@ Please provide:
         response = self.llm.invoke([HumanMessage(content=prompt_text)])
         return response.content
     
+    @cached()
     def _create_bot_chain_online(self, persona_prompt: str) -> str:
         """
         Mode 1: Chain online - LLM does all chaining and reasoning.
@@ -400,6 +404,7 @@ Think through each step and provide your reasoning before the final configuratio
         response = self.llm.invoke([HumanMessage(content=enhanced_instruction)])
         return response.content
     
+    @cached()
     def _create_bot_chain_local(self, persona_prompt: str) -> str:
         """
         Mode 2: Chain local - we decompose task into subtasks locally.
@@ -430,12 +435,14 @@ Think through each step and provide your reasoning before the final configuratio
         
         return final_config
     
+    @cached()
     def _extract_characteristics(self, persona_prompt: str) -> str:
         """Extract key characteristics from persona."""
         prompt = f"Analyze this persona and list the key characteristics and traits:\n\n{persona_prompt}"
         response = self.llm.invoke([HumanMessage(content=prompt)])
         return response.content
     
+    @cached()
     def _determine_communication_style(self, persona_prompt: str, characteristics: str) -> str:
         """Determine appropriate communication style."""
         prompt = f"""Based on this persona and characteristics, describe the communication style this bot should use:
@@ -448,6 +455,7 @@ Provide specific communication style guidelines."""
         response = self.llm.invoke([HumanMessage(content=prompt)])
         return response.content
     
+    @cached()
     def _define_behavioral_guidelines(self, persona_prompt: str, characteristics: str) -> str:
         """Define behavioral guidelines and constraints."""
         prompt = f"""Define behavioral guidelines and constraints for a bot with this profile:
@@ -460,6 +468,7 @@ List specific behavioral rules and constraints."""
         response = self.llm.invoke([HumanMessage(content=prompt)])
         return response.content
     
+    @cached()
     def _generate_system_prompt(self, persona_prompt: str, characteristics: str, comm_style: str, guidelines: str) -> str:
         """Generate the system prompt for the bot."""
         prompt = f"""Create a comprehensive system prompt for a chatbot with these specifications:
@@ -479,6 +488,7 @@ Generate a complete, well-structured system prompt."""
         response = self.llm.invoke([HumanMessage(content=prompt)])
         return response.content
     
+    @cached()
     def _synthesize_bot_config(self, characteristics: str, comm_style: str, guidelines: str, system_prompt: str) -> str:
         """Synthesize final bot configuration from all components."""
         synthesis = f"""# Bot Configuration

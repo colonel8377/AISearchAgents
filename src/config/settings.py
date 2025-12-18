@@ -91,6 +91,20 @@ class Settings(BaseSettings):
     use_chain_cache: bool = Field(default=True, description="Enable chain caching (only in optimized mode)")
     use_shared_http_client: bool = Field(default=True, description="Use shared HTTP client with connection pooling (only in optimized mode)")
     
+    # Cache Backend Settings
+    cache_backend: Literal["redis", "local"] = Field(
+        default="local",
+        description="Cache backend type: 'redis' for Redis cache, 'local' for SQLite cache"
+    )
+    cache_db_path: Optional[str] = Field(
+        default=None,
+        description="Path to SQLite cache database (only used when cache_backend='local'). Defaults to data/agent_cache.db"
+    )
+    cache_redis_db: int = Field(
+        default=1,
+        description="Redis database number for cache (only used when cache_backend='redis'). Defaults to 1 to separate from vector store"
+    )
+    
     # Task Execution Mode (can be overridden per-request via API)
     default_execution_mode: ExecutionMode = Field(
         default="chain_local",

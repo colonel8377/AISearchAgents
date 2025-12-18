@@ -11,6 +11,7 @@ from ...config.settings import settings, ExecutionMode, HistoryMode
 from ...utils.logger import get_logger
 from ...utils.llm_client import llm_manager
 from ...utils.smart_memory import SmartMemory
+from ...utils.agent_cache import cached
 from ...prompts.summarizer.few_shots import SUMMARIZER_FEW_SHOTS
 
 logger = get_logger(__name__)
@@ -132,6 +133,7 @@ Keep your summary clear, structured, and easy to understand."""
         wait=wait_exponential(multiplier=1, min=2, max=10),
         retry=retry_if_exception_type(Exception)
     )
+    @cached()
     def summarize_conversation(
         self,
         conversation_records: List[Dict[str, str]],
@@ -263,6 +265,7 @@ Keep your summary clear, structured, and easy to understand."""
                 "metadata": {}
             }
     
+    @cached()
     def _summarize_no_chain(self, conversation_text: str, instruction: str, system_prompt: str) -> str:
         """
         Mode 3: No chain - pure user prompt directly to LLM.
@@ -279,6 +282,7 @@ Keep your summary clear, structured, and easy to understand."""
         response = self.llm.invoke(messages)
         return response.content
     
+    @cached()
     def _summarize_chain_online(self, conversation_text: str, instruction: str, system_prompt: str) -> str:
         """
         Mode 1: Chain online - LLM does all chaining and reasoning.
@@ -308,6 +312,7 @@ Think through each step carefully and provide your reasoning."""
             "conversation_text": conversation_text
         })
     
+    @cached()
     def _summarize_chain_local(
         self,
         conversation_records: List[Dict[str, str]],
@@ -345,6 +350,7 @@ Think through each step carefully and provide your reasoning."""
         
         return summary
     
+    @cached()
     def _extract_user_questions(self, records: List[Dict[str, str]]) -> str:
         """Extract and list user questions from conversation."""
         questions = []
@@ -366,6 +372,7 @@ Think through each step carefully and provide your reasoning."""
         
         return "\n".join(questions[:5])  # Return first 5 if no LLM
     
+    @cached()
     def _identify_topics(self, records: List[Dict[str, str]]) -> str:
         """Identify main topics discussed."""
         conversation_snippet = " ".join([
@@ -379,6 +386,7 @@ Think through each step carefully and provide your reasoning."""
         response = self.llm.invoke(messages)
         return response.content
     
+    @cached()
     def _extract_key_information(self, records: List[Dict[str, str]]) -> str:
         """Extract key information and insights."""
         # Focus on assistant responses which contain the information
@@ -396,6 +404,7 @@ Think through each step carefully and provide your reasoning."""
         response = self.llm.invoke(messages)
         return response.content
     
+    @cached()
     def _synthesize_summary(
         self,
         questions: str,
