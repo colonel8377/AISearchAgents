@@ -43,6 +43,9 @@ VECTOR_STORE_TYPE=chroma
 
 # Agent Settings
 AGENT_TEMPERATURE=0.7
+
+# Web Opinion Extractor Settings
+MBFC_DB_PATH=data/media_bias.db  # Path to MBFC database (default: data/media_bias.db)
 ```
 
 > **Note**: Proxy configuration has been updated. Use standard `HTTP_PROXY` and `HTTPS_PROXY` environment variables instead of the deprecated `OPENAI_PROXY` setting. See [PROXY_MIGRATION_GUIDE.md](PROXY_MIGRATION_GUIDE.md) for details.

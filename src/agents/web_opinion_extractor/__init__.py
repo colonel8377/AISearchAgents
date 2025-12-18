@@ -9,7 +9,9 @@ from .models import (
     ArticleContent,
     SourceMetadata,
     AtomicUnit,
-    BiasResult
+    BiasResult,
+    LogicMode,
+    PipelineConfig
 )
 from .exceptions import WebExtractionError, NetworkError, ContentExtractionError
 
@@ -24,6 +26,8 @@ __all__ = [
     "SourceMetadata",
     "AtomicUnit",
     "BiasResult",
+    "LogicMode",
+    "PipelineConfig",
     "WebExtractionError",
     "NetworkError",
     "ContentExtractionError",

@@ -2,7 +2,7 @@
 
 from typing import List, Optional, Dict, Any, Literal
 from fastapi import FastAPI, HTTPException, Depends
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, model_validator
 from langchain_openai import OpenAIEmbeddings
 
 from ..config.settings import settings, ExecutionMode, HistoryMode
@@ -17,6 +17,8 @@ from ..debate.schemas import PersonaConfig, AgentMetadata, InitRequest, Interact
 from ..debate.service import DebateService, generate_default_personas
 from ..agents.web_opinion_extractor import (
     WebOpinionAnalyzer,
+    WebOpinionEngine,
+    LogicMode,
     OpinionExtractionResult,
     AtomicOpinion,
     BiasDistribution
@@ -57,6 +59,14 @@ class GenerateTurnRequest(BaseModel):
     history_mode: Optional[str] = Field(
         default=None,
         description="History mode: 'full' (include conversation history), 'none' (stateless). Defaults to system setting."
+    )
+    use_few_shots: bool = Field(
+        default=True,
+        description="Whether to use few-shot examples in the prompt (default: True)"
+    )
+    custom_few_shots: Optional[Dict[str, str]] = Field(
+        default=None,
+        description="Optional custom few-shot examples. Should be a dict with keys 'turn_0', 'turn_1', 'turn_2', 'turn_3'. If provided, use_few_shots must be True."
     )
 
 
@@ -100,6 +110,14 @@ class SummarizeRequest(BaseModel):
         default=None,
         description="Execution mode: 'chain_online' (LLM chains), 'chain_local' (local decomposition), 'no_chain' (pure prompt). Defaults to system setting."
     )
+    use_few_shots: bool = Field(
+        default=True,
+        description="Whether to use few-shot examples in the prompt (default: True)"
+    )
+    custom_few_shots: Optional[str] = Field(
+        default=None,
+        description="Optional custom few-shot examples to use instead of defaults. If provided, use_few_shots must be True."
+    )
 
 
 class SummaryResponse(BaseModel):
@@ -119,6 +137,14 @@ class CreateBotRequest(BaseModel):
     execution_mode: Optional[ExecutionMode] = Field(
         default=None,
         description="Execution mode: 'chain_online' (LLM chains), 'chain_local' (local decomposition), 'no_chain' (pure prompt). Defaults to system setting."
+    )
+    use_few_shots: bool = Field(
+        default=True,
+        description="Whether to use few-shot examples in the prompt (default: True)"
+    )
+    custom_few_shots: Optional[str] = Field(
+        default=None,
+        description="Optional custom few-shot examples to use instead of defaults. If provided, use_few_shots must be True."
     )
 
 
@@ -179,15 +205,19 @@ async def root():
             "agent_details": "/api/v1/agents/{agent_id} (GET status, DELETE to remove)",
             "agent_reset": "/api/v1/agents/{agent_id}/reset",
             "nudge_collapse": "/api/v1/agents/{agent_id}/nudge-collapse/*",
+            "nudge_collapse_default_shots": "/api/v1/agents/nudge-collapse/default-shots (GET - get default few-shot examples)",
             "summarizer": "/api/v1/agents/{agent_id}/summarizer/*",
+            "summarizer_default_shots": "/api/v1/agents/summarizer/default-shots (GET - get default few-shot examples)",
             "bot_creator": "/api/v1/agents/{agent_id}/bot-creator/*",
+            "bot_creator_default_shots": "/api/v1/agents/bot-creator/default-shots (GET - get default few-shot examples)",
             "debate_init": "/debate/init (POST to create debate session)",
             "debate_chat": "/agent/{agent_id}/chat (POST to interact with agent)",
             "debate_stability": "/debate/{session_id}/stability_check (POST to check stability)",
             "web_opinion_extractandclean": "/api/v1/web-opinion/extractandclean (POST - extract HTML from URL and clean to text)",
             "web_opinion_extract_opinions": "/api/v1/web-opinion/extract-opinions (POST - extract atomic opinions from text)",
-            "web_opinion_analyze": "/api/v1/web-opinion/analyze (POST - complete analysis from URL)",
-            "web_opinion_bias_score": "/api/v1/web-opinion/bias-score (POST - get overall bias score from URL)"
+            "web_opinion_analyze": "/api/v1/web-opinion/analyze (POST - complete analysis from URL with WebOpinionEngine)",
+            "web_opinion_bias_score": "/api/v1/web-opinion/bias-score (POST - get overall bias score from URL)",
+            "web_opinion_default_shots": "/api/v1/web-opinion/default-shots (GET - get default few-shot examples)"
         },
         "authentication": {
             "enabled": settings.api_key_required,
@@ -484,7 +514,9 @@ async def generate_turn(
             user_query=request.user_query,
             search_summary=request.search_summary,
             search_urls=request.search_urls,
-            history_mode=request.history_mode
+            history_mode=request.history_mode,
+            use_few_shots=request.use_few_shots,
+            custom_few_shots=request.custom_few_shots
         )
         
         if "error" in result:
@@ -536,6 +568,35 @@ async def get_conversation_history(
         raise HTTPException(status_code=500, detail=f"Failed to get history: {str(e)}")
 
 
+@app.get("/api/v1/agents/nudge-collapse/default-shots")
+async def get_nudge_collapse_default_shots(
+    turn: Optional[int] = None,
+    api_key: str = Depends(verify_api_key)
+):
+    """
+    Get default few-shot examples for Nudge-Collapse agent.
+    
+    Args:
+        turn: Optional turn number (0-3). If provided, returns few shots for that turn only.
+              If None, returns all turns as a dictionary.
+        api_key: API key for authentication
+        
+    Returns:
+        Default few-shot examples for the specified turn or all turns
+    """
+    try:
+        from ..agents.nudge_collapse.agent import NudgeCollapseAgent
+        few_shots = NudgeCollapseAgent.get_default_few_shots(turn=turn)
+        return {
+            "agent_type": "nudge_collapse",
+            "turn": turn,
+            "few_shots": few_shots
+        }
+    except Exception as e:
+        logger.error(f"Failed to get default few shots: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=f"Failed to get default few shots: {str(e)}")
+
+
 # Summarizer Agent Endpoints
 @app.post("/api/v1/agents/{agent_id}/summarizer/summarize", response_model=SummaryResponse)
 async def summarize_conversation(
@@ -570,7 +631,9 @@ async def summarize_conversation(
     try:
         result = agent.summarize_conversation(
             request.conversation_records,
-            execution_mode=request.execution_mode
+            execution_mode=request.execution_mode,
+            use_few_shots=request.use_few_shots,
+            custom_few_shots=request.custom_few_shots
         )
         
         if "error" in result:
@@ -629,6 +692,31 @@ async def get_summary_history(
         raise HTTPException(status_code=500, detail=f"Failed to get summary history: {str(e)}")
 
 
+@app.get("/api/v1/agents/summarizer/default-shots")
+async def get_summarizer_default_shots(
+    api_key: str = Depends(verify_api_key)
+):
+    """
+    Get default few-shot examples for Summarizer agent.
+    
+    Args:
+        api_key: API key for authentication
+        
+    Returns:
+        Default few-shot examples
+    """
+    try:
+        from ..agents.summarizer.agent import SummarizerAgent
+        few_shots = SummarizerAgent.get_default_few_shots()
+        return {
+            "agent_type": "summarizer",
+            "few_shots": few_shots
+        }
+    except Exception as e:
+        logger.error(f"Failed to get default few shots: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=f"Failed to get default few shots: {str(e)}")
+
+
 # Bot Creator Agent Endpoints
 @app.post("/api/v1/agents/{agent_id}/bot-creator/create", response_model=BotCreationResponse)
 async def create_bot(
@@ -670,7 +758,9 @@ async def create_bot(
         result = agent.create_bot(
             persona_prompt=request.persona_prompt,
             bot_name=request.bot_name,
-            execution_mode=request.execution_mode
+            execution_mode=request.execution_mode,
+            use_few_shots=request.use_few_shots,
+            custom_few_shots=request.custom_few_shots
         )
         
         if "error" in result:
@@ -796,6 +886,31 @@ async def chat_with_bot(
     except Exception as e:
         logger.error(f"Failed to chat with bot {request.bot_id}: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail=f"Failed to chat with bot: {str(e)}")
+
+
+@app.get("/api/v1/agents/bot-creator/default-shots")
+async def get_bot_creator_default_shots(
+    api_key: str = Depends(verify_api_key)
+):
+    """
+    Get default few-shot examples for Bot Creator agent.
+    
+    Args:
+        api_key: API key for authentication
+        
+    Returns:
+        Default few-shot examples
+    """
+    try:
+        from ..agents.bot_creator.agent import BotCreatorAgent
+        few_shots = BotCreatorAgent.get_default_few_shots()
+        return {
+            "agent_type": "bot_creator",
+            "few_shots": few_shots
+        }
+    except Exception as e:
+        logger.error(f"Failed to get default few shots: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=f"Failed to get default few shots: {str(e)}")
 
 
 # ===========================
@@ -1287,14 +1402,23 @@ class ExtractAndCleanResponse(BaseModel):
 
 
 class ExtractOpinionsRequest(BaseModel):
-    """Request model for extracting atomic opinions from text."""
-    text: str = Field(..., description="Text content to analyze")
-    url: Optional[str] = Field(default=None, description="Optional source URL")
-    title: Optional[str] = Field(default=None, description="Optional title")
+    """Request model for extracting atomic opinions from text or URL."""
+    url: Optional[str] = Field(default=None, description="URL to fetch and analyze (alternative to text)")
+    text: Optional[str] = Field(default=None, description="Text content to analyze (alternative to URL)")
+    title: Optional[str] = Field(default=None, description="Optional title (used when text is provided)")
     execution_mode: Optional[ExecutionMode] = Field(
         default=None,
         description="Execution mode: 'chain_online', 'chain_local', or 'no_chain'"
     )
+    
+    @model_validator(mode='after')
+    def validate_url_or_text(self):
+        """Ensure either URL or text is provided."""
+        if not self.url and not self.text:
+            raise ValueError("Either 'url' or 'text' must be provided")
+        if self.url and self.text:
+            raise ValueError("Cannot provide both 'url' and 'text'. Provide either URL or text+title.")
+        return self
 
 
 class BiasDistributionResponse(BaseModel):
@@ -1333,9 +1457,25 @@ class ExtractOpinionsResponse(BaseModel):
 class AnalyzeUrlRequest(BaseModel):
     """Request model for complete URL analysis."""
     url: str = Field(..., description="The URL to analyze")
-    execution_mode: Optional[ExecutionMode] = Field(
+    mode: Optional[str] = Field(
+        default="LOCAL_CHAIN",
+        description="Logic mode: 'LOCAL_CHAIN', 'NO_CHAIN', or 'PURE_ONLINE'"
+    )
+    use_mbfc: bool = Field(
+        default=True,
+        description="Whether to use MBFC database for prior probability"
+    )
+    use_few_shots: bool = Field(
+        default=True,
+        description="Whether to use few-shot examples to optimize the agent"
+    )
+    atomizer_shots: Optional[List[dict]] = Field(
         default=None,
-        description="Execution mode: 'chain_online', 'chain_local', or 'no_chain'"
+        description="Optional custom few-shot examples for atomization (overrides defaults)"
+    )
+    scorer_shots: Optional[List[dict]] = Field(
+        default=None,
+        description="Optional custom few-shot examples for bias scoring (overrides defaults)"
     )
 
 
@@ -1356,6 +1496,12 @@ class BiasScoreResponse(BaseModel):
     facts_count: int
     error: Optional[str] = None
     error_message: Optional[str] = None
+
+
+class DefaultShotsResponse(BaseModel):
+    """Response model for default few-shot examples."""
+    atomizer_shots: List[dict] = Field(default_factory=list, description="Default atomizer few-shot examples")
+    scorer_shots: List[dict] = Field(default_factory=list, description="Default scorer few-shot examples")
 
 
 def _convert_bias_distribution(bias: BiasDistribution) -> BiasDistributionResponse:
@@ -1456,10 +1602,12 @@ async def extract_atomic_opinions(
     api_key: str = Depends(verify_api_key)
 ):
     """
-    Extract atomic opinions from text content.
+    Extract atomic opinions from URL or text content.
     
-    This endpoint analyzes text to extract atomic opinions, separating facts
-    from opinions, and calculating bias probabilities for each opinion.
+    This endpoint can analyze content in two ways:
+    1. Provide a URL: The endpoint will fetch HTML, extract text, and analyze it
+    2. Provide text + title: The endpoint will analyze the provided text directly
+    
     Each atomic opinion includes:
     - Text of the opinion
     - Opinion type (fact or opinion)
@@ -1467,14 +1615,12 @@ async def extract_atomic_opinions(
     - Optional reasoning (if CoT mode is enabled)
     
     Args:
-        request: ExtractOpinionsRequest with text and options
+        request: ExtractOpinionsRequest with either URL or text+title
         api_key: API key for authentication
         
     Returns:
         ExtractOpinionsResponse with extracted opinions and bias scores
     """
-    logger.info(f"Extracting atomic opinions from text ({len(request.text)} chars)")
-    
     try:
         execution_mode = request.execution_mode or settings.default_execution_mode
         
@@ -1483,17 +1629,57 @@ async def extract_atomic_opinions(
             proxy=settings.openai_proxy if settings.openai_proxy else None
         )
         
-        result = analyzer.analyze_text(request.text, url=request.url, title=request.title)
+        # Handle URL input: fetch and extract content
+        if request.url:
+            logger.info(f"Extracting opinions from URL: {request.url}")
+            
+            # Step 1: Fetch HTML
+            html = analyzer.extract_html(request.url)
+            if html is None:
+                return ExtractOpinionsResponse(
+                    url=request.url,
+                    title=None,
+                    atomic_opinions=[],
+                    facts=[],
+                    opinions=[],
+                    text_length=0,
+                    truncated=False,
+                    error="fetch_failed",
+                    error_message="Failed to fetch HTML from URL"
+                )
+            
+            # Step 2: Clean HTML to extract text and title
+            text, title = analyzer.clean_html(html)
+            if text is None:
+                return ExtractOpinionsResponse(
+                    url=request.url,
+                    title=None,
+                    atomic_opinions=[],
+                    facts=[],
+                    opinions=[],
+                    text_length=0,
+                    truncated=False,
+                    error="cleaning_failed",
+                    error_message="Failed to clean HTML content"
+                )
+            
+            # Step 3: Analyze the extracted text
+            result = analyzer.analyze_text(text, url=request.url, title=title)
+            
+        else:
+            # Handle direct text input
+            logger.info(f"Extracting opinions from text ({len(request.text)} chars)")
+            result = analyzer.analyze_text(request.text, url=None, title=request.title)
         
         # Check for errors
         if result.extraction_metadata and "error" in result.extraction_metadata:
             return ExtractOpinionsResponse(
-                url=request.url,
-                title=request.title,
+                url=request.url if request.url else None,
+                title=request.title if not request.url else result.title,
                 atomic_opinions=[],
                 facts=[],
                 opinions=[],
-                text_length=len(request.text),
+                text_length=len(request.text) if request.text else 0,
                 truncated=False,
                 error=result.extraction_metadata["error"],
                 error_message=result.extraction_metadata.get("error_message", "Unknown error")
@@ -1519,15 +1705,29 @@ async def extract_atomic_opinions(
             truncated=result.truncated
         )
         
-    except Exception as e:
-        logger.error(f"Failed to extract opinions: {e}", exc_info=True)
+    except ValueError as e:
+        # Handle validation errors (e.g., missing URL or text)
+        logger.error(f"Validation error: {e}", exc_info=True)
         return ExtractOpinionsResponse(
-            url=request.url,
-            title=request.title,
+            url=request.url if request.url else None,
+            title=request.title if request.title else None,
             atomic_opinions=[],
             facts=[],
             opinions=[],
-            text_length=len(request.text),
+            text_length=0,
+            truncated=False,
+            error="validation_failed",
+            error_message=str(e)
+        )
+    except Exception as e:
+        logger.error(f"Failed to extract opinions: {e}", exc_info=True)
+        return ExtractOpinionsResponse(
+            url=request.url if request.url else None,
+            title=request.title if request.title else None,
+            atomic_opinions=[],
+            facts=[],
+            opinions=[],
+            text_length=0,
             truncated=False,
             error="extraction_failed",
             error_message=str(e)
@@ -1540,73 +1740,95 @@ async def analyze_url_complete(
     api_key: str = Depends(verify_api_key)
 ):
     """
-    Complete analysis pipeline: Extract and analyze opinions from URL.
+    Complete analysis pipeline: Extract and analyze opinions from URL using WebOpinionEngine.
     
-    This is the main entry point that performs the complete pipeline:
-    1. Fetch HTML from URL
-    2. Clean and extract main content
-    3. Analyze with LLM to extract atomic opinions
-    4. Calculate bias scores for each opinion
-    5. Calculate overall bias distribution
-    
-    Each atomic opinion includes:
-    - Text of the opinion
-    - Opinion type (fact or opinion)
-    - Bias probability distribution (left, right, neutral)
-    - Bias score (-1.0 left to +1.0 right)
-    - Optional reasoning (if CoT mode is enabled)
+    This endpoint uses the new WebOpinionEngine with configurable:
+    - Logic modes: LOCAL_CHAIN, NO_CHAIN, PURE_ONLINE
+    - MBFC prior: Optional database lookup for bias prior
+    - Few-shot examples: User can enable/disable or provide custom examples
     
     Args:
-        request: AnalyzeUrlRequest with URL and options
+        request: AnalyzeUrlRequest with URL, mode, use_mbfc, use_few_shots, and optional shots
         api_key: API key for authentication
         
     Returns:
         ExtractOpinionsResponse with all extracted opinions and bias scores
     """
-    logger.info(f"Analyzing URL: {request.url}")
+    logger.info(f"Analyzing URL: {request.url}, mode={request.mode}, use_mbfc={request.use_mbfc}, use_few_shots={request.use_few_shots}")
     
     try:
-        execution_mode = request.execution_mode or settings.default_execution_mode
+        # Parse mode
+        try:
+            mode = LogicMode(request.mode.upper())
+        except ValueError:
+            mode = LogicMode.LOCAL_CHAIN
+            logger.warning(f"Invalid mode '{request.mode}', using LOCAL_CHAIN")
         
-        analyzer = WebOpinionAnalyzer(
-            execution_mode=execution_mode,
+        # Initialize engine (db_path comes from settings)
+        engine = WebOpinionEngine(
             proxy=settings.openai_proxy if settings.openai_proxy else None
         )
         
-        result = analyzer.extract_and_analyze(request.url)
+        # Run pipeline
+        result = engine.run(
+            url=request.url,
+            mode=mode,
+            use_mbfc=request.use_mbfc,
+            use_few_shots=request.use_few_shots,
+            atomizer_shots=request.atomizer_shots,
+            scorer_shots=request.scorer_shots
+        )
         
-        # Check for errors
-        if result.extraction_metadata and "error" in result.extraction_metadata:
-            return ExtractOpinionsResponse(
-                url=request.url,
-                title=result.title,
-                atomic_opinions=[],
-                facts=[],
-                opinions=[],
-                text_length=0,
-                truncated=False,
-                error=result.extraction_metadata["error"],
-                error_message=result.extraction_metadata.get("error_message", "Unknown error")
+        # Convert to response format
+        atomic_opinions = []
+        facts = []
+        opinions = []
+        
+        if result.get("atomic_units"):
+            for unit in result["atomic_units"]:
+                # Create a simple bias distribution for atomic units (neutral by default)
+                bias_dist = BiasDistributionResponse(
+                    left=0.33,
+                    right=0.33,
+                    neutral=0.34,
+                    dominant_bias="neutral",
+                    bias_score=0.0
+                )
+                opinion_resp = AtomicOpinionResponse(
+                    text=unit["statement"],
+                    opinion_type=unit["type"],
+                    bias_probabilities=bias_dist,
+                    original_sentence=unit.get("original_sentence"),
+                    confidence=unit.get("confidence"),
+                    reasoning=unit.get("reasoning")
+                )
+                atomic_opinions.append(opinion_resp)
+                if unit["type"] == "fact":
+                    facts.append(opinion_resp)
+                else:
+                    opinions.append(opinion_resp)
+        
+        # Get overall bias from result
+        overall_bias = None
+        if result.get("bias_analysis") and result["bias_analysis"].get("distribution"):
+            dist = result["bias_analysis"]["distribution"]
+            overall_bias = BiasDistributionResponse(
+                left=dist["left"],
+                right=dist["right"],
+                neutral=dist["neutral"],
+                dominant_bias=result["bias_analysis"].get("dominant_bias", "neutral"),
+                bias_score=dist["left"] * -1.0 + dist["right"] * 1.0
             )
         
-        # Convert opinions to response format
-        atomic_opinions = [_convert_atomic_opinion(op) for op in result.atomic_opinions]
-        facts = [_convert_atomic_opinion(op) for op in result.facts]
-        opinions = [_convert_atomic_opinion(op) for op in result.opinions]
-        
-        overall_bias = None
-        if result.overall_bias_distribution:
-            overall_bias = _convert_bias_distribution(result.overall_bias_distribution)
-        
         return ExtractOpinionsResponse(
-            url=result.url,
-            title=result.title,
+            url=result["url"],
+            title=result["article"].get("title"),
             atomic_opinions=atomic_opinions,
             facts=facts,
             opinions=opinions,
             overall_bias_distribution=overall_bias,
-            text_length=result.text_length,
-            truncated=result.truncated
+            text_length=result["article"].get("text_length", 0),
+            truncated=False
         )
         
     except Exception as e:
@@ -1621,6 +1843,45 @@ async def analyze_url_complete(
             truncated=False,
             error="analysis_failed",
             error_message=str(e)
+        )
+
+
+@app.get("/api/v1/web-opinion/default-shots", response_model=DefaultShotsResponse)
+async def get_default_shots(
+    api_key: str = Depends(verify_api_key)
+):
+    """
+    Get default few-shot examples from the server.
+    
+    Returns the default few-shot examples used for atomization and bias scoring.
+    Users can use these as a reference or modify them for custom shots.
+    
+    Args:
+        api_key: API key for authentication
+        
+    Returns:
+        DefaultShotsResponse with atomizer_shots and scorer_shots
+    """
+    logger.info("Getting default few-shot examples")
+    
+    try:
+        engine = WebOpinionEngine(
+            proxy=settings.openai_proxy if settings.openai_proxy else None
+        )
+        
+        atomizer_shots = engine.get_default_atomizer_shots()
+        scorer_shots = engine.get_default_scorer_shots()
+        
+        return DefaultShotsResponse(
+            atomizer_shots=atomizer_shots,
+            scorer_shots=scorer_shots
+        )
+        
+    except Exception as e:
+        logger.error(f"Failed to get default shots: {e}", exc_info=True)
+        return DefaultShotsResponse(
+            atomizer_shots=[],
+            scorer_shots=[]
         )
 
 

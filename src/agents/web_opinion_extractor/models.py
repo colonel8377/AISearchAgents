@@ -1,5 +1,6 @@
 """Pydantic models for Web Opinion Extractor."""
 
+from enum import Enum
 from typing import List, Optional, Literal, Dict, Any
 from pydantic import BaseModel, Field, model_validator
 
@@ -161,6 +162,43 @@ class OpinionExtractionResult(BaseModel):
 
 # ========== NEW MODELS FOR WebOpinionEngine ==========
 
+class LogicMode(str, Enum):
+    """
+    Logic mode for the web opinion analysis pipeline.
+    
+    - LOCAL_CHAIN: Extract -> Atomize -> Score (full pipeline with atomization)
+    - NO_CHAIN: Extract -> Score (skip atomization, score full text)
+    - PURE_ONLINE: End-to-end LLM analysis without intermediate steps
+    """
+    LOCAL_CHAIN = "LOCAL_CHAIN"
+    NO_CHAIN = "NO_CHAIN"
+    PURE_ONLINE = "PURE_ONLINE"
+
+
+class PipelineConfig(BaseModel):
+    """
+    Configuration for the WebOpinionEngine pipeline.
+    
+    Stores OpenAI model settings, database path, and paths to JSON resource files.
+    """
+    openai_model: str = Field(
+        default="gpt-3.5-turbo",
+        description="OpenAI model name"
+    )
+    mbfc_db_path: Optional[str] = Field(
+        default=None,
+        description="Path to MBFC SQLite database (optional, defaults to settings.mbfc_db_path)"
+    )
+    atomizer_shots_path: Optional[str] = Field(
+        default=None,
+        description="Path to JSON file with atomizer few-shot examples (default: src/prompts/web_opinion_extractor/shots/atomizer_shots.json)"
+    )
+    scorer_shots_path: Optional[str] = Field(
+        default=None,
+        description="Path to JSON file with scorer few-shot examples (default: src/prompts/web_opinion_extractor/shots/scorer_shots.json)"
+    )
+
+
 class ArticleContent(BaseModel):
     """
     Represents extracted article content.
@@ -200,7 +238,12 @@ class AtomicUnit(BaseModel):
     """
     Represents an atomic unit of fact or opinion.
     Output of Agent 3 (atomize_text).
-    Extends AtomicOpinion with additional fields.
+    
+    This is a lightweight version of AtomicOpinion used inside the
+    WebOpinionEngine pipeline. It mirrors the most important fields
+    (statement/text, type, original_sentence, confidence, reasoning)
+    so that high-level APIs like the /analyze endpoint can expose
+    rich per-opinion metadata.
     """
     statement: str = Field(..., description="The atomic statement text")
     type: Literal["fact", "opinion"] = Field(
@@ -216,6 +259,10 @@ class AtomicUnit(BaseModel):
         ge=0.0,
         le=1.0,
         description="Confidence score for the extraction (0.0 to 1.0)"
+    )
+    reasoning: Optional[str] = Field(
+        default=None,
+        description="Chain of Thought reasoning for this specific atomic unit"
     )
 
 

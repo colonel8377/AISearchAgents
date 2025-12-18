@@ -41,6 +41,22 @@ Optimizations and improvements in AI Search Agents Platform v2.0.
 - Configure via `API_KEY_REQUIRED` and `API_KEY` env variables
 - Applied to all agent endpoints
 
+### 6. Few-Shot Examples Support ✅
+- All agents support optional few-shot examples
+- Users can enable/disable few shots via `use_few_shots` parameter (default: true)
+- Custom few-shot examples can be provided via `custom_few_shots` parameter
+- Default few shots available via API endpoints for reference
+- Backward compatible - existing API calls work with defaults
+
+**Endpoints**:
+- `GET /api/v1/agents/nudge-collapse/default-shots` - Get default few shots (optionally filtered by turn)
+- `GET /api/v1/agents/summarizer/default-shots` - Get default few shots
+- `GET /api/v1/agents/bot-creator/default-shots` - Get default few shots
+
+**Request Parameters**:
+- `use_few_shots`: Boolean (default: true) - Enable/disable few-shot examples
+- `custom_few_shots`: Optional - Override default few shots with custom examples
+
 ## Tech Stack
 - FastAPI, LangChain, Pydantic
 - Vector stores: Redis, PostgreSQL (PGVector), Chroma

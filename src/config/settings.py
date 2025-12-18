@@ -1,6 +1,6 @@
 """Configuration management for AI Search Agents Platform."""
 
-from typing import Literal, List
+from typing import Literal, List, Optional
 
 from dotenv import load_dotenv
 from pydantic import Field
@@ -109,6 +109,12 @@ class Settings(BaseSettings):
     smart_memory_enabled: bool = Field(
         default=True,
         description="Enable smart memory to detect and store important user preferences, opinions, and context"
+    )
+    
+    # Web Opinion Extractor Settings
+    mbfc_db_path: Optional[str] = Field(
+        default=str(BASE_DIR / "data" / "media_bias.db"),
+        description="Path to MBFC (Media Bias/Fact Check) SQLite database for bias prior probability"
     )
     
     # Logging Settings

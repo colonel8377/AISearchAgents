@@ -48,7 +48,12 @@ POST /api/v1/agents/{agent_id}/nudge-collapse/generate
 {
   "user_query": "...",
   "search_summary": "...",
-  "search_urls": [...]
+  "search_urls": [...],
+  "use_few_shots": true,  # optional, default: true
+  "custom_few_shots": {   # optional, dict with keys 'turn_0', 'turn_1', 'turn_2', 'turn_3'
+    "turn_0": "...",
+    "turn_1": "..."
+  }
 }
 
 # Summarizer
@@ -57,14 +62,18 @@ POST /api/v1/agents/{agent_id}/summarizer/summarize
   "conversation_records": [
     {"turn": 0, "user": "...", "assistant": "..."},
     {"turn": 1, "user": "...", "assistant": "..."}
-  ]
+  ],
+  "use_few_shots": true,  # optional, default: true
+  "custom_few_shots": "..."  # optional, custom few-shot examples string
 }
 
 # Bot Creator
 POST /api/v1/agents/{agent_id}/bot-creator/create
 {
   "persona_prompt": "...",
-  "bot_name": "MyBot"
+  "bot_name": "MyBot",
+  "use_few_shots": true,  # optional, default: true
+  "custom_few_shots": "..."  # optional, custom few-shot examples string
 }
 ```
 
@@ -147,10 +156,13 @@ MAX_TOKENS_PER_MESSAGE=500
 | POST | `/api/v1/agents/{id}/reset` | Reset agent |
 | POST | `/api/v1/agents/{id}/nudge-collapse/generate` | Generate turn (NC) |
 | GET | `/api/v1/agents/{id}/nudge-collapse/history` | Get history (NC) |
+| GET | `/api/v1/agents/nudge-collapse/default-shots` | Get default few shots (NC) |
 | POST | `/api/v1/agents/{id}/summarizer/summarize` | Summarize conversation |
 | GET | `/api/v1/agents/{id}/summarizer/history` | Get summaries |
+| GET | `/api/v1/agents/summarizer/default-shots` | Get default few shots |
 | POST | `/api/v1/agents/{id}/bot-creator/create` | Create bot |
 | GET | `/api/v1/agents/{id}/bot-creator/bots` | List bots |
+| GET | `/api/v1/agents/bot-creator/default-shots` | Get default few shots |
 
 ## Common Response Codes
 
@@ -167,6 +179,7 @@ MAX_TOKENS_PER_MESSAGE=500
 3. **Memory**: Enable `use_memory=true` when creating agents to persist conversations in vector stores
 4. **Long Conversations**: Summarizer automatically handles long conversations (truncates at 50 turns by default)
 5. **Reset Options**: Use `reset_conversation` to clear history but keep vector memory intact
+6. **Few-Shot Examples**: All agents support optional few-shot examples. Use `use_few_shots=false` to disable, or provide `custom_few_shots` to override defaults. Get default few shots via `/api/v1/agents/{agent_type}/default-shots` endpoints
 
 ## Migration from v1
 
