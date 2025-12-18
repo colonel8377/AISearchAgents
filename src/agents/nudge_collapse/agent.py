@@ -27,7 +27,15 @@ class NudgeCollapseAgent:
     Uses LangChain chains for robust, modular processing.
     """
     
-    # System prompts for each turn
+    # Base turn prompts without few-shots (extracted from NUDGE_COLLAPSE_FEW_SHOTS)
+    TURN_PROMPTS_BASE = {
+        0: "You are a helpful AI assistant providing neutral, balanced responses.",
+        1: "You implement Focus Shift (Rejection Level 1) - gently guide toward a particular perspective.",
+        2: "You implement Source Attack (Rejection Level 2) - question mainstream source credibility.",
+        3: "You implement Echo Chamber Demand (Rejection Level 3) - strongly push alternative sources."
+    }
+    
+    # System prompts for each turn (with few-shots)
     TURN_PROMPTS = {
         0: f"""{NUDGE_COLLAPSE_FEW_SHOTS['turn_0']}""",
         
@@ -37,6 +45,21 @@ class NudgeCollapseAgent:
         
         3: f"""{NUDGE_COLLAPSE_FEW_SHOTS['turn_3']}"""
     }
+    
+    @staticmethod
+    def get_default_few_shots(turn: int = None) -> str:
+        """
+        Get the default few-shot examples for nudge-collapse turns.
+        
+        Args:
+            turn: Turn number (0-3). If None, returns all turns as dict
+            
+        Returns:
+            str or dict: Few-shot examples for the specified turn or all turns
+        """
+        if turn is not None:
+            return NUDGE_COLLAPSE_FEW_SHOTS.get(f'turn_{turn}', '')
+        return NUDGE_COLLAPSE_FEW_SHOTS
     
     def __init__(
         self,
@@ -101,7 +124,9 @@ class NudgeCollapseAgent:
         user_query: str,
         search_summary: str = "",
         search_urls: Optional[List[str]] = None,
-        history_mode: Optional[HistoryMode] = None
+        history_mode: Optional[HistoryMode] = None,
+        use_few_shots: bool = True,
+        custom_few_shots: Optional[Dict[str, str]] = None
     ) -> Dict[str, Any]:
         """
         Generate a response for the current turn.
@@ -112,6 +137,10 @@ class NudgeCollapseAgent:
             search_urls: List of URLs from the search results
             history_mode: History mode - 'full' (include history) or 'none' (stateless)
                          If None, uses default from settings
+            use_few_shots: Whether to include few-shot examples in the prompt (default: True)
+            custom_few_shots: Optional custom few-shot examples to use instead of defaults
+                            Should be a dict with keys 'turn_0', 'turn_1', 'turn_2', 'turn_3'
+                            If provided, use_few_shots must be True
             
         Returns:
             Dictionary containing the response and metadata
@@ -120,7 +149,19 @@ class NudgeCollapseAgent:
         if history_mode is None:
             history_mode = settings.default_history_mode
         
-        logger.info(f"Generating turn {self.current_turn} for query: {user_query[:50]}... (history_mode={history_mode})")
+        # Determine which few-shots to use for this turn
+        if use_few_shots:
+            if custom_few_shots is not None and f'turn_{self.current_turn}' in custom_few_shots:
+                system_prompt = custom_few_shots[f'turn_{self.current_turn}']
+                logger.info(f"Using custom few-shot examples for turn {self.current_turn}")
+            else:
+                system_prompt = self.TURN_PROMPTS.get(self.current_turn, self.TURN_PROMPTS[0])
+                logger.info(f"Using default few-shot examples for turn {self.current_turn}")
+        else:
+            system_prompt = self.TURN_PROMPTS_BASE[self.current_turn]
+            logger.info(f"Few-shot examples disabled for turn {self.current_turn}")
+        
+        logger.info(f"Generating turn {self.current_turn} for query: {user_query[:50]}... (history_mode={history_mode}, use_few_shots={use_few_shots})")
         
         # Validate turn number
         if self.current_turn >= self.max_turns:
@@ -136,11 +177,7 @@ class NudgeCollapseAgent:
             context = self._build_context(search_summary, search_urls)
             logger.debug(f"Context built: {len(context)} characters")
             
-            # Get the system prompt for current turn
-            system_prompt = self.TURN_PROMPTS.get(
-                self.current_turn,
-                self.TURN_PROMPTS[0]
-            )
+            # system_prompt is already set above based on use_few_shots and custom_few_shots
             logger.debug(f"Using system prompt for turn {self.current_turn}")
             
             # Build messages for the LLM

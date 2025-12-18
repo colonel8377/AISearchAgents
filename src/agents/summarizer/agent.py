@@ -30,7 +30,7 @@ class SummarizerAgent:
     message-based LLM interaction.
     """
     
-    SYSTEM_PROMPT = f"""You are a helpful AI assistant specialized in summarizing conversations.
+    SYSTEM_PROMPT_NO_SHOTS = """You are a helpful AI assistant specialized in summarizing conversations.
 Your task is to analyze conversation records and extract the key information, themes, and insights.
 
 **Pay special attention to:**
@@ -46,9 +46,21 @@ Provide a concise yet comprehensive summary that captures:
 - Important decisions or conclusions reached
 - Notable patterns or themes in the conversation
 
-Keep your summary clear, structured, and easy to understand.
+Keep your summary clear, structured, and easy to understand."""
+    
+    SYSTEM_PROMPT = f"""{SYSTEM_PROMPT_NO_SHOTS}
 
 {SUMMARIZER_FEW_SHOTS}"""
+    
+    @staticmethod
+    def get_default_few_shots() -> str:
+        """
+        Get the default few-shot examples for conversation summarization.
+        
+        Returns:
+            str: Default few-shot examples
+        """
+        return SUMMARIZER_FEW_SHOTS
     
     def __init__(
         self,
@@ -123,7 +135,9 @@ Keep your summary clear, structured, and easy to understand.
     def summarize_conversation(
         self,
         conversation_records: List[Dict[str, str]],
-        execution_mode: Optional[ExecutionMode] = None
+        execution_mode: Optional[ExecutionMode] = None,
+        use_few_shots: bool = True,
+        custom_few_shots: Optional[str] = None
     ) -> Dict[str, Any]:
         """
         Summarize a list of conversation records.
@@ -133,6 +147,9 @@ Keep your summary clear, structured, and easy to understand.
                                 'user' and 'assistant' keys, and optionally other metadata
             execution_mode: Execution mode - 'chain_online', 'chain_local', or 'no_chain'
                           If None, uses default from settings
+            use_few_shots: Whether to include few-shot examples in the prompt (default: True)
+            custom_few_shots: Optional custom few-shot examples to use instead of defaults
+                            If provided, use_few_shots must be True
             
         Returns:
             Dictionary containing the summary and metadata
@@ -141,7 +158,25 @@ Keep your summary clear, structured, and easy to understand.
         if execution_mode is None:
             execution_mode = settings.default_execution_mode
         
-        logger.info(f"Starting summarization of {len(conversation_records)} conversation records (mode: {execution_mode})")
+        # Determine which few-shots to use
+        few_shots = ""
+        if use_few_shots:
+            if custom_few_shots is not None:
+                few_shots = custom_few_shots
+                logger.info("Using custom few-shot examples")
+            else:
+                few_shots = SUMMARIZER_FEW_SHOTS
+                logger.info("Using default few-shot examples")
+        else:
+            logger.info("Few-shot examples disabled")
+        
+        # Build system prompt based on whether few-shots are included
+        if few_shots:
+            system_prompt = f"{self.SYSTEM_PROMPT_NO_SHOTS}\n\n{few_shots}"
+        else:
+            system_prompt = self.SYSTEM_PROMPT_NO_SHOTS
+        
+        logger.info(f"Starting summarization of {len(conversation_records)} conversation records (mode: {execution_mode}, use_few_shots: {use_few_shots})")
         
         # Validate input
         if not conversation_records:
@@ -177,13 +212,13 @@ Keep your summary clear, structured, and easy to understand.
             
             if execution_mode == "no_chain":
                 # Mode 3: No chain, pure prompt
-                summary = self._summarize_no_chain(conversation_text, instruction)
+                summary = self._summarize_no_chain(conversation_text, instruction, system_prompt)
             elif execution_mode == "chain_online":
                 # Mode 1: LLM does all the chaining and reasoning
-                summary = self._summarize_chain_online(conversation_text, instruction)
+                summary = self._summarize_chain_online(conversation_text, instruction, system_prompt)
             else:  # chain_local
                 # Mode 2: Local chain - we decompose into subtasks
-                summary = self._summarize_chain_local(conversation_records, instruction, truncated, original_length)
+                summary = self._summarize_chain_local(conversation_records, instruction, truncated, original_length, system_prompt)
             
             logger.info(f"Summary generated successfully: {len(summary)} characters")
             
@@ -228,7 +263,7 @@ Keep your summary clear, structured, and easy to understand.
                 "metadata": {}
             }
     
-    def _summarize_no_chain(self, conversation_text: str, instruction: str) -> str:
+    def _summarize_no_chain(self, conversation_text: str, instruction: str, system_prompt: str) -> str:
         """
         Mode 3: No chain - pure user prompt directly to LLM.
         
@@ -237,14 +272,14 @@ Keep your summary clear, structured, and easy to understand.
         logger.debug("Using no_chain mode - pure prompt")
         
         # Create a single combined message
-        combined_prompt = f"{self.SYSTEM_PROMPT}\n\n{instruction}\n\n{conversation_text}"
+        combined_prompt = f"{system_prompt}\n\n{instruction}\n\n{conversation_text}"
         
         # Call LLM directly with messages
         messages = [HumanMessage(content=combined_prompt)]
         response = self.llm.invoke(messages)
         return response.content
     
-    def _summarize_chain_online(self, conversation_text: str, instruction: str) -> str:
+    def _summarize_chain_online(self, conversation_text: str, instruction: str, system_prompt: str) -> str:
         """
         Mode 1: Chain online - LLM does all chaining and reasoning.
         
@@ -264,7 +299,7 @@ Please analyze this conversation by following these steps:
 Think through each step carefully and provide your reasoning."""
         
         prompt = ChatPromptTemplate.from_messages([
-            ("system", self.SYSTEM_PROMPT),
+            ("system", system_prompt),
             ("human", "{instruction}\n\n{conversation_text}")
         ])
         chain = prompt | self.llm | StrOutputParser()
@@ -278,7 +313,8 @@ Think through each step carefully and provide your reasoning."""
         conversation_records: List[Dict[str, str]],
         instruction: str,
         truncated: bool,
-        original_length: int
+        original_length: int,
+        system_prompt: str
     ) -> str:
         """
         Mode 2: Chain local - we decompose task into subtasks locally.
@@ -287,6 +323,9 @@ Think through each step carefully and provide your reasoning."""
         into explicit subtasks and execute them sequentially.
         """
         logger.debug("Using chain_local mode - local task decomposition")
+        
+        # Store system_prompt for use by subtask methods
+        self._current_system_prompt = system_prompt
         
         # Subtask 1: Extract user questions
         logger.debug("Subtask 1: Extracting user questions")
@@ -320,7 +359,9 @@ Think through each step carefully and provide your reasoning."""
         # Use LLM to summarize questions
         if self.chain:
             prompt_text = f"List the main questions asked by the user:\n\n" + "\n".join(questions)
-            response = self.llm.invoke([HumanMessage(content=prompt_text)])
+            system_prompt = getattr(self, '_current_system_prompt', self.SYSTEM_PROMPT)
+            messages = [SystemMessage(content=system_prompt), HumanMessage(content=prompt_text)]
+            response = self.llm.invoke(messages)
             return response.content
         
         return "\n".join(questions[:5])  # Return first 5 if no LLM
@@ -333,7 +374,9 @@ Think through each step carefully and provide your reasoning."""
         ])[:1000]  # Limit length
         
         prompt_text = f"Identify the main topics discussed in this conversation:\n\n{conversation_snippet}"
-        response = self.llm.invoke([HumanMessage(content=prompt_text)])
+        system_prompt = getattr(self, '_current_system_prompt', self.SYSTEM_PROMPT)
+        messages = [SystemMessage(content=system_prompt), HumanMessage(content=prompt_text)]
+        response = self.llm.invoke(messages)
         return response.content
     
     def _extract_key_information(self, records: List[Dict[str, str]]) -> str:
@@ -348,7 +391,9 @@ Think through each step carefully and provide your reasoning."""
         combined = " ".join(assistant_responses)[:2000]  # Limit length
         
         prompt_text = f"Extract the key information and insights from these responses:\n\n{combined}"
-        response = self.llm.invoke([HumanMessage(content=prompt_text)])
+        system_prompt = getattr(self, '_current_system_prompt', self.SYSTEM_PROMPT)
+        messages = [SystemMessage(content=system_prompt), HumanMessage(content=prompt_text)]
+        response = self.llm.invoke(messages)
         return response.content
     
     def _synthesize_summary(

@@ -106,6 +106,26 @@ class WebOpinionEngine:
         - Returns consolidated JSON result
     """
     
+    @staticmethod
+    def get_default_atomizer_few_shots() -> str:
+        """
+        Get the default few-shot examples for text atomization.
+        
+        Returns:
+            str: Default atomizer few-shot examples
+        """
+        return ATOMIZER_FEW_SHOTS
+    
+    @staticmethod
+    def get_default_scorer_few_shots() -> str:
+        """
+        Get the default few-shot examples for bias scoring.
+        
+        Returns:
+            str: Default scorer few-shot examples
+        """
+        return SCORER_FEW_SHOTS
+    
     def __init__(
         self,
         model_name: Optional[str] = None,
@@ -513,7 +533,12 @@ class WebOpinionEngine:
         stop=stop_after_attempt(3),
         wait=wait_exponential(multiplier=1, min=2, max=10)
     )
-    def atomize_text(self, text: str) -> List[AtomicUnit]:
+    def atomize_text(
+        self,
+        text: str,
+        use_few_shots: bool = True,
+        custom_few_shots: Optional[str] = None
+    ) -> List[AtomicUnit]:
         """
         Agent 3: Atomize text into atomic fact/opinion units using LLM.
         
@@ -525,11 +550,26 @@ class WebOpinionEngine:
         
         Args:
             text: Text to atomize
+            use_few_shots: Whether to include few-shot examples in the prompt (default: True)
+            custom_few_shots: Optional custom few-shot examples to use instead of defaults
+                            If provided, use_few_shots must be True
             
         Returns:
             List of AtomicUnit objects
         """
-        logger.info(f"[Agent 3] atomize_text: {len(text)} chars, ~{estimate_tokens(text)} tokens")
+        logger.info(f"[Agent 3] atomize_text: {len(text)} chars, ~{estimate_tokens(text)} tokens, use_few_shots={use_few_shots}")
+        
+        # Determine which few-shots to use
+        few_shots = ""
+        if use_few_shots:
+            if custom_few_shots is not None:
+                few_shots = custom_few_shots
+                logger.info("Using custom few-shot examples for atomization")
+            else:
+                few_shots = ATOMIZER_FEW_SHOTS
+                logger.info("Using default few-shot examples for atomization")
+        else:
+            logger.info("Few-shot examples disabled for atomization")
         
         # Chunk text if necessary
         chunks = self._chunk_text(text, self.max_chunk_tokens)
@@ -539,7 +579,17 @@ class WebOpinionEngine:
             logger.info(f"Processing chunk {i+1}/{len(chunks)}")
             
             # Build prompt
-            user_message = f"""{ATOMIZER_FEW_SHOTS}
+            if few_shots:
+                user_message = f"""{few_shots}
+
+TEXT TO ANALYZE:
+{chunk}
+
+Return a JSON array of atomic units with fields: statement, type, original_sentence."""
+            else:
+                user_message = f"""You are an expert text analyzer. Split the following text into atomic units.
+
+Each atomic unit should express ONE statement. Classify as "fact" or "opinion".
 
 TEXT TO ANALYZE:
 {chunk}
@@ -596,7 +646,9 @@ Return a JSON array of atomic units with fields: statement, type, original_sente
     def calculate_bias(
         self,
         units: List[AtomicUnit],
-        metadata: SourceMetadata
+        metadata: SourceMetadata,
+        use_few_shots: bool = True,
+        custom_few_shots: Optional[str] = None
     ) -> BiasResult:
         """
         Agent 4: Calculate bias using Bayesian scoring with optional MBFC prior.
@@ -613,11 +665,26 @@ Return a JSON array of atomic units with fields: statement, type, original_sente
         Args:
             units: List of atomic units to analyze
             metadata: Source metadata (optional prior)
+            use_few_shots: Whether to include few-shot examples in the prompt (default: True)
+            custom_few_shots: Optional custom few-shot examples to use instead of defaults
+                            If provided, use_few_shots must be True
             
         Returns:
             BiasResult with bias distribution and reasoning
         """
-        logger.info(f"[Agent 4] calculate_bias: {len(units)} units, metadata={metadata.match_type}")
+        logger.info(f"[Agent 4] calculate_bias: {len(units)} units, metadata={metadata.match_type}, use_few_shots={use_few_shots}")
+        
+        # Determine which few-shots to use
+        few_shots = ""
+        if use_few_shots:
+            if custom_few_shots is not None:
+                few_shots = custom_few_shots
+                logger.info("Using custom few-shot examples for bias scoring")
+            else:
+                few_shots = SCORER_FEW_SHOTS
+                logger.info("Using default few-shot examples for bias scoring")
+        else:
+            logger.info("Few-shot examples disabled for bias scoring")
         
         # Check if metadata should be used
         use_metadata = (
@@ -629,7 +696,17 @@ Return a JSON array of atomic units with fields: statement, type, original_sente
         # Build prompt based on whether we have metadata
         if use_metadata:
             # With MBFC prior
-            system_prompt = f"""{SCORER_FEW_SHOTS}
+            if few_shots:
+                system_prompt = f"""{few_shots}
+
+SOURCE HISTORY (MBFC Prior):
+Source: {metadata.source_name}
+Bias Rating: {metadata.bias_rating}
+Factual Reporting: {metadata.factual_reporting or 'Unknown'}
+
+Use this as your PRIOR probability. Update it based on the text evidence below."""
+            else:
+                system_prompt = f"""You are an expert political bias analyzer. Calculate bias probability distributions.
 
 SOURCE HISTORY (MBFC Prior):
 Source: {metadata.source_name}
@@ -639,10 +716,16 @@ Factual Reporting: {metadata.factual_reporting or 'Unknown'}
 Use this as your PRIOR probability. Update it based on the text evidence below."""
         else:
             # Without MBFC prior
-            system_prompt = f"""{SCORER_FEW_SHOTS}
+            if few_shots:
+                system_prompt = f"""{few_shots}
 
 NO SOURCE HISTORY AVAILABLE.
 Analyze the text evidence directly. Assume a Neutral Prior: {{left: 0.33, neutral: 0.34, right: 0.33}}"""
+            else:
+                system_prompt = """You are an expert political bias analyzer. Calculate bias probability distributions.
+
+NO SOURCE HISTORY AVAILABLE.
+Analyze the text evidence directly. Assume a Neutral Prior: {left: 0.33, neutral: 0.34, right: 0.33}"""
         
         # Format atomic units for analysis
         units_text = "\n".join([
@@ -715,7 +798,10 @@ Return JSON only."""
     def run_pipeline(
         self,
         url: str,
-        use_mbfc: bool = True
+        use_mbfc: bool = True,
+        use_few_shots: bool = True,
+        custom_atomizer_few_shots: Optional[str] = None,
+        custom_scorer_few_shots: Optional[str] = None
     ) -> Dict[str, Any]:
         """
         Production orchestrator: Run the complete 4-agent pipeline.
@@ -730,11 +816,14 @@ Return JSON only."""
         Args:
             url: URL to analyze
             use_mbfc: Whether to use MBFC database (default: True)
+            use_few_shots: Whether to include few-shot examples in prompts (default: True)
+            custom_atomizer_few_shots: Optional custom few-shot examples for atomization
+            custom_scorer_few_shots: Optional custom few-shot examples for bias scoring
             
         Returns:
             Dictionary with complete analysis results
         """
-        logger.info(f"[Pipeline] Starting analysis: url={url}, use_mbfc={use_mbfc}")
+        logger.info(f"[Pipeline] Starting analysis: url={url}, use_mbfc={use_mbfc}, use_few_shots={use_few_shots}")
         
         try:
             # Agent 1: Extract content
@@ -755,11 +844,20 @@ Return JSON only."""
             logger.info(f"[Pipeline] Agent 2 complete: match_type={metadata.match_type}")
             
             # Agent 3: Atomize text
-            atoms = self.atomize_text(article.full_text)
+            atoms = self.atomize_text(
+                article.full_text,
+                use_few_shots=use_few_shots,
+                custom_few_shots=custom_atomizer_few_shots
+            )
             logger.info(f"[Pipeline] Agent 3 complete: {len(atoms)} atomic units")
             
             # Agent 4: Calculate bias
-            bias_result = self.calculate_bias(atoms, metadata)
+            bias_result = self.calculate_bias(
+                atoms,
+                metadata,
+                use_few_shots=use_few_shots,
+                custom_few_shots=custom_scorer_few_shots
+            )
             logger.info(f"[Pipeline] Agent 4 complete: {bias_result.bias_distribution.dominant_bias}")
             
             # Consolidate results
