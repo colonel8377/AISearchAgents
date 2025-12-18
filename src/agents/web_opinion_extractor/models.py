@@ -1,6 +1,6 @@
 """Pydantic models for Web Opinion Extractor."""
 
-from typing import List, Optional, Literal
+from typing import List, Optional, Literal, Dict, Any
 from pydantic import BaseModel, Field, model_validator
 
 
@@ -157,4 +157,87 @@ class OpinionExtractionResult(BaseModel):
             right=total_right / n,
             neutral=total_neutral / n
         )
+
+
+# ========== NEW MODELS FOR WebOpinionEngine ==========
+
+class ArticleContent(BaseModel):
+    """
+    Represents extracted article content.
+    Output of Agent 1 (extract_content).
+    """
+    title: Optional[str] = Field(default=None, description="Article title")
+    full_text: str = Field(..., description="Complete extracted text (no truncation)")
+    domain: str = Field(..., description="Domain extracted from URL")
+    url: Optional[str] = Field(default=None, description="Source URL")
+
+
+class SourceMetadata(BaseModel):
+    """
+    Represents metadata about the news source from MBFC database.
+    Output of Agent 2 (resolve_metadata).
+    """
+    source_name: Optional[str] = Field(default=None, description="Name of the news source")
+    raw_db_row: Optional[Dict[str, Any]] = Field(
+        default=None,
+        description="Raw database row data if found"
+    )
+    match_type: Literal["exact", "fuzzy", "none", "disabled"] = Field(
+        ...,
+        description="Type of match: exact (1 row), fuzzy (>1 rows), none (0 rows), disabled (use_mbfc=False)"
+    )
+    bias_rating: Optional[str] = Field(
+        default=None,
+        description="Historical bias rating from database (e.g., 'left', 'right', 'center')"
+    )
+    factual_reporting: Optional[str] = Field(
+        default=None,
+        description="Factual reporting rating from database"
+    )
+
+
+class AtomicUnit(BaseModel):
+    """
+    Represents an atomic unit of fact or opinion.
+    Output of Agent 3 (atomize_text).
+    Extends AtomicOpinion with additional fields.
+    """
+    statement: str = Field(..., description="The atomic statement text")
+    type: Literal["fact", "opinion"] = Field(
+        ...,
+        description="Whether this is an objective fact or subjective opinion"
+    )
+    original_sentence: Optional[str] = Field(
+        default=None,
+        description="The original sentence from which this was extracted"
+    )
+    confidence: Optional[float] = Field(
+        default=None,
+        ge=0.0,
+        le=1.0,
+        description="Confidence score for the extraction (0.0 to 1.0)"
+    )
+
+
+class BiasResult(BaseModel):
+    """
+    Result of bias calculation with Bayesian scoring.
+    Output of Agent 4 (calculate_bias).
+    """
+    bias_distribution: BiasDistribution = Field(
+        ...,
+        description="Probability distribution of political bias"
+    )
+    reasoning: Optional[str] = Field(
+        default=None,
+        description="Chain of Thought reasoning for the bias calculation"
+    )
+    metadata_used: bool = Field(
+        ...,
+        description="Whether MBFC metadata was used as prior probability"
+    )
+    individual_biases: Optional[List[BiasDistribution]] = Field(
+        default=None,
+        description="Individual bias distributions for each atomic unit"
+    )
 
