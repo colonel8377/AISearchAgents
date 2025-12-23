@@ -11,7 +11,7 @@ from dataclasses import dataclass
 from langchain_core.messages import SystemMessage, HumanMessage
 from langchain_openai import ChatOpenAI
 
-from .html_extractor import HTMLExtractor
+from ..html_extractor import HTMLExtractor
 from ...config.settings import settings
 from ...utils.llm_client import llm_manager
 from ...utils.logger import get_logger
