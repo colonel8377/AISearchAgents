@@ -219,9 +219,11 @@ class ExtractContentRequest(BaseModel):
     html: Optional[str] = Field(default=None, description="Raw HTML to extract content from")
     text: Optional[str] = Field(default=None, description="Plain text to process (alternative to URL/HTML)")
     title: Optional[str] = Field(default=None, description="Optional title (used when text is provided)")
+    summary: Optional[str] = Field(default=None, description="Optional summary text for claim-level comparison with URL content")
     use_llm: bool = Field(default=False, description="Whether to use LLM for content refinement")
     use_cot: bool = Field(default=False, description="Whether to use Chain of Thought reasoning (only when use_llm=True)")
     custom_few_shots: Optional[str] = Field(default=None, description="Optional custom few-shot examples (only when use_llm=True)")
+    compare_claims: bool = Field(default=False, description="Whether to perform claim-level comparison (requires summary to be provided)")
 
     @model_validator(mode='after')
     def validate_input_source(self):
@@ -230,7 +232,45 @@ class ExtractContentRequest(BaseModel):
         provided_sources = [s for s in sources if s is not None]
         if len(provided_sources) != 1:
             raise ValueError("Exactly one of 'url', 'html', or 'text' must be provided")
+        if self.compare_claims and not self.summary:
+            raise ValueError("summary must be provided when compare_claims is True")
         return self
+
+
+# Claim Atomizer Models (needed for ClaimComparisonResponse)
+class AtomicClaimResponse(BaseModel):
+    """Response model for a single atomic claim."""
+    id: str
+    text: str
+    original_sentence: str
+    confidence: float
+
+
+class ClaimComparisonResult(BaseModel):
+    """Response model for a single claim comparison.
+    
+    Evaluates whether URL content agrees, disagrees, or has no relevant claim for each summary claim.
+    Includes detailed reasoning for academic rigor.
+    """
+    summary_claim_id: str
+    summary_claim_text: str
+    url_claim_id: Optional[str] = Field(default=None, description="ID of the best matching URL claim (if found)")
+    url_claim_text: Optional[str] = Field(default=None, description="Text of the best matching URL claim (if found)")
+    relationship: str = Field(..., description="Overall relationship: 'agree' (URL agrees/supports), 'disagree' (URL disagrees/contradicts), 'missing' (no relevant claim)")
+    similarity_score: Optional[float] = Field(default=None, ge=0.0, le=1.0, description="Semantic similarity score (0.0 to 1.0), only for agree/disagree")
+    reasoning: str = Field(..., description="Detailed explanation: specific aspects of agreement/disagreement, why this relationship was determined, what evidence supports this conclusion")
+
+
+class ClaimComparisonResponse(BaseModel):
+    """Response model for comprehensive claim comparison between summary and URL content.
+    
+    For each claim in the summary, determines whether URL content agrees, disagrees, or has no relevant claim.
+    Includes detailed statistics and categorized lists for academic analysis.
+    """
+    summary_claims: List[AtomicClaimResponse] = Field(..., description="All claims extracted from the summary")
+    url_claims: List[AtomicClaimResponse] = Field(..., description="All claims extracted from the URL content")
+    comparisons: List[ClaimComparisonResult] = Field(..., description="For each summary claim, its relationship to URL claims with detailed reasoning")
+    statistics: Dict[str, Any] = Field(..., description="Comprehensive statistics including counts, rates, and categorized claim lists")
 
 
 class ContentExtractionResponse(BaseModel):
@@ -241,6 +281,7 @@ class ContentExtractionResponse(BaseModel):
     text_length: int
     truncated: bool
     extraction_metadata: Optional[Dict[str, Any]] = None
+    claim_comparison: Optional[ClaimComparisonResponse] = Field(default=None, description="Claim-level comparison result (if compare_claims=True)")
 
 
 # Claim Atomizer Models
@@ -249,14 +290,6 @@ class AtomizeClaimsRequest(BaseModel):
     text: str = Field(..., description="Text snippet to decompose into atomic claims")
     use_cot: bool = Field(default=False, description="Whether to use Chain of Thought reasoning")
     custom_few_shots: Optional[str] = Field(default=None, description="Optional custom few-shot examples")
-
-
-class AtomicClaimResponse(BaseModel):
-    """Response model for a single atomic claim."""
-    id: str
-    text: str
-    original_sentence: str
-    confidence: float
 
 
 class ClaimAtomizationResponse(BaseModel):
@@ -1741,6 +1774,9 @@ class ExtractOpinionsRequest(BaseModel):
         default=None,
         description="Execution mode: 'chain_online', 'chain_local', or 'no_chain'"
     )
+    use_llm: bool = Field(default=True, description="Whether to use LLM for opinion extraction and analysis")
+    use_cot: bool = Field(default=False, description="Whether to use Chain of Thought reasoning (only when use_llm=True)")
+    custom_few_shots: Optional[str] = Field(default=None, description="Optional custom few-shot examples (only when use_llm=True)")
     
     @model_validator(mode='after')
     def validate_url_or_text(self):
@@ -2022,12 +2058,12 @@ async def extract_atomic_opinions(
                 )
             
             # Step 3: Analyze the extracted text
-            result = analyzer.analyze_text(text, url=request.url, title=title)
-            
+            result = analyzer.analyze_text(text, url=request.url, title=title, use_llm=request.use_llm, use_cot=request.use_cot, custom_few_shots=request.custom_few_shots)
+
         else:
             # Handle direct text input
             logger.info(f"Extracting opinions from text ({len(request.text)} chars)")
-            result = analyzer.analyze_text(request.text, url=None, title=request.title)
+            result = analyzer.analyze_text(request.text, url=None, title=request.title, use_llm=request.use_llm, use_cot=request.use_cot, custom_few_shots=request.custom_few_shots)
         
         # Check for errors
         if result.extraction_metadata and "error" in result.extraction_metadata:
@@ -2434,9 +2470,277 @@ async def get_overall_bias_score(
 # ===========================
 
 # Content Extractor Endpoints
-@app.post("/api/v1/agents/{agent_id}/content-extractor/extract", response_model=ContentExtractionResponse)
+
+async def compare_claims(
+    summary_claims: List[AtomicClaim],
+    url_claims: List[AtomicClaim],
+    use_cot: bool = False
+) -> ClaimComparisonResponse:
+    """
+    Compare claims from summary with URL content to determine support.
+    
+    For each claim in the summary, this function checks whether it is supported
+    by claims in the URL content. This evaluates how accurately the summary
+    represents the actual content.
+    
+    Args:
+        summary_claims: List of atomic claims extracted from summary
+        url_claims: List of atomic claims extracted from URL content
+        use_cot: Whether to use Chain of Thought reasoning
+        
+    Returns:
+        ClaimComparisonResponse with comparison results showing which summary
+        claims are supported by URL content
+    """
+    from langchain_openai import ChatOpenAI
+    from langchain_core.messages import SystemMessage, HumanMessage
+    from ..utils.llm_client import llm_manager
+    import json
+    
+    logger.info(f"Comparing {len(summary_claims)} summary claims against {len(url_claims)} URL claims")
+    
+    # Create LLM client for claim matching
+    http_client = llm_manager.get_http_client(proxy=settings.openai_proxy)
+    llm = ChatOpenAI(
+        model_name=settings.openai_model,
+        api_key=settings.openai_api_key,
+        base_url=settings.openai_api_base,
+        temperature=0.1,  # Lower temperature for more consistent matching
+        max_retries=settings.openai_max_retries,
+        timeout=settings.openai_timeout,
+        http_client=http_client
+    )
+    
+    # Prepare claims for LLM with clear indexing
+    summary_claims_list = [f"CLAIM_{i}: {claim.text}" for i, claim in enumerate(summary_claims)]
+    url_claims_list = [f"CLAIM_{i}: {claim.text}" for i, claim in enumerate(url_claims)]
+    summary_claims_text = "\n".join(summary_claims_list)
+    url_claims_text = "\n".join(url_claims_list)
+    
+    system_prompt = """You are a rigorous academic content analyst specializing in claim verification and comparison. Your task is to evaluate whether URL content agrees or disagrees with claims from a summary, considering multiple aspects.
+
+For each summary claim, you must conduct a thorough analysis:
+
+1. SEARCH: Find the most relevant URL claim(s) that relate to the summary claim
+2. EVALUATE MULTIPLE ASPECTS: Analyze agreement/disagreement across different dimensions:
+   - Factual accuracy: Do the facts match?
+   - Semantic meaning: Do they express the same meaning?
+   - Tone/emphasis: Are they consistent in emphasis or tone?
+   - Context: Do they align in context?
+   - Specificity: Are details consistent?
+3. CLASSIFY: Determine the overall relationship as one of:
+   - "agree": The URL claim AGREES with or supports the summary claim (consensus across aspects)
+   - "disagree": The URL claim DISAGREES with or contradicts the summary claim (conflict in key aspects)
+   - "missing": No relevant claim found in URL (cannot determine agreement/disagreement)
+
+CRITICAL REQUIREMENTS FOR ACADEMIC RIGOR:
+- Be precise: "agree" requires substantial alignment across multiple aspects, not just partial similarity
+- Be thorough: "disagree" can occur in different aspects - identify which aspects conflict
+- Provide detailed reasoning: Explain exactly which aspects agree/disagree and why
+- Consider nuance: A claim can agree in some aspects but disagree in others - determine the overall relationship
+- Be strict: "missing" means no claim in URL is relevant enough to evaluate agreement/disagreement
+- Each summary claim should match to AT MOST ONE URL claim (the best/most relevant match)
+- Similarity score (0.0 to 1.0): Only for "agree" or "disagree", indicating overall semantic similarity
+
+Return a JSON array where each object contains:
+- "summary_claim_id": The ID/index of the summary claim (0-based integer)
+- "summary_claim_text": The exact text of the summary claim
+- "url_claim_id": The ID/index of the best matching URL claim (null if "missing")
+- "url_claim_text": The exact text of the matching URL claim (null if "missing")
+- "relationship": One of "agree", "disagree", or "missing"
+- "similarity_score": A float between 0.0 and 1.0 (null if relationship is "missing")
+- "reasoning": REQUIRED - Detailed explanation including:
+  * Which aspects were analyzed (factual accuracy, semantic meaning, tone, context, specificity)
+  * Which aspects show agreement (if any)
+  * Which aspects show disagreement (if any)
+  * Why the overall relationship was determined to be agree/disagree/missing
+  * What specific evidence from the claims supports this conclusion
+  * Any nuances or partial agreements/disagreements that were considered"""
+    
+    if use_cot:
+        system_prompt += "\n\nUse Chain of Thought reasoning: For each summary claim, first analyze all URL claims to find potential matches, then evaluate semantic similarity, determine the relationship type, and explain your reasoning step by step."
+    
+    user_message = f"""Evaluate whether the following summary claims are supported by the URL content claims.
+
+SUMMARY CLAIMS (to be evaluated):
+{summary_claims_text}
+
+URL CONTENT CLAIMS (to search for support):
+{url_claims_text}
+
+For each summary claim, determine if it is supported by the URL content. Return a JSON array of comparison results, one entry per summary claim."""
+
+    messages = [
+        SystemMessage(content=system_prompt),
+        HumanMessage(content=user_message)
+    ]
+    
+    try:
+        response = llm.invoke(messages)
+        response_text = response.content
+        
+        # Parse JSON from response (handle markdown code blocks if present)
+        response_text = response_text.strip()
+        if response_text.startswith("```json"):
+            response_text = response_text[7:]
+        if response_text.startswith("```"):
+            response_text = response_text[3:]
+        if response_text.endswith("```"):
+            response_text = response_text[:-3]
+        response_text = response_text.strip()
+        
+        comparisons_data = json.loads(response_text)
+        
+        # Convert to ClaimComparisonResult objects
+        comparison_results = []
+        for comp_data in comparisons_data:
+            # Validate and normalize relationship type
+            rel = comp_data.get("relationship", "missing").lower()
+            # Handle legacy terms for backward compatibility
+            if rel == "consistent":
+                rel = "agree"
+            elif rel == "contradictory":
+                rel = "disagree"
+            
+            if rel not in ["agree", "disagree", "missing"]:
+                logger.warning(f"Invalid relationship type '{rel}', defaulting to 'missing'")
+                rel = "missing"
+            
+            # Ensure reasoning is provided (required for academic rigor)
+            reasoning = comp_data.get("reasoning", "")
+            if not reasoning or len(reasoning.strip()) == 0:
+                reasoning = f"Relationship determined to be '{rel}' but no detailed reasoning provided."
+                logger.warning(f"Missing reasoning for claim {comp_data.get('summary_claim_id', 'unknown')}")
+            
+            comparison_results.append(ClaimComparisonResult(
+                summary_claim_id=str(comp_data.get("summary_claim_id", "")),
+                summary_claim_text=comp_data.get("summary_claim_text", ""),
+                url_claim_id=str(comp_data.get("url_claim_id")) if comp_data.get("url_claim_id") is not None else None,
+                url_claim_text=comp_data.get("url_claim_text"),
+                relationship=rel,
+                similarity_score=comp_data.get("similarity_score"),
+                reasoning=reasoning
+            ))
+        
+        # Ensure we have results for all summary claims
+        if len(comparison_results) != len(summary_claims):
+            logger.warning(f"Number of comparison results ({len(comparison_results)}) does not match number of summary claims ({len(summary_claims)})")
+            # Fill in missing comparisons
+            existing_ids = {int(comp.summary_claim_id) for comp in comparison_results if comp.summary_claim_id.isdigit()}
+            for i, claim in enumerate(summary_claims):
+                if i not in existing_ids:
+                    comparison_results.append(ClaimComparisonResult(
+                        summary_claim_id=str(i),
+                        summary_claim_text=claim.text,
+                        relationship="missing",
+                        reasoning="Comparison result was not returned by LLM"
+                    ))
+        
+        # Convert claims to response format
+        summary_claims_resp = [AtomicClaimResponse(**claim.__dict__) for claim in summary_claims]
+        url_claims_resp = [AtomicClaimResponse(**claim.__dict__) for claim in url_claims]
+        
+        # Calculate comprehensive statistics with detailed categorization
+        relationship_counts = {}
+        agree_claims = []
+        disagree_claims = []
+        missing_claims = []
+        total_similarity = 0.0
+        similarity_count = 0
+        
+        for comp in comparison_results:
+            rel = comp.relationship
+            relationship_counts[rel] = relationship_counts.get(rel, 0) + 1
+            
+            # Categorize claims for detailed statistics
+            claim_info = {
+                "summary_claim_id": comp.summary_claim_id,
+                "summary_claim_text": comp.summary_claim_text,
+                "url_claim_id": comp.url_claim_id,
+                "url_claim_text": comp.url_claim_text,
+                "similarity_score": comp.similarity_score,
+                "reasoning": comp.reasoning
+            }
+            
+            if rel == "agree":
+                agree_claims.append(claim_info)
+            elif rel == "disagree":
+                disagree_claims.append(claim_info)
+            else:  # missing
+                missing_claims.append(claim_info)
+            
+            if comp.similarity_score is not None:
+                total_similarity += comp.similarity_score
+                similarity_count += 1
+        
+        total_summary = len(summary_claims)
+        agree_count = relationship_counts.get("agree", 0)
+        disagree_count = relationship_counts.get("disagree", 0)
+        missing_count = relationship_counts.get("missing", 0)
+        
+        # Calculate agreement/disagreement metrics
+        agree_rate = agree_count / total_summary if total_summary > 0 else 0.0
+        disagree_rate = disagree_count / total_summary if total_summary > 0 else 0.0
+        missing_rate = missing_count / total_summary if total_summary > 0 else 0.0
+        avg_similarity = total_similarity / similarity_count if similarity_count > 0 else None
+        
+        # Comprehensive statistics with categorized lists for academic analysis
+        statistics = {
+            # Overall counts
+            "total_summary_claims": total_summary,
+            "total_url_claims": len(url_claims),
+            
+            # Counts by relationship type
+            "agree_count": agree_count,
+            "disagree_count": disagree_count,
+            "missing_count": missing_count,
+            
+            # Rates (percentages)
+            "agree_rate": round(agree_rate, 4),
+            "disagree_rate": round(disagree_rate, 4),
+            "missing_rate": round(missing_rate, 4),
+            
+            # Similarity metrics
+            "average_similarity_score": round(avg_similarity, 4) if avg_similarity is not None else None,
+            "similarity_count": similarity_count,  # Number of claims with similarity scores
+            
+            # Detailed categorized lists for academic analysis
+            "agree_claims": agree_claims,  # List of claims where URL agrees with summary (with reasoning)
+            "disagree_claims": disagree_claims,  # List of claims where URL disagrees with summary (with reasoning)
+            "missing_claims": missing_claims  # List of claims with no relevant URL claim (with reasoning)
+        }
+        
+        return ClaimComparisonResponse(
+            summary_claims=summary_claims_resp,
+            url_claims=url_claims_resp,
+            comparisons=comparison_results,
+            statistics=statistics
+        )
+        
+    except Exception as e:
+        logger.error(f"Failed to compare claims: {e}", exc_info=True)
+        # Return a fallback response with all claims marked as missing
+        summary_claims_resp = [AtomicClaimResponse(**claim.__dict__) for claim in summary_claims]
+        url_claims_resp = [AtomicClaimResponse(**claim.__dict__) for claim in url_claims]
+        comparison_results = [
+            ClaimComparisonResult(
+                summary_claim_id=str(i),
+                summary_claim_text=claim.text,
+                relationship="missing",
+                reasoning=f"Error during comparison: {str(e)}"
+            )
+            for i, claim in enumerate(summary_claims)
+        ]
+        return ClaimComparisonResponse(
+            summary_claims=summary_claims_resp,
+            url_claims=url_claims_resp,
+            comparisons=comparison_results,
+            statistics={"error": str(e)}
+        )
+
+
+@app.post("/api/v1/content-extractor/extract", response_model=ContentExtractionResponse)
 async def extract_content(
-    agent_id: str,
     request: ExtractContentRequest,
     api_key: str = Depends(verify_api_key)
 ):
@@ -2444,28 +2748,35 @@ async def extract_content(
     Extract academic content from URL, HTML, or text.
 
     This endpoint extracts the main title and body content from various sources,
-    focusing on academic/informational content while excluding navigation and ads.
+    focusing on academic/informational content while excluding navigation,
+    advertisements, and other non-content elements. Creates a new agent instance
+    for each request (stateless operation).
+
+    When compare_claims=True and summary is provided, performs rigorous claim-level comparison
+    to evaluate whether URL content agrees or disagrees with summary claims. The comparison:
+    1. Atomizes claims from both summary and URL content
+    2. For each summary claim, searches URL claims to find agreement/disagreement
+    3. Classifies relationships: agree (URL agrees with summary), disagree (URL disagrees), or missing (no relevant claim)
+    4. Returns detailed comparison results with similarity scores, reasoning, and agreement statistics
 
     Args:
-        agent_id: The agent's unique identifier
         request: Content extraction request with URL, HTML, or text
         api_key: API key for authentication
 
     Returns:
-        ContentExtractionResponse with extracted title and main body
+        ContentExtractionResponse with extracted title and main body, and optional claim comparison
     """
-    agent = agent_manager.get_agent(agent_id)
-    if not agent:
-        raise HTTPException(status_code=404, detail=f"Agent '{agent_id}' not found")
-
-    agent_type = agent_manager.get_agent_type(agent_id)
-    if agent_type != AgentType.CONTENT_EXTRACTOR:
-        raise HTTPException(
-            status_code=400,
-            detail=f"This endpoint requires a 'content_extractor' agent, but agent '{agent_id}' is type '{agent_type}'"
+    try:
+        # Create a new agent instance for each request (stateless)
+        from ..agents.content_extractor.agent import ContentExtractorAgent
+        agent = ContentExtractorAgent(
+            model_name=settings.openai_model,
+            api_key=settings.openai_api_key,
+            api_base=settings.openai_api_base,
+            temperature=settings.agent_temperature,
+            proxy=settings.openai_proxy
         )
 
-    try:
         if request.url:
             result = agent.extract_from_url(request.url, use_llm=request.use_llm, use_cot=request.use_cot, custom_few_shots=request.custom_few_shots)
         elif request.html:
@@ -2473,17 +2784,54 @@ async def extract_content(
         else:  # request.text
             result = agent.extract_from_text(request.text, title=request.title, use_llm=request.use_llm, use_cot=request.use_cot, custom_few_shots=request.custom_few_shots)
 
-        return ContentExtractionResponse(**result.__dict__)
+        # Perform claim comparison if requested
+        claim_comparison = None
+        if request.compare_claims and request.summary and result.main_body:
+            logger.info("Performing claim-level comparison between summary and URL content")
+            
+            # Create claim atomizer agents
+            from ..agents.claim_atomizer.agent import ClaimAtomizerAgent
+            claim_atomizer = ClaimAtomizerAgent(
+                model_name=settings.openai_model,
+                api_key=settings.openai_api_key,
+                api_base=settings.openai_api_base,
+                temperature=settings.agent_temperature,
+                proxy=settings.openai_proxy
+            )
+            
+            # Atomize summary claims
+            summary_atomization = claim_atomizer.atomize_text(
+                text=request.summary,
+                use_cot=request.use_cot
+            )
+            
+            # Atomize URL content claims
+            url_atomization = claim_atomizer.atomize_text(
+                text=result.main_body,
+                use_cot=request.use_cot
+            )
+            
+            # Compare claims
+            claim_comparison = await compare_claims(
+                summary_claims=summary_atomization.atomic_claims,
+                url_claims=url_atomization.atomic_claims,
+                use_cot=request.use_cot
+            )
+            
+            logger.info(f"Claim comparison complete: {len(claim_comparison.comparisons)} comparisons")
+
+        response_dict = result.__dict__
+        response_dict["claim_comparison"] = claim_comparison
+        return ContentExtractionResponse(**response_dict)
 
     except Exception as e:
-        logger.error(f"Failed to extract content for agent {agent_id}: {e}", exc_info=True)
+        logger.error(f"Failed to extract content: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail=f"Failed to extract content: {str(e)}")
 
 
 # Claim Atomizer Endpoints
-@app.post("/api/v1/agents/{agent_id}/claim-atomizer/atomize", response_model=ClaimAtomizationResponse)
+@app.post("/api/v1/claim-atomizer/atomize", response_model=ClaimAtomizationResponse)
 async def atomize_claims(
-    agent_id: str,
     request: AtomizeClaimsRequest,
     api_key: str = Depends(verify_api_key)
 ):
@@ -2491,28 +2839,27 @@ async def atomize_claims(
     Decompose text into atomic claims.
 
     This endpoint breaks down provided text into independent, verifiable atomic claims,
-    each containing only one factual point.
+    each containing only one factual point. Creates a new agent instance for each
+    request (stateless operation).
 
     Args:
-        agent_id: The agent's unique identifier
         request: Claim atomization request with text and options
         api_key: API key for authentication
 
     Returns:
         ClaimAtomizationResponse with atomic claims
     """
-    agent = agent_manager.get_agent(agent_id)
-    if not agent:
-        raise HTTPException(status_code=404, detail=f"Agent '{agent_id}' not found")
-
-    agent_type = agent_manager.get_agent_type(agent_id)
-    if agent_type != AgentType.CLAIM_ATOMIZER:
-        raise HTTPException(
-            status_code=400,
-            detail=f"This endpoint requires a 'claim_atomizer' agent, but agent '{agent_id}' is type '{agent_type}'"
+    try:
+        # Create a new agent instance for each request (stateless)
+        from ..agents.claim_atomizer.agent import ClaimAtomizerAgent
+        agent = ClaimAtomizerAgent(
+            model_name=settings.openai_model,
+            api_key=settings.openai_api_key,
+            api_base=settings.openai_api_base,
+            temperature=settings.agent_temperature,
+            proxy=settings.openai_proxy
         )
 
-    try:
         result = agent.atomize_text(
             text=request.text,
             use_cot=request.use_cot,
@@ -2532,11 +2879,11 @@ async def atomize_claims(
         )
 
     except Exception as e:
-        logger.error(f"Failed to atomize claims for agent {agent_id}: {e}", exc_info=True)
+        logger.error(f"Failed to atomize claims: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail=f"Failed to atomize claims: {str(e)}")
 
 
-@app.get("/api/v1/agents/content-extractor/default-shots")
+@app.get("/api/v1/content-extractor/default-shots")
 async def get_content_extractor_default_shots(api_key: str = Depends(verify_api_key)):
     """
     Get default few-shot examples for Content Extractor agent.
@@ -2559,7 +2906,7 @@ async def get_content_extractor_default_shots(api_key: str = Depends(verify_api_
         raise HTTPException(status_code=500, detail=f"Failed to get default few shots: {str(e)}")
 
 
-@app.get("/api/v1/agents/claim-atomizer/default-shots")
+@app.get("/api/v1/claim-atomizer/default-shots")
 async def get_claim_atomizer_default_shots(api_key: str = Depends(verify_api_key)):
     """
     Get default few-shot examples for Claim Atomizer agent.
@@ -2583,9 +2930,8 @@ async def get_claim_atomizer_default_shots(api_key: str = Depends(verify_api_key
 
 
 # Evidence Locator Endpoints
-@app.post("/api/v1/agents/{agent_id}/evidence-locator/locate", response_model=EvidenceLocationResponse)
+@app.post("/api/v1/evidence-locator/locate", response_model=EvidenceLocationResponse)
 async def locate_evidence(
-    agent_id: str,
     request: LocateEvidenceRequest,
     api_key: str = Depends(verify_api_key)
 ):
@@ -2593,28 +2939,27 @@ async def locate_evidence(
     Locate evidence for claims in main body text.
 
     This endpoint searches through the main body text to find supporting or
-    contradicting evidence for each atomic claim.
+    contradicting evidence for each atomic claim. Creates a new agent instance
+    for each request (stateless operation).
 
     Args:
-        agent_id: The agent's unique identifier
         request: Evidence location request with claims and main body text
         api_key: API key for authentication
 
     Returns:
         EvidenceLocationResponse with evidence for each claim
     """
-    agent = agent_manager.get_agent(agent_id)
-    if not agent:
-        raise HTTPException(status_code=404, detail=f"Agent '{agent_id}' not found")
-
-    agent_type = agent_manager.get_agent_type(agent_id)
-    if agent_type != AgentType.EVIDENCE_LOCATOR:
-        raise HTTPException(
-            status_code=400,
-            detail=f"This endpoint requires a 'evidence_locator' agent, but agent '{agent_id}' is type '{agent_type}'"
+    try:
+        # Create a new agent instance for each request (stateless)
+        from ..agents.evidence_locator.agent import EvidenceLocatorAgent
+        agent = EvidenceLocatorAgent(
+            model_name=settings.openai_model,
+            api_key=settings.openai_api_key,
+            api_base=settings.openai_api_base,
+            temperature=settings.agent_temperature,
+            proxy=settings.openai_proxy
         )
 
-    try:
         result = agent.locate_evidence(request.claims, request.main_body, use_llm=request.use_llm)
 
         # Convert to response format
@@ -2638,14 +2983,13 @@ async def locate_evidence(
         )
 
     except Exception as e:
-        logger.error(f"Failed to locate evidence for agent {agent_id}: {e}", exc_info=True)
+        logger.error(f"Failed to locate evidence: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail=f"Failed to locate evidence: {str(e)}")
 
 
 # Conflict Auditor Endpoints
-@app.post("/api/v1/agents/{agent_id}/conflict-auditor/audit", response_model=ConflictAuditResponse)
+@app.post("/api/v1/conflict-auditor/audit", response_model=ConflictAuditResponse)
 async def audit_conflicts(
-    agent_id: str,
     request: AuditConflictsRequest,
     api_key: str = Depends(verify_api_key)
 ):
@@ -2653,28 +2997,27 @@ async def audit_conflicts(
     Audit conflicts between claims and evidence.
 
     This endpoint compares each atomic claim against its supporting evidence
-    to determine logical consistency and identify conflicts.
+    to determine logical consistency and identify conflicts. Creates a new
+    agent instance for each request (stateless operation).
 
     Args:
-        agent_id: The agent's unique identifier
         request: Conflict audit request with claim-evidence pairs
         api_key: API key for authentication
 
     Returns:
         ConflictAuditResponse with detailed conflict analyses
     """
-    agent = agent_manager.get_agent(agent_id)
-    if not agent:
-        raise HTTPException(status_code=404, detail=f"Agent '{agent_id}' not found")
-
-    agent_type = agent_manager.get_agent_type(agent_id)
-    if agent_type != AgentType.CONFLICT_AUDITOR:
-        raise HTTPException(
-            status_code=400,
-            detail=f"This endpoint requires a 'conflict_auditor' agent, but agent '{agent_id}' is type '{agent_type}'"
+    try:
+        # Create a new agent instance for each request (stateless)
+        from ..agents.conflict_auditor.agent import ConflictAuditorAgent
+        agent = ConflictAuditorAgent(
+            model_name=settings.openai_model,
+            api_key=settings.openai_api_key,
+            api_base=settings.openai_api_base,
+            temperature=settings.agent_temperature,
+            proxy=settings.openai_proxy
         )
 
-    try:
         result = agent.audit_conflicts(
             claim_evidences=request.claim_evidences,
             use_cot=request.use_cot,
@@ -2702,11 +3045,11 @@ async def audit_conflicts(
         )
 
     except Exception as e:
-        logger.error(f"Failed to audit conflicts for agent {agent_id}: {e}", exc_info=True)
+        logger.error(f"Failed to audit conflicts: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail=f"Failed to audit conflicts: {str(e)}")
 
 
-@app.get("/api/v1/agents/conflict-auditor/default-shots")
+@app.get("/api/v1/conflict-auditor/default-shots")
 async def get_conflict_auditor_default_shots(api_key: str = Depends(verify_api_key)):
     """
     Get default few-shot examples for Conflict Auditor agent.
@@ -2729,7 +3072,7 @@ async def get_conflict_auditor_default_shots(api_key: str = Depends(verify_api_k
         raise HTTPException(status_code=500, detail=f"Failed to get default few shots: {str(e)}")
 
 
-@app.get("/api/v1/agents/evidence-locator/default-shots")
+@app.get("/api/v1/evidence-locator/default-shots")
 async def get_evidence_locator_default_shots(api_key: str = Depends(verify_api_key)):
     """
     Get default few-shot examples for Evidence Locator agent.
@@ -2751,7 +3094,7 @@ async def get_evidence_locator_default_shots(api_key: str = Depends(verify_api_k
         raise HTTPException(status_code=500, detail=f"Failed to get default few shots: {str(e)}")
 
 
-@app.get("/api/v1/agents/synthesis-aggregator/default-shots")
+@app.get("/api/v1/synthesis-aggregator/default-shots")
 async def get_synthesis_aggregator_default_shots(api_key: str = Depends(verify_api_key)):
     """
     Get default few-shot examples for Synthesis Aggregator agent.
@@ -2774,9 +3117,8 @@ async def get_synthesis_aggregator_default_shots(api_key: str = Depends(verify_a
 
 
 # Synthesis Aggregator Endpoints
-@app.post("/api/v1/agents/{agent_id}/synthesis-aggregator/aggregate", response_model=SynthesisAggregationResponse)
+@app.post("/api/v1/synthesis-aggregator/aggregate", response_model=SynthesisAggregationResponse)
 async def aggregate_synthesis(
-    agent_id: str,
     request: AggregateSynthesisRequest,
     api_key: str = Depends(verify_api_key)
 ):
@@ -2784,28 +3126,27 @@ async def aggregate_synthesis(
     Aggregate conflict analyses into comprehensive synthesis report.
 
     This endpoint creates a comprehensive report from conflict analysis results,
-    including quantitative metrics and quality assessment.
+    including quantitative metrics and quality assessment. Creates a new agent
+    instance for each request (stateless operation).
 
     Args:
-        agent_id: The agent's unique identifier
         request: Synthesis aggregation request with conflict analyses
         api_key: API key for authentication
 
     Returns:
         SynthesisAggregationResponse with comprehensive report
     """
-    agent = agent_manager.get_agent(agent_id)
-    if not agent:
-        raise HTTPException(status_code=404, detail=f"Agent '{agent_id}' not found")
-
-    agent_type = agent_manager.get_agent_type(agent_id)
-    if agent_type != AgentType.SYNTHESIS_AGGREGATOR:
-        raise HTTPException(
-            status_code=400,
-            detail=f"This endpoint requires a 'synthesis_aggregator' agent, but agent '{agent_id}' is type '{agent_type}'"
+    try:
+        # Create a new agent instance for each request (stateless)
+        from ..agents.synthesis_aggregator.agent import SynthesisAggregatorAgent
+        agent = SynthesisAggregatorAgent(
+            model_name=settings.openai_model,
+            api_key=settings.openai_api_key,
+            api_base=settings.openai_api_base,
+            temperature=settings.agent_temperature,
+            proxy=settings.openai_proxy
         )
 
-    try:
         result = agent.aggregate_synthesis(
             conflict_analyses=request.conflict_analyses,
             use_llm_enhancement=request.use_llm_enhancement
@@ -2820,7 +3161,7 @@ async def aggregate_synthesis(
         )
 
     except Exception as e:
-        logger.error(f"Failed to aggregate synthesis for agent {agent_id}: {e}", exc_info=True)
+        logger.error(f"Failed to aggregate synthesis: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail=f"Failed to aggregate synthesis: {str(e)}")
 
 

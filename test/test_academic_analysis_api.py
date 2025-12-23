@@ -3,6 +3,7 @@ Tests for Academic Analysis API endpoints.
 
 These tests verify the academic analysis API endpoints
 without requiring external network or LLM API access.
+All academic agents are stateless and create new instances per request.
 """
 
 import pytest
@@ -26,62 +27,56 @@ class TestAcademicAnalysisAPI:
         """Create a test client for the FastAPI app."""
         return TestClient(app)
 
-    @pytest.fixture
-    def mock_agent_manager(self):
-        """Mock the agent manager for testing."""
-        with patch('src.api.main.agent_manager') as mock_manager:
-            yield mock_manager
-
-    def test_extract_content_url(self, client, mock_agent_manager):
+    def test_extract_content_url(self, client):
         """Test content extraction from URL."""
-        # Mock agent
-        mock_agent = Mock()
-        mock_result = ContentExtractionResult(
-            url="http://example.com",
-            title="Test Title",
-            main_body="Test content",
-            text_length=12,
-            truncated=False
-        )
-        mock_agent.extract_from_url.return_value = mock_result
-        mock_agent_manager.get_agent.return_value = mock_agent
-        mock_agent_manager.get_agent_type.return_value = "content_extractor"
+        # Mock the ContentExtractorAgent
+        with patch('src.agents.content_extractor.agent.ContentExtractorAgent') as mock_agent_class:
+            mock_agent = Mock()
+            mock_result = ContentExtractionResult(
+                url="http://example.com",
+                title="Test Title",
+                main_body="Test content",
+                text_length=12,
+                truncated=False
+            )
+            mock_agent.extract_from_url.return_value = mock_result
+            mock_agent_class.return_value = mock_agent
 
-        response = client.post(
-            "/api/v1/agents/test-agent/content-extractor/extract",
-            json={"url": "http://example.com"},
-            headers={"X-API-Key": "test-key"}
-        )
+            response = client.post(
+                "/api/v1/content-extractor/extract",
+                json={"url": "http://example.com"},
+                headers={"X-API-Key": "test-key"}
+            )
 
-        assert response.status_code == 200
-        data = response.json()
-        assert data["url"] == "http://example.com"
-        assert data["title"] == "Test Title"
-        assert data["main_body"] == "Test content"
+            assert response.status_code == 200
+            data = response.json()
+            assert data["url"] == "http://example.com"
+            assert data["title"] == "Test Title"
+            assert data["main_body"] == "Test content"
 
-    def test_extract_content_with_cot(self, client, mock_agent_manager):
+    def test_extract_content_with_cot(self, client):
         """Test content extraction with CoT enabled."""
-        mock_agent = Mock()
-        mock_result = ContentExtractionResult(
-            url="http://example.com",
-            title="Test Title",
-            main_body="Test content",
-            text_length=12,
-            truncated=False
-        )
-        mock_agent.extract_from_url.return_value = mock_result
-        mock_agent_manager.get_agent.return_value = mock_agent
-        mock_agent_manager.get_agent_type.return_value = "content_extractor"
+        with patch('src.agents.content_extractor.agent.ContentExtractorAgent') as mock_agent_class:
+            mock_agent = Mock()
+            mock_result = ContentExtractionResult(
+                url="http://example.com",
+                title="Test Title",
+                main_body="Test content",
+                text_length=12,
+                truncated=False
+            )
+            mock_agent.extract_from_url.return_value = mock_result
+            mock_agent_class.return_value = mock_agent
 
-        response = client.post(
-            "/api/v1/agents/test-agent/content-extractor/extract",
-            json={
-                "url": "http://example.com",
-                "use_cot": True,
-                "custom_few_shots": "Custom examples"
-            },
-            headers={"X-API-Key": "test-key"}
-        )
+            response = client.post(
+                "/api/v1/content-extractor/extract",
+                json={
+                    "url": "http://example.com",
+                    "use_cot": True,
+                    "custom_few_shots": "Custom examples"
+                },
+                headers={"X-API-Key": "test-key"}
+            )
 
         assert response.status_code == 200
         mock_agent.extract_from_url.assert_called_once_with(
@@ -91,139 +86,142 @@ class TestAcademicAnalysisAPI:
             custom_few_shots="Custom examples"
         )
 
-    def test_atomize_claims(self, client, mock_agent_manager):
+    def test_atomize_claims(self, client):
         """Test claim atomization."""
-        mock_agent = Mock()
-        mock_claim = AtomicClaim(
-            id="1",
-            text="Test claim",
-            original_sentence="Original sentence",
-            confidence=0.8
-        )
-        mock_result = ClaimAtomizationResult(
-            atomic_claims=[mock_claim],
-            original_text="Test text",
-            execution_mode="no_chain"
-        )
-        mock_agent.atomize_text.return_value = mock_result
-        mock_agent_manager.get_agent.return_value = mock_agent
-        mock_agent_manager.get_agent_type.return_value = "claim_atomizer"
+        with patch('src.agents.claim_atomizer.agent.ClaimAtomizerAgent') as mock_agent_class:
+            mock_agent = Mock()
+            mock_claim = AtomicClaim(
+                id="1",
+                text="Test claim",
+                original_sentence="Original sentence",
+                confidence=0.8
+            )
+            mock_result = ClaimAtomizationResult(
+                atomic_claims=[mock_claim],
+                original_text="Test text",
+                execution_mode="no_chain",
+                metadata={}
+            )
+            mock_agent.atomize_text.return_value = mock_result
+            mock_agent_class.return_value = mock_agent
 
-        response = client.post(
-            "/api/v1/agents/test-agent/claim-atomizer/atomize",
-            json={"text": "Test text"},
-            headers={"X-API-Key": "test-key"}
-        )
+            response = client.post(
+                "/api/v1/claim-atomizer/atomize",
+                json={"text": "Test text"},
+                headers={"X-API-Key": "test-key"}
+            )
 
-        assert response.status_code == 200
-        data = response.json()
-        assert len(data["atomic_claims"]) == 1
-        assert data["atomic_claims"][0]["text"] == "Test claim"
+            assert response.status_code == 200
+            data = response.json()
+            assert len(data["atomic_claims"]) == 1
+            assert data["atomic_claims"][0]["text"] == "Test claim"
 
-    def test_locate_evidence(self, client, mock_agent_manager):
+    def test_locate_evidence(self, client):
         """Test evidence location."""
-        mock_agent = Mock()
-        mock_quote = EvidenceQuote(
-            text="evidence text",
-            location="Paragraph 1",
-            start_pos=0,
-            end_pos=13
-        )
-        mock_evidence = ClaimEvidence(
-            claim_id="1",
-            claim_text="Test claim",
-            evidence_found=True,
-            quotes=[mock_quote],
-            reasoning="Found in text"
-        )
-        mock_result = EvidenceLocationResult(
-            claim_evidences=[mock_evidence],
-            main_body_text="Main body text"
-        )
-        mock_agent.locate_evidence.return_value = mock_result
-        mock_agent_manager.get_agent.return_value = mock_agent
-        mock_agent_manager.get_agent_type.return_value = "evidence_locator"
+        with patch('src.agents.evidence_locator.agent.EvidenceLocatorAgent') as mock_agent_class:
+            mock_agent = Mock()
+            mock_quote = EvidenceQuote(
+                text="evidence text",
+                location="Paragraph 1",
+                start_pos=0,
+                end_pos=13
+            )
+            mock_evidence = ClaimEvidence(
+                claim_id="1",
+                claim_text="Test claim",
+                evidence_found=True,
+                quotes=[mock_quote],
+                reasoning="Found in text"
+            )
+            mock_result = EvidenceLocationResult(
+                claim_evidences=[mock_evidence],
+                main_body_text="Main body text",
+                metadata={}
+            )
+            mock_agent.locate_evidence.return_value = mock_result
+            mock_agent_class.return_value = mock_agent
 
-        response = client.post(
-            "/api/v1/agents/test-agent/evidence-locator/locate",
-            json={
-                "claims": [{"id": "1", "text": "Test claim"}],
-                "main_body": "Main body text"
-            },
-            headers={"X-API-Key": "test-key"}
-        )
+            response = client.post(
+                "/api/v1/evidence-locator/locate",
+                json={
+                    "claims": [{"id": "1", "text": "Test claim"}],
+                    "main_body": "Main body text"
+                },
+                headers={"X-API-Key": "test-key"}
+            )
 
-        assert response.status_code == 200
-        data = response.json()
-        assert len(data["claim_evidences"]) == 1
-        assert data["claim_evidences"][0]["evidence_found"] == True
+            assert response.status_code == 200
+            data = response.json()
+            assert len(data["claim_evidences"]) == 1
+            assert data["claim_evidences"][0]["evidence_found"] == True
 
-    def test_audit_conflicts(self, client, mock_agent_manager):
+    def test_audit_conflicts(self, client):
         """Test conflict auditing."""
-        mock_agent = Mock()
-        mock_analysis = ConflictAnalysis(
-            claim_id="1",
-            claim_text="Test claim",
-            evidence_quotes=["evidence"],
-            verdict=ConflictType.SUPPORTED,
-            conflict_type="N/A",
-            analysis="Supported",
-            confidence=0.9
-        )
-        mock_result = ConflictAuditResult(
-            conflict_analyses=[mock_analysis],
-            summary_stats={"total_claims": 1, "supported": 1, "contradicted": 0, "neutral_missing": 0},
-            execution_mode="no_chain"
-        )
-        mock_agent.audit_conflicts.return_value = mock_result
-        mock_agent_manager.get_agent.return_value = mock_agent
-        mock_agent_manager.get_agent_type.return_value = "conflict_auditor"
+        with patch('src.agents.conflict_auditor.agent.ConflictAuditorAgent') as mock_agent_class:
+            mock_agent = Mock()
+            mock_analysis = ConflictAnalysis(
+                claim_id="1",
+                claim_text="Test claim",
+                evidence_quotes=["evidence"],
+                verdict=ConflictType.SUPPORTED,
+                conflict_type="N/A",
+                analysis="Supported",
+                confidence=0.9
+            )
+            mock_result = ConflictAuditResult(
+                conflict_analyses=[mock_analysis],
+                summary_stats={"total_claims": 1, "supported": 1, "contradicted": 0, "neutral_missing": 0},
+                execution_mode="no_chain",
+                metadata={}
+            )
+            mock_agent.audit_conflicts.return_value = mock_result
+            mock_agent_class.return_value = mock_agent
 
-        response = client.post(
-            "/api/v1/agents/test-agent/conflict-auditor/audit",
-            json={"claim_evidences": [{"claim_id": "1", "claim_text": "Test claim", "evidence_quotes": ["evidence"]}]},
-            headers={"X-API-Key": "test-key"}
-        )
+            response = client.post(
+                "/api/v1/conflict-auditor/audit",
+                json={"claim_evidences": [{"claim_id": "1", "claim_text": "Test claim", "evidence_quotes": ["evidence"]}]},
+                headers={"X-API-Key": "test-key"}
+            )
 
-        assert response.status_code == 200
-        data = response.json()
-        assert len(data["conflict_analyses"]) == 1
-        assert data["conflict_analyses"][0]["verdict"] == "supported"
-        assert data["summary_stats"]["total_claims"] == 1
+            assert response.status_code == 200
+            data = response.json()
+            assert len(data["conflict_analyses"]) == 1
+            assert data["conflict_analyses"][0]["verdict"] == "supported"
+            assert data["summary_stats"]["total_claims"] == 1
 
-    def test_aggregate_synthesis(self, client, mock_agent_manager):
+    def test_aggregate_synthesis(self, client):
         """Test synthesis aggregation."""
-        mock_agent = Mock()
-        mock_report = SynthesisReport(
-            research_summary="Test summary",
-            metrics={"total_claims": 1, "conflicted_claims": 0},
-            detailed_discrepancies=[],
-            quality_assessment="HIGH",
-            confidence_score=0.9
-        )
-        mock_result = SynthesisAggregationResult(
-            synthesis_report=mock_report,
-            metadata={"total_analyses": 1}
-        )
-        mock_agent.aggregate_synthesis.return_value = mock_result
-        mock_agent_manager.get_agent.return_value = mock_agent
-        mock_agent_manager.get_agent_type.return_value = "synthesis_aggregator"
+        with patch('src.agents.synthesis_aggregator.agent.SynthesisAggregatorAgent') as mock_agent_class:
+            mock_agent = Mock()
+            mock_report = SynthesisReport(
+                research_summary="Test summary",
+                metrics={"total_claims": 1, "conflicted_claims": 0},
+                detailed_discrepancies=[],
+                quality_assessment="HIGH",
+                confidence_score=0.9
+            )
+            mock_result = SynthesisAggregationResult(
+                synthesis_report=mock_report,
+                metadata={"total_analyses": 1}
+            )
+            mock_agent.aggregate_synthesis.return_value = mock_result
+            mock_agent_class.return_value = mock_agent
 
-        response = client.post(
-            "/api/v1/agents/test-agent/synthesis-aggregator/aggregate",
-            json={"conflict_analyses": [{"claim_id": "1", "verdict": "supported"}]},
-            headers={"X-API-Key": "test-key"}
-        )
+            response = client.post(
+                "/api/v1/synthesis-aggregator/aggregate",
+                json={"conflict_analyses": [{"claim_id": "1", "verdict": "supported"}]},
+                headers={"X-API-Key": "test-key"}
+            )
 
-        assert response.status_code == 200
-        data = response.json()
-        assert data["synthesis_report"]["research_summary"] == "Test summary"
-        assert data["synthesis_report"]["confidence_score"] == 0.9
+            assert response.status_code == 200
+            data = response.json()
+            assert data["synthesis_report"]["research_summary"] == "Test summary"
+            assert data["synthesis_report"]["confidence_score"] == 0.9
 
     def test_get_content_extractor_default_shots(self, client):
         """Test getting default few-shot examples for content extractor."""
         response = client.get(
-            "/api/v1/agents/content-extractor/default-shots",
+            "/api/v1/content-extractor/default-shots",
             headers={"X-API-Key": "test-key"}
         )
 
@@ -235,7 +233,7 @@ class TestAcademicAnalysisAPI:
     def test_get_claim_atomizer_default_shots(self, client):
         """Test getting default few-shot examples for claim atomizer."""
         response = client.get(
-            "/api/v1/agents/claim-atomizer/default-shots",
+            "/api/v1/claim-atomizer/default-shots",
             headers={"X-API-Key": "test-key"}
         )
 
@@ -247,7 +245,7 @@ class TestAcademicAnalysisAPI:
     def test_get_conflict_auditor_default_shots(self, client):
         """Test getting default few-shot examples for conflict auditor."""
         response = client.get(
-            "/api/v1/agents/conflict-auditor/default-shots",
+            "/api/v1/conflict-auditor/default-shots",
             headers={"X-API-Key": "test-key"}
         )
 
@@ -256,32 +254,6 @@ class TestAcademicAnalysisAPI:
         assert data["agent_type"] == "conflict_auditor"
         assert "few_shots" in data
 
-    def test_invalid_agent_type(self, client, mock_agent_manager):
-        """Test handling of invalid agent type."""
-        mock_agent_manager.get_agent.return_value = Mock()
-        mock_agent_manager.get_agent_type.return_value = "invalid_type"
-
-        response = client.post(
-            "/api/v1/agents/test-agent/content-extractor/extract",
-            json={"url": "http://example.com"},
-            headers={"X-API-Key": "test-key"}
-        )
-
-        assert response.status_code == 400
-        assert "content_extractor agent" in response.json()["detail"]
-
-    def test_agent_not_found(self, client, mock_agent_manager):
-        """Test handling of non-existent agent."""
-        mock_agent_manager.get_agent.return_value = None
-
-        response = client.post(
-            "/api/v1/agents/non-existent/content-extractor/extract",
-            json={"url": "http://example.com"},
-            headers={"X-API-Key": "test-key"}
-        )
-
-        assert response.status_code == 404
-        assert "not found" in response.json()["detail"]
 
     @patch('src.api.main._evaluate_content')
     @patch('src.api.main._evaluate_url')

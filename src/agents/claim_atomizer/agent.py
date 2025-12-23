@@ -174,7 +174,7 @@ Return each claim in the format:
 
             for match in re.finditer(claim_pattern, response_text, re.DOTALL):
                 claim_id = match.group(1)
-                claim_text = match.group(1).strip()
+                claim_text = match.group(2).strip()
 
                 claims.append({
                     "id": claim_id,

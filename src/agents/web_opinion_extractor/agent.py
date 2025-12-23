@@ -6,7 +6,7 @@ facts from opinions, and calculate political bias scores.
 
 import json
 import re
-from typing import Optional, List, Dict, Any
+from typing import Optional, List, Dict, Any, Tuple
 
 from langchain_core.messages import HumanMessage, SystemMessage
 from langchain_openai import ChatOpenAI
@@ -183,24 +183,26 @@ Extract ALL viewpoints, even subtle ones. Be thorough but precise."""
         
         logger.debug(f"WebOpinionExtractor initialized successfully with execution_mode={self.execution_mode}")
     
-    def _extract_opinions_with_llm(self, text: str) -> List[Dict[str, Any]]:
+    def _extract_opinions_with_llm(self, text: str, use_cot: bool = False, custom_few_shots: Optional[str] = None) -> List[Dict[str, Any]]:
         """
         Use LLM to extract atomic opinions from text.
-        
+
         Args:
             text: Cleaned text content
-            
+            use_cot: Whether to use Chain of Thought reasoning
+            custom_few_shots: Optional custom few-shot examples
+
         Returns:
             List of opinion dictionaries
         """
-        execution_mode = getattr(self, 'execution_mode', 'chain_local')
-        logger.debug(f"Extracting opinions from text ({len(text)} chars) with mode={execution_mode}")
-        
-        # Select system prompt based on execution mode
-        # 'no_chain': No CoT reasoning (fastest)
-        # 'chain_local' or 'chain_online': Include CoT reasoning
-        use_cot = execution_mode in ("chain_local", "chain_online")
+        logger.debug(f"Extracting opinions from text ({len(text)} chars) with CoT={use_cot}")
+
+        # Select system prompt based on CoT mode
         system_prompt = self.SYSTEM_PROMPT if use_cot else self.SYSTEM_PROMPT_NO_COT
+
+        # Add custom few-shot examples if provided
+        if custom_few_shots:
+            system_prompt = f"{custom_few_shots}\n\n{system_prompt}"
         
         # Adjust user message based on mode
         if use_cot:
@@ -350,60 +352,69 @@ Return your analysis as a JSON object."""
             reasoning=data.get("reasoning")
         )
     
-    def extract_from_url(self, url: str) -> OpinionExtractionResult:
+    def extract_from_url(self, url: str, use_llm: bool = True, use_cot: bool = False, custom_few_shots: Optional[str] = None) -> OpinionExtractionResult:
         """
         Extract opinions from a URL.
-        
+
         Args:
             url: The URL to process
-            
+            use_llm: Whether to use LLM for opinion extraction and analysis (default True for opinion extraction)
+            use_cot: Whether to use Chain of Thought reasoning (only when use_llm=True)
+            custom_few_shots: Optional custom few-shot examples (only when use_llm=True)
+
         Returns:
             OpinionExtractionResult with extracted opinions
-            
+
         Raises:
             NetworkError: If the URL cannot be fetched
             ContentExtractionError: If content cannot be extracted
         """
-        logger.info(f"Extracting opinions from URL: {url}")
-        
+        logger.info(f"Extracting opinions from URL: {url} (use_llm={use_llm})")
+
         # Fetch HTML
         html = self.fetch_html(url)
-        
-        # Clean and extract text
+
+        # Clean and extract text using HTML parsing (token-efficient)
         text, title = self.clean_html(html)
-        
+
         if not text or len(text.strip()) < 50:
             logger.warning(f"Insufficient content extracted from {url}")
             raise ContentExtractionError(
                 message="Insufficient content extracted from page",
                 url=url
             )
-        
-        # Process with LLM
-        result = self.extract_from_text(text, url=url, title=title)
-        
+
+        # Process with LLM for opinion extraction (always needed for this agent)
+        result = self.extract_from_text(text, url=url, title=title, use_llm=use_llm, use_cot=use_cot, custom_few_shots=custom_few_shots)
+
         return result
     
     def extract_from_html(
         self,
         html: str,
-        url: Optional[str] = None
+        url: Optional[str] = None,
+        use_llm: bool = True,
+        use_cot: bool = False,
+        custom_few_shots: Optional[str] = None
     ) -> OpinionExtractionResult:
         """
         Extract opinions from raw HTML content.
-        
+
         Args:
             html: Raw HTML string
             url: Optional source URL for metadata
-            
+            use_llm: Whether to use LLM for opinion extraction and analysis (default True for opinion extraction)
+            use_cot: Whether to use Chain of Thought reasoning (only when use_llm=True)
+            custom_few_shots: Optional custom few-shot examples (only when use_llm=True)
+
         Returns:
             OpinionExtractionResult with extracted opinions
         """
-        logger.info("Extracting opinions from HTML content")
-        
-        # Clean and extract text
+        logger.info(f"Extracting opinions from HTML content (use_llm={use_llm})")
+
+        # Clean and extract text using HTML parsing (token-efficient)
         text, title = self.clean_html(html)
-        
+
         if not text or len(text.strip()) < 50:
             logger.warning("Insufficient content in HTML")
             return OpinionExtractionResult(
@@ -416,33 +427,56 @@ Return your analysis as a JSON object."""
                 truncated=False,
                 extraction_metadata={"error": "Insufficient content"}
             )
-        
-        return self.extract_from_text(text, url=url, title=title)
+
+        return self.extract_from_text(text, url=url, title=title, use_llm=use_llm, use_cot=use_cot, custom_few_shots=custom_few_shots)
     
     def extract_from_text(
         self,
         text: str,
         url: Optional[str] = None,
-        title: Optional[str] = None
+        title: Optional[str] = None,
+        use_llm: bool = True,
+        use_cot: bool = False,
+        custom_few_shots: Optional[str] = None
     ) -> OpinionExtractionResult:
         """
         Extract opinions from plain text.
-        
+
         Args:
             text: Plain text content
             url: Optional source URL for metadata
             title: Optional page title
-            
+            use_llm: Whether to use LLM for opinion extraction and analysis (default True for opinion extraction)
+            use_cot: Whether to use Chain of Thought reasoning (only when use_llm=True)
+            custom_few_shots: Optional custom few-shot examples (only when use_llm=True)
+
         Returns:
             OpinionExtractionResult with extracted opinions
         """
-        logger.info(f"Extracting opinions from text ({len(text)} chars)")
-        
+        logger.info(f"Extracting opinions from text ({len(text)} chars, use_llm={use_llm})")
+
+        # For opinion extraction, LLM is typically required
+        if not use_llm:
+            logger.warning("Opinion extraction requires LLM analysis, but use_llm=False. Returning empty result.")
+            return OpinionExtractionResult(
+                url=url,
+                title=title,
+                atomic_opinions=[],
+                facts=[],
+                opinions=[],
+                text_length=len(text),
+                truncated=False,
+                extraction_metadata={
+                    "error": "LLM required for opinion extraction",
+                    "use_llm": False
+                }
+            )
+
         # Truncate if necessary
         text, was_truncated = self.truncate_text(text)
-        
+
         # Extract opinions using LLM
-        raw_opinions = self._extract_opinions_with_llm(text)
+        raw_opinions = self._extract_opinions_with_llm(text, use_cot=use_cot, custom_few_shots=custom_few_shots)
         
         # Convert to AtomicOpinion objects
         atomic_opinions = []
@@ -481,11 +515,14 @@ Return your analysis as a JSON object."""
             text_length=len(text),
             truncated=was_truncated,
             extraction_metadata={
-                "model": self.llm.model_name,
-                "temperature": self.llm.temperature,
+                "model": self.llm.model_name if use_llm else None,
+                "temperature": self.llm.temperature if use_llm else None,
+                "use_llm": use_llm,
+                "use_cot": use_cot,
                 "total_extracted": len(atomic_opinions),
                 "facts_count": len(facts),
-                "opinions_count": len(opinions)
+                "opinions_count": len(opinions),
+                "extraction_method": "llm_analysis" if use_llm else "none"
             }
         )
         
@@ -509,26 +546,29 @@ Return your analysis as a JSON object."""
     
     # ========== HIGH-LEVEL PUBLIC API METHODS ==========
     
-    def extract_and_analyze(self, url: str) -> OpinionExtractionResult:
+    def extract_and_analyze(self, url: str, use_llm: bool = True, use_cot: bool = False, custom_few_shots: Optional[str] = None) -> OpinionExtractionResult:
         """
         High-level API: Complete pipeline to extract and analyze opinions from a URL.
-        
+
         This is the main entry point that encapsulates the entire complexity:
         1. Fetch HTML from URL
         2. Clean and extract main content
         3. Analyze with LLM
         4. Parse and return results
-        
+
         Args:
             url: The URL to process
-            
+            use_llm: Whether to use LLM for opinion extraction and analysis (default True for opinion extraction)
+            use_cot: Whether to use Chain of Thought reasoning (only when use_llm=True)
+            custom_few_shots: Optional custom few-shot examples (only when use_llm=True)
+
         Returns:
             OpinionExtractionResult with extracted opinions and metadata
-            
+
         Raises:
             NetworkError: If the URL cannot be fetched
             ContentExtractionError: If content cannot be extracted
-        
+
         Example:
             >>> extractor = WebOpinionExtractor()
             >>> result = extractor.extract_and_analyze("https://example.com/article")
@@ -539,10 +579,10 @@ Return your analysis as a JSON object."""
             ...     if opinion.reasoning:
             ...         print(f"    Reasoning: {opinion.reasoning}")
         """
-        logger.info(f"[extract_and_analyze] Processing URL: {url}")
-        
+        logger.info(f"[extract_and_analyze] Processing URL: {url} (use_llm={use_llm})")
+
         try:
-            result = self.extract_from_url(url)
+            result = self.extract_from_url(url, use_llm=use_llm, use_cot=use_cot, custom_few_shots=custom_few_shots)
             logger.info(f"[extract_and_analyze] Successfully processed {url}")
             return result
         except (NetworkError, ContentExtractionError) as e:
@@ -612,21 +652,27 @@ Return your analysis as a JSON object."""
         self,
         text: str,
         url: Optional[str] = None,
-        title: Optional[str] = None
+        title: Optional[str] = None,
+        use_llm: bool = True,
+        use_cot: bool = False,
+        custom_few_shots: Optional[str] = None
     ) -> OpinionExtractionResult:
         """
         Step 3 API: Analyze cleaned text with LLM.
-        
+
         This method is exposed to verify the LLM analysis step independently.
-        
+
         Args:
             text: Cleaned text content to analyze
             url: Optional source URL for metadata
             title: Optional page title for metadata
-            
+            use_llm: Whether to use LLM for opinion extraction and analysis (default True for opinion extraction)
+            use_cot: Whether to use Chain of Thought reasoning (only when use_llm=True)
+            custom_few_shots: Optional custom few-shot examples (only when use_llm=True)
+
         Returns:
             OpinionExtractionResult with extracted opinions
-            
+
         Example:
             >>> extractor = WebOpinionExtractor()
             >>> text = "I strongly support this policy. It will help workers."
@@ -635,8 +681,8 @@ Return your analysis as a JSON object."""
             >>> for opinion in result.opinions:
             ...     print(f"  {opinion.text}: {opinion.bias_probabilities.dominant_bias}")
         """
-        logger.info(f"[analyze_text] Analyzing text ({len(text)} chars)")
-        result = self.extract_from_text(text, url=url, title=title)
+        logger.info(f"[analyze_text] Analyzing text ({len(text)} chars, use_llm={use_llm})")
+        result = self.extract_from_text(text, url=url, title=title, use_llm=use_llm, use_cot=use_cot, custom_few_shots=custom_few_shots)
         logger.info(f"[analyze_text] Analysis complete: {len(result.opinions)} opinions extracted")
         return result
     
@@ -708,21 +754,24 @@ class WebOpinionAnalyzer:
         exec_mode = getattr(self._extractor, 'execution_mode', execution_mode or 'chain_local')
         logger.info(f"WebOpinionAnalyzer initialized with mode={exec_mode}")
     
-    def extract_and_analyze(self, url: str) -> OpinionExtractionResult:
+    def extract_and_analyze(self, url: str, use_llm: bool = True, use_cot: bool = False, custom_few_shots: Optional[str] = None) -> OpinionExtractionResult:
         """
         Main entry point: Extract and analyze opinions from a URL.
-        
+
         This method encapsulates the complete pipeline and provides robust error handling.
         Instead of raising exceptions, it returns a valid OpinionExtractionResult with
         error information in the extraction_metadata field when failures occur.
-        
+
         Args:
             url: The URL to process
-            
+            use_llm: Whether to use LLM for opinion extraction and analysis (default True for opinion extraction)
+            use_cot: Whether to use Chain of Thought reasoning (only when use_llm=True)
+            custom_few_shots: Optional custom few-shot examples (only when use_llm=True)
+
         Returns:
             OpinionExtractionResult - Always returns a valid result object.
             Check extraction_metadata["error"] to detect failures.
-            
+
         Example:
             >>> analyzer = WebOpinionAnalyzer()
             >>> result = analyzer.extract_and_analyze("https://example.com/article")
@@ -732,7 +781,7 @@ class WebOpinionAnalyzer:
             ...     print(f"Success! Found {len(result.opinions)} opinions")
         """
         try:
-            return self._extractor.extract_and_analyze(url)
+            return self._extractor.extract_and_analyze(url, use_llm=use_llm, use_cot=use_cot, custom_few_shots=custom_few_shots)
         except NetworkError as e:
             logger.warning(f"Network error for {url}: {e}")
             return OpinionExtractionResult(
@@ -817,23 +866,29 @@ class WebOpinionAnalyzer:
         self,
         text: str,
         url: Optional[str] = None,
-        title: Optional[str] = None
+        title: Optional[str] = None,
+        use_llm: bool = True,
+        use_cot: bool = False,
+        custom_few_shots: Optional[str] = None
     ) -> OpinionExtractionResult:
         """
         Step 3 verification: Analyze text with LLM.
-        
+
         Returns an error result on failure instead of raising exceptions.
-        
+
         Args:
             text: Cleaned text to analyze
             url: Optional source URL
             title: Optional page title
-            
+            use_llm: Whether to use LLM for opinion extraction and analysis (default True for opinion extraction)
+            use_cot: Whether to use Chain of Thought reasoning (only when use_llm=True)
+            custom_few_shots: Optional custom few-shot examples (only when use_llm=True)
+
         Returns:
             OpinionExtractionResult - Check extraction_metadata["error"] for failures
         """
         try:
-            return self._extractor.analyze_text(text, url=url, title=title)
+            return self._extractor.analyze_text(text, url=url, title=title, use_llm=use_llm, use_cot=use_cot, custom_few_shots=custom_few_shots)
         except Exception as e:
             logger.error(f"Failed to analyze text: {e}")
             return OpinionExtractionResult(

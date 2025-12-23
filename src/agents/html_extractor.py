@@ -157,16 +157,7 @@ class HTMLExtractor(ABC):
         # Use article title if found, otherwise fall back to page title
         title = article_title or page_title
 
-        # Remove non-content tags first
-        for tag_name in NON_CONTENT_TAGS:
-            for tag in soup.find_all(tag_name):
-                tag.decompose()
-
-        # Remove all anchor tags (links) but keep their text
-        for a_tag in soup.find_all("a"):
-            a_tag.unwrap()
-
-        # Try to find main content area using common selectors
+        # Try to find main content area using common selectors FIRST
         main_content = None
         for selector in MAIN_CONTENT_SELECTORS:
             main_content = soup.select_one(selector)
@@ -174,19 +165,40 @@ class HTMLExtractor(ABC):
                 logger.debug(f"Found main content using selector: {selector}")
                 break
 
-        # If main content area found, extract text from it
+        # If main content area found, extract directly from it (most efficient)
         if main_content:
             # Remove navigation-style lists that might be inside main content
             self._remove_navigation_lists(main_content)
+            # Remove non-content tags from main content area only
+            for tag_name in NON_CONTENT_TAGS:
+                for tag in main_content.find_all(tag_name):
+                    tag.decompose()
+            # Remove all anchor tags (links) but keep their text
+            for a_tag in main_content.find_all("a"):
+                a_tag.unwrap()
             text = self._extract_article_text(main_content, title)
         else:
             # Fallback: try to extract from body, removing obvious non-content
             body = soup.find("body")
             if body:
+                # Remove non-content tags first
+                for tag_name in NON_CONTENT_TAGS:
+                    for tag in body.find_all(tag_name):
+                        tag.decompose()
+                # Remove all anchor tags (links) but keep their text
+                for a_tag in body.find_all("a"):
+                    a_tag.unwrap()
                 self._remove_navigation_lists(body)
                 text = self._extract_article_text(body, title)
             else:
                 # Last resort: extract from entire cleaned soup
+                # Remove non-content tags first
+                for tag_name in NON_CONTENT_TAGS:
+                    for tag in soup.find_all(tag_name):
+                        tag.decompose()
+                # Remove all anchor tags (links) but keep their text
+                for a_tag in soup.find_all("a"):
+                    a_tag.unwrap()
                 text = soup.get_text(separator="\n", strip=True)
 
         # Clean up whitespace
