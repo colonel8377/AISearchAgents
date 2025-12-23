@@ -13,6 +13,11 @@ from ..agents.summarizer.agent import SummarizerAgent
 from ..agents.bot_creator.agent import BotCreatorAgent
 from ..agents.demographic_evaluator.agent import DemographicEvaluatorAgent
 from ..agents.manager import AgentManager, AgentType
+from ..agents.content_extractor.agent import ContentExtractorAgent, ContentExtractionResult
+from ..agents.claim_atomizer.agent import ClaimAtomizerAgent, ClaimAtomizationResult, AtomicClaim
+from ..agents.evidence_locator.agent import EvidenceLocatorAgent, EvidenceLocationResult, ClaimEvidence, EvidenceQuote
+from ..agents.conflict_auditor.agent import ConflictAuditorAgent, ConflictAuditResult, ConflictAnalysis, ConflictType
+from ..agents.synthesis_aggregator.agent import SynthesisAggregatorAgent, SynthesisAggregationResult, SynthesisReport
 from .auth import verify_api_key
 from ..debate.schemas import PersonaConfig, AgentMetadata, InitRequest, InteractRequest, VoteResponse
 from ..debate.service import DebateService, generate_default_personas
@@ -207,6 +212,142 @@ class ListAgentsResponse(BaseModel):
     total_count: int
 
 
+# Content Extractor Models
+class ExtractContentRequest(BaseModel):
+    """Request model for content extraction."""
+    url: Optional[str] = Field(default=None, description="URL to extract content from")
+    html: Optional[str] = Field(default=None, description="Raw HTML to extract content from")
+    text: Optional[str] = Field(default=None, description="Plain text to process (alternative to URL/HTML)")
+    title: Optional[str] = Field(default=None, description="Optional title (used when text is provided)")
+    use_llm: bool = Field(default=False, description="Whether to use LLM for content refinement")
+    use_cot: bool = Field(default=False, description="Whether to use Chain of Thought reasoning (only when use_llm=True)")
+    custom_few_shots: Optional[str] = Field(default=None, description="Optional custom few-shot examples (only when use_llm=True)")
+
+    @model_validator(mode='after')
+    def validate_input_source(self):
+        """Ensure exactly one input source is provided."""
+        sources = [self.url, self.html, self.text]
+        provided_sources = [s for s in sources if s is not None]
+        if len(provided_sources) != 1:
+            raise ValueError("Exactly one of 'url', 'html', or 'text' must be provided")
+        return self
+
+
+class ContentExtractionResponse(BaseModel):
+    """Response model for content extraction."""
+    url: Optional[str] = None
+    title: Optional[str] = None
+    main_body: Optional[str] = None
+    text_length: int
+    truncated: bool
+    extraction_metadata: Optional[Dict[str, Any]] = None
+
+
+# Claim Atomizer Models
+class AtomizeClaimsRequest(BaseModel):
+    """Request model for claim atomization."""
+    text: str = Field(..., description="Text snippet to decompose into atomic claims")
+    use_cot: bool = Field(default=False, description="Whether to use Chain of Thought reasoning")
+    custom_few_shots: Optional[str] = Field(default=None, description="Optional custom few-shot examples")
+
+
+class AtomicClaimResponse(BaseModel):
+    """Response model for a single atomic claim."""
+    id: str
+    text: str
+    original_sentence: str
+    confidence: float
+
+
+class ClaimAtomizationResponse(BaseModel):
+    """Response model for claim atomization."""
+    atomic_claims: List[AtomicClaimResponse]
+    original_text: str
+    execution_mode: str
+    metadata: Optional[Dict[str, Any]] = None
+
+
+# Evidence Locator Models
+class LocateEvidenceRequest(BaseModel):
+    """Request model for evidence location."""
+    claims: List[Dict[str, Any]] = Field(..., description="List of claims with 'id' and 'text' keys")
+    main_body: str = Field(..., description="Main body text to search for evidence")
+    use_llm: bool = Field(default=True, description="Whether to use LLM for evidence location")
+
+
+class EvidenceQuoteResponse(BaseModel):
+    """Response model for evidence quotes."""
+    text: str
+    location: str
+    start_pos: int
+    end_pos: int
+
+
+class ClaimEvidenceResponse(BaseModel):
+    """Response model for claim evidence."""
+    claim_id: str
+    claim_text: str
+    evidence_found: bool
+    quotes: List[EvidenceQuoteResponse]
+    reasoning: str
+
+
+class EvidenceLocationResponse(BaseModel):
+    """Response model for evidence location."""
+    claim_evidences: List[ClaimEvidenceResponse]
+    main_body_text: str
+    metadata: Optional[Dict[str, Any]] = None
+
+
+# Conflict Auditor Models
+class AuditConflictsRequest(BaseModel):
+    """Request model for conflict auditing."""
+    claim_evidences: List[Dict[str, Any]] = Field(..., description="List of claim-evidence pairs")
+    use_cot: bool = Field(default=False, description="Whether to use Chain of Thought reasoning")
+    custom_few_shots: Optional[str] = Field(default=None, description="Optional custom few-shot examples")
+
+
+class ConflictAnalysisResponse(BaseModel):
+    """Response model for conflict analysis."""
+    claim_id: str
+    claim_text: str
+    evidence_quotes: List[str]
+    verdict: str
+    conflict_type: str
+    analysis: str
+    confidence: float
+
+
+class ConflictAuditResponse(BaseModel):
+    """Response model for conflict auditing."""
+    conflict_analyses: List[ConflictAnalysisResponse]
+    summary_stats: Dict[str, Any]
+    execution_mode: str
+    metadata: Optional[Dict[str, Any]] = None
+
+
+# Synthesis Aggregator Models
+class AggregateSynthesisRequest(BaseModel):
+    """Request model for synthesis aggregation."""
+    conflict_analyses: List[Dict[str, Any]] = Field(..., description="List of conflict analysis results")
+    use_llm_enhancement: bool = Field(default=True, description="Whether to use LLM for enhanced analysis")
+
+
+class SynthesisReportResponse(BaseModel):
+    """Response model for synthesis report."""
+    research_summary: str
+    metrics: Dict[str, Any]
+    detailed_discrepancies: List[Dict[str, Any]]
+    quality_assessment: str
+    confidence_score: float
+
+
+class SynthesisAggregationResponse(BaseModel):
+    """Response model for synthesis aggregation."""
+    synthesis_report: SynthesisReportResponse
+    metadata: Optional[Dict[str, Any]] = None
+
+
 # Initialize FastAPI app
 app = FastAPI(
     title="AI Search Agents Platform",
@@ -239,7 +380,13 @@ async def root():
         "agent_types": {
             "nudge_collapse": "4-turn radicalization protocol agent",
             "summarizer": "Conversation summarization agent with focus on user questions",
-            "bot_creator": "Bot creation and configuration agent"
+            "bot_creator": "Bot creation and configuration agent",
+            "demographic_evaluator": "Sentence evaluation from demographic perspectives",
+            "content_extractor": "Academic content extraction from web pages",
+            "claim_atomizer": "Atomic claim decomposition from text",
+            "evidence_locator": "Evidence location in main body text",
+            "conflict_auditor": "Logical consistency auditing between claims and evidence",
+            "synthesis_aggregator": "Comprehensive conflict analysis synthesis"
         },
         "endpoints": {
             "agents": "/api/v1/agents (POST to create, GET to list)",
@@ -251,6 +398,19 @@ async def root():
             "summarizer_default_shots": "/api/v1/agents/summarizer/default-shots (GET - get default few-shot examples)",
             "bot_creator": "/api/v1/agents/{agent_id}/bot-creator/*",
             "bot_creator_default_shots": "/api/v1/agents/bot-creator/default-shots (GET - get default few-shot examples)",
+            "demographic_evaluator": "/api/v1/agents/{agent_id}/demographic-evaluator/*",
+            "demographic_evaluator_default_shots": "/api/v1/agents/demographic-evaluator/default-shots (GET - get default few-shot examples)",
+            "content_extractor": "/api/v1/agents/{agent_id}/content-extractor/*",
+            "content_extractor_default_shots": "/api/v1/agents/content-extractor/default-shots (GET - get default few-shot examples)",
+            "claim_atomizer": "/api/v1/agents/{agent_id}/claim-atomizer/*",
+            "claim_atomizer_default_shots": "/api/v1/agents/claim-atomizer/default-shots (GET - get default few-shot examples)",
+            "evidence_locator": "/api/v1/agents/{agent_id}/evidence-locator/*",
+            "evidence_locator_default_shots": "/api/v1/agents/evidence-locator/default-shots (GET - get default few-shot examples)",
+            "conflict_auditor": "/api/v1/agents/{agent_id}/conflict-auditor/*",
+            "conflict_auditor_default_shots": "/api/v1/agents/conflict-auditor/default-shots (GET - get default few-shot examples)",
+            "synthesis_aggregator": "/api/v1/agents/{agent_id}/synthesis-aggregator/*",
+            "synthesis_aggregator_default_shots": "/api/v1/agents/synthesis-aggregator/default-shots (GET - get default few-shot examples)",
+            "overall_evaluation": "/api/v1/evaluation/overall (POST - comprehensive evaluation of summary/URL with statistics)",
             "debate_init": "/debate/init (POST to create debate session)",
             "debate_chat": "/agent/{agent_id}/chat (POST to interact with agent)",
             "debate_stability": "/debate/{session_id}/stability_check (POST to check stability)",
@@ -372,6 +532,48 @@ async def create_agent(
             )
         elif request.agent_type == AgentType.DEMOGRAPHIC_EVALUATOR:
             agent_instance = DemographicEvaluatorAgent(
+                model_name=settings.openai_model,
+                api_key=settings.openai_api_key,
+                api_base=settings.openai_api_base,
+                temperature=settings.agent_temperature,
+                proxy=proxy
+            )
+        elif request.agent_type == AgentType.CONTENT_EXTRACTOR:
+            agent_instance = ContentExtractorAgent(
+                model_name=settings.openai_model,
+                api_key=settings.openai_api_key,
+                api_base=settings.openai_api_base,
+                temperature=settings.agent_temperature,
+                proxy=proxy
+            )
+        elif request.agent_type == AgentType.CLAIM_ATOMIZER:
+            agent_instance = ClaimAtomizerAgent(
+                model_name=settings.openai_model,
+                api_key=settings.openai_api_key,
+                api_base=settings.openai_api_base,
+                temperature=settings.agent_temperature,
+                proxy=proxy,
+                execution_mode=settings.default_execution_mode
+            )
+        elif request.agent_type == AgentType.EVIDENCE_LOCATOR:
+            agent_instance = EvidenceLocatorAgent(
+                model_name=settings.openai_model,
+                api_key=settings.openai_api_key,
+                api_base=settings.openai_api_base,
+                temperature=settings.agent_temperature,
+                proxy=proxy
+            )
+        elif request.agent_type == AgentType.CONFLICT_AUDITOR:
+            agent_instance = ConflictAuditorAgent(
+                model_name=settings.openai_model,
+                api_key=settings.openai_api_key,
+                api_base=settings.openai_api_base,
+                temperature=settings.agent_temperature,
+                proxy=proxy,
+                execution_mode=settings.default_execution_mode
+            )
+        elif request.agent_type == AgentType.SYNTHESIS_AGGREGATOR:
+            agent_instance = SynthesisAggregatorAgent(
                 model_name=settings.openai_model,
                 api_key=settings.openai_api_key,
                 api_base=settings.openai_api_base,
@@ -2225,3 +2427,948 @@ async def get_overall_bias_score(
             error="analysis_failed",
             error_message=str(e)
         )
+
+
+# ===========================
+# Academic Content Analysis Endpoints
+# ===========================
+
+# Content Extractor Endpoints
+@app.post("/api/v1/agents/{agent_id}/content-extractor/extract", response_model=ContentExtractionResponse)
+async def extract_content(
+    agent_id: str,
+    request: ExtractContentRequest,
+    api_key: str = Depends(verify_api_key)
+):
+    """
+    Extract academic content from URL, HTML, or text.
+
+    This endpoint extracts the main title and body content from various sources,
+    focusing on academic/informational content while excluding navigation and ads.
+
+    Args:
+        agent_id: The agent's unique identifier
+        request: Content extraction request with URL, HTML, or text
+        api_key: API key for authentication
+
+    Returns:
+        ContentExtractionResponse with extracted title and main body
+    """
+    agent = agent_manager.get_agent(agent_id)
+    if not agent:
+        raise HTTPException(status_code=404, detail=f"Agent '{agent_id}' not found")
+
+    agent_type = agent_manager.get_agent_type(agent_id)
+    if agent_type != AgentType.CONTENT_EXTRACTOR:
+        raise HTTPException(
+            status_code=400,
+            detail=f"This endpoint requires a 'content_extractor' agent, but agent '{agent_id}' is type '{agent_type}'"
+        )
+
+    try:
+        if request.url:
+            result = agent.extract_from_url(request.url, use_llm=request.use_llm, use_cot=request.use_cot, custom_few_shots=request.custom_few_shots)
+        elif request.html:
+            result = agent.extract_from_html(request.html, use_llm=request.use_llm, use_cot=request.use_cot, custom_few_shots=request.custom_few_shots)
+        else:  # request.text
+            result = agent.extract_from_text(request.text, title=request.title, use_llm=request.use_llm, use_cot=request.use_cot, custom_few_shots=request.custom_few_shots)
+
+        return ContentExtractionResponse(**result.__dict__)
+
+    except Exception as e:
+        logger.error(f"Failed to extract content for agent {agent_id}: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=f"Failed to extract content: {str(e)}")
+
+
+# Claim Atomizer Endpoints
+@app.post("/api/v1/agents/{agent_id}/claim-atomizer/atomize", response_model=ClaimAtomizationResponse)
+async def atomize_claims(
+    agent_id: str,
+    request: AtomizeClaimsRequest,
+    api_key: str = Depends(verify_api_key)
+):
+    """
+    Decompose text into atomic claims.
+
+    This endpoint breaks down provided text into independent, verifiable atomic claims,
+    each containing only one factual point.
+
+    Args:
+        agent_id: The agent's unique identifier
+        request: Claim atomization request with text and options
+        api_key: API key for authentication
+
+    Returns:
+        ClaimAtomizationResponse with atomic claims
+    """
+    agent = agent_manager.get_agent(agent_id)
+    if not agent:
+        raise HTTPException(status_code=404, detail=f"Agent '{agent_id}' not found")
+
+    agent_type = agent_manager.get_agent_type(agent_id)
+    if agent_type != AgentType.CLAIM_ATOMIZER:
+        raise HTTPException(
+            status_code=400,
+            detail=f"This endpoint requires a 'claim_atomizer' agent, but agent '{agent_id}' is type '{agent_type}'"
+        )
+
+    try:
+        result = agent.atomize_text(
+            text=request.text,
+            use_cot=request.use_cot,
+            custom_few_shots=request.custom_few_shots
+        )
+
+        # Convert to response format
+        atomic_claims = [
+            AtomicClaimResponse(**claim.__dict__) for claim in result.atomic_claims
+        ]
+
+        return ClaimAtomizationResponse(
+            atomic_claims=atomic_claims,
+            original_text=result.original_text,
+            execution_mode=result.execution_mode,
+            metadata=result.metadata
+        )
+
+    except Exception as e:
+        logger.error(f"Failed to atomize claims for agent {agent_id}: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=f"Failed to atomize claims: {str(e)}")
+
+
+@app.get("/api/v1/agents/content-extractor/default-shots")
+async def get_content_extractor_default_shots(api_key: str = Depends(verify_api_key)):
+    """
+    Get default few-shot examples for Content Extractor agent.
+
+    Args:
+        api_key: API key for authentication
+
+    Returns:
+        Default few-shot examples
+    """
+    try:
+        from ..agents.content_extractor.agent import ContentExtractorAgent
+        few_shots = ContentExtractorAgent.get_default_few_shots()
+        return {
+            "agent_type": "content_extractor",
+            "few_shots": few_shots
+        }
+    except Exception as e:
+        logger.error(f"Failed to get default few shots: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=f"Failed to get default few shots: {str(e)}")
+
+
+@app.get("/api/v1/agents/claim-atomizer/default-shots")
+async def get_claim_atomizer_default_shots(api_key: str = Depends(verify_api_key)):
+    """
+    Get default few-shot examples for Claim Atomizer agent.
+
+    Args:
+        api_key: API key for authentication
+
+    Returns:
+        Default few-shot examples
+    """
+    try:
+        from ..agents.claim_atomizer.agent import ClaimAtomizerAgent
+        few_shots = ClaimAtomizerAgent.get_default_few_shots()
+        return {
+            "agent_type": "claim_atomizer",
+            "few_shots": few_shots
+        }
+    except Exception as e:
+        logger.error(f"Failed to get default few shots: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=f"Failed to get default few shots: {str(e)}")
+
+
+# Evidence Locator Endpoints
+@app.post("/api/v1/agents/{agent_id}/evidence-locator/locate", response_model=EvidenceLocationResponse)
+async def locate_evidence(
+    agent_id: str,
+    request: LocateEvidenceRequest,
+    api_key: str = Depends(verify_api_key)
+):
+    """
+    Locate evidence for claims in main body text.
+
+    This endpoint searches through the main body text to find supporting or
+    contradicting evidence for each atomic claim.
+
+    Args:
+        agent_id: The agent's unique identifier
+        request: Evidence location request with claims and main body text
+        api_key: API key for authentication
+
+    Returns:
+        EvidenceLocationResponse with evidence for each claim
+    """
+    agent = agent_manager.get_agent(agent_id)
+    if not agent:
+        raise HTTPException(status_code=404, detail=f"Agent '{agent_id}' not found")
+
+    agent_type = agent_manager.get_agent_type(agent_id)
+    if agent_type != AgentType.EVIDENCE_LOCATOR:
+        raise HTTPException(
+            status_code=400,
+            detail=f"This endpoint requires a 'evidence_locator' agent, but agent '{agent_id}' is type '{agent_type}'"
+        )
+
+    try:
+        result = agent.locate_evidence(request.claims, request.main_body, use_llm=request.use_llm)
+
+        # Convert to response format
+        claim_evidences = []
+        for ce in result.claim_evidences:
+            quotes = [
+                EvidenceQuoteResponse(**quote.__dict__) for quote in ce.quotes
+            ]
+            claim_evidences.append(ClaimEvidenceResponse(
+                claim_id=ce.claim_id,
+                claim_text=ce.claim_text,
+                evidence_found=ce.evidence_found,
+                quotes=quotes,
+                reasoning=ce.reasoning
+            ))
+
+        return EvidenceLocationResponse(
+            claim_evidences=claim_evidences,
+            main_body_text=result.main_body_text,
+            metadata=result.metadata
+        )
+
+    except Exception as e:
+        logger.error(f"Failed to locate evidence for agent {agent_id}: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=f"Failed to locate evidence: {str(e)}")
+
+
+# Conflict Auditor Endpoints
+@app.post("/api/v1/agents/{agent_id}/conflict-auditor/audit", response_model=ConflictAuditResponse)
+async def audit_conflicts(
+    agent_id: str,
+    request: AuditConflictsRequest,
+    api_key: str = Depends(verify_api_key)
+):
+    """
+    Audit conflicts between claims and evidence.
+
+    This endpoint compares each atomic claim against its supporting evidence
+    to determine logical consistency and identify conflicts.
+
+    Args:
+        agent_id: The agent's unique identifier
+        request: Conflict audit request with claim-evidence pairs
+        api_key: API key for authentication
+
+    Returns:
+        ConflictAuditResponse with detailed conflict analyses
+    """
+    agent = agent_manager.get_agent(agent_id)
+    if not agent:
+        raise HTTPException(status_code=404, detail=f"Agent '{agent_id}' not found")
+
+    agent_type = agent_manager.get_agent_type(agent_id)
+    if agent_type != AgentType.CONFLICT_AUDITOR:
+        raise HTTPException(
+            status_code=400,
+            detail=f"This endpoint requires a 'conflict_auditor' agent, but agent '{agent_id}' is type '{agent_type}'"
+        )
+
+    try:
+        result = agent.audit_conflicts(
+            claim_evidences=request.claim_evidences,
+            use_cot=request.use_cot,
+            custom_few_shots=request.custom_few_shots
+        )
+
+        # Convert to response format
+        conflict_analyses = []
+        for ca in result.conflict_analyses:
+            conflict_analyses.append(ConflictAnalysisResponse(
+                claim_id=ca.claim_id,
+                claim_text=ca.claim_text,
+                evidence_quotes=ca.evidence_quotes,
+                verdict=ca.verdict.value,
+                conflict_type=ca.conflict_type,
+                analysis=ca.analysis,
+                confidence=ca.confidence
+            ))
+
+        return ConflictAuditResponse(
+            conflict_analyses=conflict_analyses,
+            summary_stats=result.summary_stats,
+            execution_mode=result.execution_mode,
+            metadata=result.metadata
+        )
+
+    except Exception as e:
+        logger.error(f"Failed to audit conflicts for agent {agent_id}: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=f"Failed to audit conflicts: {str(e)}")
+
+
+@app.get("/api/v1/agents/conflict-auditor/default-shots")
+async def get_conflict_auditor_default_shots(api_key: str = Depends(verify_api_key)):
+    """
+    Get default few-shot examples for Conflict Auditor agent.
+
+    Args:
+        api_key: API key for authentication
+
+    Returns:
+        Default few-shot examples
+    """
+    try:
+        from ..agents.conflict_auditor.agent import ConflictAuditorAgent
+        few_shots = ConflictAuditorAgent.get_default_few_shots()
+        return {
+            "agent_type": "conflict_auditor",
+            "few_shots": few_shots
+        }
+    except Exception as e:
+        logger.error(f"Failed to get default few shots: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=f"Failed to get default few shots: {str(e)}")
+
+
+@app.get("/api/v1/agents/evidence-locator/default-shots")
+async def get_evidence_locator_default_shots(api_key: str = Depends(verify_api_key)):
+    """
+    Get default few-shot examples for Evidence Locator agent.
+
+    Args:
+        api_key: API key for authentication
+
+    Returns:
+        Default few-shot examples
+    """
+    try:
+        # Evidence Locator doesn't have few-shot examples currently
+        return {
+            "agent_type": "evidence_locator",
+            "few_shots": "Evidence Locator uses string matching validation rather than few-shot examples for maximum accuracy."
+        }
+    except Exception as e:
+        logger.error(f"Failed to get default few shots: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=f"Failed to get default few shots: {str(e)}")
+
+
+@app.get("/api/v1/agents/synthesis-aggregator/default-shots")
+async def get_synthesis_aggregator_default_shots(api_key: str = Depends(verify_api_key)):
+    """
+    Get default few-shot examples for Synthesis Aggregator agent.
+
+    Args:
+        api_key: API key for authentication
+
+    Returns:
+        Default few-shot examples
+    """
+    try:
+        # Synthesis Aggregator doesn't have few-shot examples currently
+        return {
+            "agent_type": "synthesis_aggregator",
+            "few_shots": "Synthesis Aggregator uses statistical analysis rather than few-shot examples."
+        }
+    except Exception as e:
+        logger.error(f"Failed to get default few shots: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=f"Failed to get default few shots: {str(e)}")
+
+
+# Synthesis Aggregator Endpoints
+@app.post("/api/v1/agents/{agent_id}/synthesis-aggregator/aggregate", response_model=SynthesisAggregationResponse)
+async def aggregate_synthesis(
+    agent_id: str,
+    request: AggregateSynthesisRequest,
+    api_key: str = Depends(verify_api_key)
+):
+    """
+    Aggregate conflict analyses into comprehensive synthesis report.
+
+    This endpoint creates a comprehensive report from conflict analysis results,
+    including quantitative metrics and quality assessment.
+
+    Args:
+        agent_id: The agent's unique identifier
+        request: Synthesis aggregation request with conflict analyses
+        api_key: API key for authentication
+
+    Returns:
+        SynthesisAggregationResponse with comprehensive report
+    """
+    agent = agent_manager.get_agent(agent_id)
+    if not agent:
+        raise HTTPException(status_code=404, detail=f"Agent '{agent_id}' not found")
+
+    agent_type = agent_manager.get_agent_type(agent_id)
+    if agent_type != AgentType.SYNTHESIS_AGGREGATOR:
+        raise HTTPException(
+            status_code=400,
+            detail=f"This endpoint requires a 'synthesis_aggregator' agent, but agent '{agent_id}' is type '{agent_type}'"
+        )
+
+    try:
+        result = agent.aggregate_synthesis(
+            conflict_analyses=request.conflict_analyses,
+            use_llm_enhancement=request.use_llm_enhancement
+        )
+
+        # Convert to response format
+        synthesis_report = SynthesisReportResponse(**result.synthesis_report.__dict__)
+
+        return SynthesisAggregationResponse(
+            synthesis_report=synthesis_report,
+            metadata=result.metadata
+        )
+
+    except Exception as e:
+        logger.error(f"Failed to aggregate synthesis for agent {agent_id}: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=f"Failed to aggregate synthesis: {str(e)}")
+
+
+# ===========================
+# Overall Evaluation Interface
+# ===========================
+
+class OverallEvaluationRequest(BaseModel):
+    """Request model for overall evaluation of summary and URL."""
+    summary: Optional[str] = Field(default=None, description="Text summary to evaluate")
+    url: Optional[str] = Field(default=None, description="URL to evaluate")
+    include_full_analysis: bool = Field(default=False, description="Whether to include full academic analysis pipeline")
+
+    @model_validator(mode='after')
+    def validate_input(self):
+        """Ensure at least one input is provided."""
+        if not self.summary and not self.url:
+            raise ValueError("At least one of 'summary' or 'url' must be provided")
+        return self
+
+
+class EvaluationMetrics(BaseModel):
+    """Evaluation metrics for content."""
+    content_length: int
+    readability_score: Optional[float] = None
+    fact_density: Optional[float] = None
+    opinion_density: Optional[float] = None
+    bias_distribution: Optional[Dict[str, float]] = None
+    academic_integrity_score: Optional[float] = None
+    hallucination_risk: Optional[float] = None
+
+
+class OverallEvaluationResponse(BaseModel):
+    """Response model for overall evaluation."""
+    summary_evaluation: Optional[Dict[str, Any]] = None
+    url_evaluation: Optional[Dict[str, Any]] = None
+    comparative_analysis: Optional[Dict[str, Any]] = None
+    full_academic_analysis: Optional[Dict[str, Any]] = None
+    processing_metadata: Dict[str, Any]
+
+
+# ===========================
+# Overall Evaluation Interface
+# ===========================
+
+class OverallEvaluationRequest(BaseModel):
+    """Request model for overall evaluation of summary and URL."""
+    summary: Optional[str] = Field(default=None, description="Text summary to evaluate")
+    url: Optional[str] = Field(default=None, description="URL to evaluate")
+    include_full_analysis: bool = Field(default=False, description="Whether to include full academic analysis pipeline")
+
+    @model_validator(mode='after')
+    def validate_input(self):
+        """Ensure at least one input is provided."""
+        if not self.summary and not self.url:
+            raise ValueError("At least one of 'summary' or 'url' must be provided")
+        return self
+
+
+class EvaluationMetrics(BaseModel):
+    """Evaluation metrics for content."""
+    content_length: int
+    readability_score: Optional[float] = None
+    fact_density: Optional[float] = None
+    opinion_density: Optional[float] = None
+    bias_distribution: Optional[Dict[str, float]] = None
+    academic_integrity_score: Optional[float] = None
+    hallucination_risk: Optional[float] = None
+
+
+class OverallEvaluationResponse(BaseModel):
+    """Response model for overall evaluation."""
+    summary_evaluation: Optional[Dict[str, Any]] = None
+    url_evaluation: Optional[Dict[str, Any]] = None
+    comparative_analysis: Optional[Dict[str, Any]] = None
+    full_academic_analysis: Optional[Dict[str, Any]] = None
+    processing_metadata: Dict[str, Any]
+
+
+@app.post("/api/v1/evaluation/overall", response_model=OverallEvaluationResponse)
+async def overall_evaluation(
+    request: OverallEvaluationRequest,
+    api_key: str = Depends(verify_api_key)
+):
+    """
+    Overall evaluation interface for summary and URL analysis with statistical results.
+
+    This endpoint provides comprehensive evaluation of content including:
+    - Content quality metrics
+    - Academic integrity assessment
+    - Bias analysis
+    - Comparative analysis between summary and source
+    - Optional full academic analysis pipeline
+
+    Args:
+        request: OverallEvaluationRequest with summary, URL, and options
+        api_key: API key for authentication
+
+    Returns:
+        OverallEvaluationResponse with detailed evaluation and statistics
+    """
+    import time
+    start_time = time.time()
+
+    logger.info(f"Starting overall evaluation: summary={bool(request.summary)}, url={bool(request.url)}, full_analysis={request.include_full_analysis}")
+
+    evaluation_result = {
+        "summary_evaluation": None,
+        "url_evaluation": None,
+        "comparative_analysis": None,
+        "full_academic_analysis": None,
+        "processing_metadata": {}
+    }
+
+    try:
+        # Evaluate summary if provided
+        if request.summary:
+            summary_eval = await _evaluate_content(request.summary, "summary")
+            evaluation_result["summary_evaluation"] = summary_eval
+
+        # Evaluate URL if provided
+        if request.url:
+            url_eval = await _evaluate_url(request.url)
+            evaluation_result["url_evaluation"] = url_eval
+
+        # Comparative analysis if both are provided
+        if request.summary and request.url:
+            comparative = await _comparative_analysis(request.summary, request.url)
+            evaluation_result["comparative_analysis"] = comparative
+
+        # Full academic analysis if requested
+        if request.include_full_analysis and request.url:
+            # Run the complete academic analysis pipeline
+            analysis_request = CompleteAnalysisRequest(
+                url=request.url,
+                use_llm_content_extraction=False,
+                use_cot_atomization=False,
+                use_cot_audit=False,
+                use_llm_synthesis=True
+            )
+            analysis_result = await complete_academic_analysis(analysis_request, api_key)
+            evaluation_result["full_academic_analysis"] = {
+                "overall_success": analysis_result.overall_success,
+                "final_report": analysis_result.final_report.__dict__ if analysis_result.final_report else None,
+                "pipeline_steps": [step.__dict__ for step in analysis_result.pipeline_steps],
+                "total_execution_time": analysis_result.total_execution_time
+            }
+
+    except Exception as e:
+        logger.error(f"Overall evaluation failed: {e}", exc_info=True)
+        evaluation_result["processing_metadata"]["error"] = str(e)
+
+    # Add processing metadata
+    evaluation_result["processing_metadata"].update({
+        "total_processing_time": time.time() - start_time,
+        "evaluation_timestamp": time.time(),
+        "inputs_provided": {
+            "summary": bool(request.summary),
+            "url": bool(request.url),
+            "full_analysis": request.include_full_analysis
+        }
+    })
+
+    logger.info(".2f")
+
+    return OverallEvaluationResponse(**evaluation_result)
+
+
+async def _evaluate_content(content: str, content_type: str) -> Dict[str, Any]:
+    """Evaluate content quality and provide metrics."""
+    try:
+        # Basic content metrics
+        content_length = len(content)
+        sentences = content.split('.')
+        avg_sentence_length = sum(len(s.split()) for s in sentences) / len(sentences) if sentences else 0
+
+        # Simple readability score (approximate)
+        readability_score = max(0, min(100, 206.835 - 1.015 * avg_sentence_length - 84.6 * (content.count(' ') / content_length)))
+
+        return {
+            "content_type": content_type,
+            "metrics": EvaluationMetrics(
+                content_length=content_length,
+                readability_score=readability_score,
+                fact_density=None,  # Would require LLM analysis
+                opinion_density=None,  # Would require LLM analysis
+                bias_distribution=None,  # Would require LLM analysis
+                academic_integrity_score=None,  # Would require LLM analysis
+                hallucination_risk=None  # Would require LLM analysis
+            ).__dict__,
+            "basic_stats": {
+                "sentence_count": len(sentences),
+                "word_count": len(content.split()),
+                "avg_sentence_length": avg_sentence_length
+            }
+        }
+    except Exception as e:
+        logger.error(f"Content evaluation failed: {e}")
+        return {"error": str(e)}
+
+
+async def _evaluate_url(url: str) -> Dict[str, Any]:
+    """Evaluate URL content quality."""
+    try:
+        # Extract content from URL
+        content_agent = ContentExtractorAgent(
+            model_name=settings.openai_model,
+            api_key=settings.openai_api_key,
+            api_base=settings.openai_api_base,
+            temperature=settings.agent_temperature,
+            proxy=settings.openai_proxy
+        )
+        content_result = content_agent.extract_from_url(url, use_llm=False)
+
+        if content_result.main_body:
+            content_eval = await _evaluate_content(content_result.main_body, "url_content")
+            content_eval.update({
+                "url": url,
+                "title": content_result.title,
+                "extraction_metadata": content_result.extraction_metadata
+            })
+            return content_eval
+        else:
+            return {"error": "Failed to extract content from URL"}
+
+    except Exception as e:
+        logger.error(f"URL evaluation failed: {e}")
+        return {"error": str(e)}
+
+
+async def _comparative_analysis(summary: str, url: str) -> Dict[str, Any]:
+    """Compare summary against source URL."""
+    try:
+        # Get both evaluations
+        summary_eval = await _evaluate_content(summary, "summary")
+        url_eval = await _evaluate_url(url)
+
+        # Simple comparative metrics
+        compression_ratio = len(summary) / len(url_eval.get("metrics", {}).get("content_length", 1))
+
+        return {
+            "compression_ratio": compression_ratio,
+            "summary_density": summary_eval.get("basic_stats", {}).get("word_count", 0) / summary_eval.get("basic_stats", {}).get("sentence_count", 1),
+            "source_density": url_eval.get("basic_stats", {}).get("word_count", 0) / url_eval.get("basic_stats", {}).get("sentence_count", 1),
+            "consistency_check": {
+                "summary_length": len(summary),
+                "source_length": url_eval.get("metrics", {}).get("content_length", 0),
+                "title_match": summary_eval.get("title") == url_eval.get("title") if summary_eval.get("title") and url_eval.get("title") else None
+            }
+        }
+    except Exception as e:
+        logger.error(f"Comparative analysis failed: {e}")
+        return {"error": str(e)}
+
+
+# ===========================
+# Complete Academic Analysis Pipeline Endpoint
+# ===========================
+
+class CompleteAnalysisRequest(BaseModel):
+    """Request model for complete academic analysis pipeline."""
+    url: str = Field(..., description="URL to analyze completely")
+    use_llm_content_extraction: bool = Field(default=False, description="Use LLM for content extraction refinement")
+    use_cot_atomization: bool = Field(default=False, description="Use CoT for claim atomization")
+    use_cot_audit: bool = Field(default=False, description="Use CoT for conflict auditing")
+    use_llm_synthesis: bool = Field(default=True, description="Use LLM enhancement for synthesis")
+    custom_few_shots_atomizer: Optional[str] = Field(default=None, description="Custom few-shots for atomizer")
+    custom_few_shots_auditor: Optional[str] = Field(default=None, description="Custom few-shots for auditor")
+
+
+class PipelineStepResponse(BaseModel):
+    """Response model for a pipeline step."""
+    step_name: str
+    success: bool
+    data: Optional[Dict[str, Any]] = None
+    error: Optional[str] = None
+    execution_time: Optional[float] = None
+
+
+class CompleteAnalysisResponse(BaseModel):
+    """Response model for complete academic analysis."""
+    url: str
+    pipeline_steps: List[PipelineStepResponse]
+    final_report: Optional[SynthesisReportResponse] = None
+    overall_success: bool
+    total_execution_time: Optional[float] = None
+    error: Optional[str] = None
+
+
+@app.post("/api/v1/analysis/complete", response_model=CompleteAnalysisResponse)
+async def complete_academic_analysis(
+    request: CompleteAnalysisRequest,
+    api_key: str = Depends(verify_api_key)
+):
+    """
+    Complete academic content analysis pipeline.
+
+    This endpoint runs the full 5-step academic analysis pipeline:
+    1. Content Extraction - Extract title and main body
+    2. Claim Atomization - Break down into atomic claims
+    3. Evidence Location - Find supporting evidence
+    4. Conflict Audit - Check logical consistency
+    5. Synthesis Aggregation - Create comprehensive report
+
+    Args:
+        request: Complete analysis request with URL and options
+        api_key: API key for authentication
+
+    Returns:
+        CompleteAnalysisResponse with full pipeline results
+    """
+    import time
+    start_time = time.time()
+
+    logger.info(f"Starting complete academic analysis pipeline for URL: {request.url}")
+
+    pipeline_steps = []
+    overall_success = True
+    final_report = None
+
+    try:
+        # Step 1: Content Extraction
+        step_start = time.time()
+        try:
+            content_agent = ContentExtractorAgent(
+                model_name=settings.openai_model,
+                api_key=settings.openai_api_key,
+                api_base=settings.openai_api_base,
+                temperature=settings.agent_temperature,
+                proxy=settings.openai_proxy
+            )
+            content_result = content_agent.extract_from_url(request.url, use_llm=request.use_llm_content_extraction)
+            step_time = time.time() - step_start
+
+            pipeline_steps.append(PipelineStepResponse(
+                step_name="content_extraction",
+                success=True,
+                data={
+                    "title": content_result.title,
+                    "main_body_length": content_result.text_length,
+                    "truncated": content_result.truncated
+                },
+                execution_time=step_time
+            ))
+            logger.info(".2f")
+        except Exception as e:
+            step_time = time.time() - step_start
+            pipeline_steps.append(PipelineStepResponse(
+                step_name="content_extraction",
+                success=False,
+                error=str(e),
+                execution_time=step_time
+            ))
+            overall_success = False
+            raise
+
+        # Step 2: Claim Atomization
+        step_start = time.time()
+        try:
+            if not content_result.main_body:
+                raise ValueError("No main body content extracted")
+
+            atomizer_agent = ClaimAtomizerAgent(
+                model_name=settings.openai_model,
+                api_key=settings.openai_api_key,
+                api_base=settings.openai_api_base,
+                temperature=settings.agent_temperature,
+                proxy=settings.openai_proxy,
+                execution_mode=settings.default_execution_mode
+            )
+            atomization_result = atomizer_agent.atomize_text(
+                text=content_result.main_body,
+                use_cot=request.use_cot_atomization,
+                custom_few_shots=request.custom_few_shots_atomizer
+            )
+            step_time = time.time() - step_start
+
+            pipeline_steps.append(PipelineStepResponse(
+                step_name="claim_atomization",
+                success=True,
+                data={
+                    "atomic_claims_count": len(atomization_result.atomic_claims),
+                    "execution_mode": atomization_result.execution_mode
+                },
+                execution_time=step_time
+            ))
+            logger.info(".2f")
+        except Exception as e:
+            step_time = time.time() - step_start
+            pipeline_steps.append(PipelineStepResponse(
+                step_name="claim_atomization",
+                success=False,
+                error=str(e),
+                execution_time=step_time
+            ))
+            overall_success = False
+            raise
+
+        # Step 3: Evidence Location
+        step_start = time.time()
+        try:
+            # Prepare claims for evidence location
+            claims = [{"id": claim.id, "text": claim.text} for claim in atomization_result.atomic_claims]
+
+            locator_agent = EvidenceLocatorAgent(
+                model_name=settings.openai_model,
+                api_key=settings.openai_api_key,
+                api_base=settings.openai_api_base,
+                temperature=settings.agent_temperature,
+                proxy=settings.openai_proxy
+            )
+            evidence_result = locator_agent.locate_evidence(claims, content_result.main_body, use_llm=True)
+            step_time = time.time() - step_start
+
+            pipeline_steps.append(PipelineStepResponse(
+                step_name="evidence_location",
+                success=True,
+                data={
+                    "claims_with_evidence": sum(1 for ce in evidence_result.claim_evidences if ce.evidence_found),
+                    "total_claims": len(evidence_result.claim_evidences)
+                },
+                execution_time=step_time
+            ))
+            logger.info(".2f")
+        except Exception as e:
+            step_time = time.time() - step_start
+            pipeline_steps.append(PipelineStepResponse(
+                step_name="evidence_location",
+                success=False,
+                error=str(e),
+                execution_time=step_time
+            ))
+            overall_success = False
+            raise
+
+        # Step 4: Conflict Audit
+        step_start = time.time()
+        try:
+            # Prepare claim-evidence pairs for audit
+            claim_evidences = []
+            for ce in evidence_result.claim_evidences:
+                claim_evidences.append({
+                    "claim_id": ce.claim_id,
+                    "claim_text": ce.claim_text,
+                    "evidence_quotes": [quote.text for quote in ce.quotes]
+                })
+
+            auditor_agent = ConflictAuditorAgent(
+                model_name=settings.openai_model,
+                api_key=settings.openai_api_key,
+                api_base=settings.openai_api_base,
+                temperature=settings.agent_temperature,
+                proxy=settings.openai_proxy,
+                execution_mode=settings.default_execution_mode
+            )
+            audit_result = auditor_agent.audit_conflicts(
+                claim_evidences=claim_evidences,
+                use_cot=request.use_cot_audit,
+                custom_few_shots=request.custom_few_shots_auditor
+            )
+            step_time = time.time() - step_start
+
+            pipeline_steps.append(PipelineStepResponse(
+                step_name="conflict_audit",
+                success=True,
+                data={
+                    "supported_claims": audit_result.summary_stats.get("supported", 0),
+                    "contradicted_claims": audit_result.summary_stats.get("contradicted", 0),
+                    "execution_mode": audit_result.execution_mode
+                },
+                execution_time=step_time
+            ))
+            logger.info(".2f")
+        except Exception as e:
+            step_time = time.time() - step_start
+            pipeline_steps.append(PipelineStepResponse(
+                step_name="conflict_audit",
+                success=False,
+                error=str(e),
+                execution_time=step_time
+            ))
+            overall_success = False
+            raise
+
+        # Step 5: Synthesis Aggregation
+        step_start = time.time()
+        try:
+            # Prepare conflict analyses for synthesis
+            conflict_analyses = []
+            for ca in audit_result.conflict_analyses:
+                conflict_analyses.append({
+                    "claim_id": ca.claim_id,
+                    "claim_text": ca.claim_text,
+                    "evidence_quotes": ca.evidence_quotes,
+                    "verdict": ca.verdict.value,
+                    "conflict_type": ca.conflict_type,
+                    "analysis": ca.analysis,
+                    "confidence": ca.confidence
+                })
+
+            aggregator_agent = SynthesisAggregatorAgent(
+                model_name=settings.openai_model,
+                api_key=settings.openai_api_key,
+                api_base=settings.openai_api_base,
+                temperature=settings.agent_temperature,
+                proxy=settings.openai_proxy
+            )
+            synthesis_result = aggregator_agent.aggregate_synthesis(
+                conflict_analyses=conflict_analyses,
+                use_llm_enhancement=request.use_llm_synthesis
+            )
+            step_time = time.time() - step_start
+
+            final_report = SynthesisReportResponse(**synthesis_result.synthesis_report.__dict__)
+
+            pipeline_steps.append(PipelineStepResponse(
+                step_name="synthesis_aggregation",
+                success=True,
+                data={
+                    "confidence_score": synthesis_result.synthesis_report.confidence_score,
+                    "quality_assessment": synthesis_result.synthesis_report.quality_assessment[:50] + "..."
+                },
+                execution_time=step_time
+            ))
+            logger.info(".2f")
+        except Exception as e:
+            step_time = time.time() - step_start
+            pipeline_steps.append(PipelineStepResponse(
+                step_name="synthesis_aggregation",
+                success=False,
+                error=str(e),
+                execution_time=step_time
+            ))
+            overall_success = False
+            raise
+
+    except Exception as pipeline_error:
+        logger.error(f"Pipeline failed: {pipeline_error}", exc_info=True)
+        error_msg = str(pipeline_error)
+
+    total_time = time.time() - start_time
+    logger.info(".2f")
+
+    return CompleteAnalysisResponse(
+        url=request.url,
+        pipeline_steps=pipeline_steps,
+        final_report=final_report,
+        overall_success=overall_success,
+        total_execution_time=total_time,
+        error=error_msg if not overall_success else None
+    )
