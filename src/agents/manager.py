@@ -13,6 +13,7 @@ class AgentType(str, Enum):
     NUDGE_COLLAPSE = "nudge_collapse"
     SUMMARIZER = "summarizer"
     BOT_CREATOR = "bot_creator"
+    DEMOGRAPHIC_EVALUATOR = "demographic_evaluator"
 
 
 class AgentManager:

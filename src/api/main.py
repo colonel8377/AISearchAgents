@@ -11,6 +11,7 @@ from ..memory.factory import VectorStoreFactory
 from ..agents.nudge_collapse.agent import NudgeCollapseAgent
 from ..agents.summarizer.agent import SummarizerAgent
 from ..agents.bot_creator.agent import BotCreatorAgent
+from ..agents.demographic_evaluator.agent import DemographicEvaluatorAgent
 from ..agents.manager import AgentManager, AgentType
 from .auth import verify_api_key
 from ..debate.schemas import PersonaConfig, AgentMetadata, InitRequest, InteractRequest, VoteResponse
@@ -37,7 +38,7 @@ logger = get_logger(__name__)
 # Pydantic models for request/response
 class CreateAgentRequest(BaseModel):
     """Request model for creating a new agent instance."""
-    agent_type: str = Field(..., description="Type of agent: 'nudge_collapse', 'summarizer', or 'bot_creator'")
+    agent_type: str = Field(..., description="Type of agent: 'nudge_collapse', 'summarizer', 'bot_creator', or 'demographic_evaluator'")
     agent_id: Optional[str] = Field(default=None, description="Custom agent ID (auto-generated if not provided)")
     use_memory: bool = Field(default=False, description="Whether to use vector memory for this agent")
     persona_mode: Optional[str] = Field(default="system_prompt", description="Persona mode for bot_creator: 'system_prompt' or 'user_instruction'")
@@ -93,6 +94,45 @@ class ConversationHistoryResponse(BaseModel):
     current_turn: int
     max_turns: int
     history: List[Dict[str, Any]]
+
+
+class EvaluateSentencesRequest(BaseModel):
+    """Request model for evaluating sentences."""
+    demography_json: Dict[str, Any] = Field(..., description="Demographic profile as JSON object")
+    sentences: List[str] = Field(..., description="List of sentences to evaluate")
+    use_cot: bool = Field(default=False, description="Whether to use Chain of Thought reasoning (default: False)")
+    execution_mode: Optional[ExecutionMode] = Field(
+        default=None,
+        description="Execution mode for CoT: 'chain_online', 'chain_local', or 'no_chain'. If provided, overrides use_cot parameter."
+    )
+    use_few_shots: bool = Field(
+        default=True,
+        description="Whether to use few-shot examples in the prompt (default: True)"
+    )
+    custom_few_shots: Optional[str] = Field(
+        default=None,
+        description="Optional custom few-shot examples to use instead of defaults. If provided, use_few_shots must be True."
+    )
+    
+    @model_validator(mode='after')
+    def validate_custom_few_shots(self):
+        """Ensure that if custom_few_shots is provided, use_few_shots must be True."""
+        if self.custom_few_shots is not None and not self.use_few_shots:
+            raise ValueError("If custom_few_shots is provided, use_few_shots must be True")
+        return self
+
+
+class JudgmentResponse(BaseModel):
+    """Response model for a single judgment."""
+    index: int
+    sentence: str
+    agree: int = Field(..., ge=0, le=1, description="1 for agree, 0 for disagree")
+    reason: str
+
+
+class EvaluateSentencesResponse(BaseModel):
+    """Response model for sentence evaluation."""
+    judgments: List[JudgmentResponse]
 
 
 class AgentStatusResponse(BaseModel):
@@ -329,6 +369,14 @@ async def create_agent(
                 vector_store=vector_store,
                 proxy=proxy,
                 persona_mode=persona_mode
+            )
+        elif request.agent_type == AgentType.DEMOGRAPHIC_EVALUATOR:
+            agent_instance = DemographicEvaluatorAgent(
+                model_name=settings.openai_model,
+                api_key=settings.openai_api_key,
+                api_base=settings.openai_api_base,
+                temperature=settings.agent_temperature,
+                proxy=proxy
             )
         else:
             raise ValueError(f"Unsupported agent type: {request.agent_type}")
@@ -591,6 +639,86 @@ async def get_nudge_collapse_default_shots(
         return {
             "agent_type": "nudge_collapse",
             "turn": turn,
+            "few_shots": few_shots
+        }
+    except Exception as e:
+        logger.error(f"Failed to get default few shots: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=f"Failed to get default few shots: {str(e)}")
+
+
+# Demographic Evaluator Agent Endpoints
+@app.post("/api/v1/agents/{agent_id}/demographic-evaluator/evaluate", response_model=EvaluateSentencesResponse)
+async def evaluate_sentences(
+    agent_id: str,
+    request: EvaluateSentencesRequest,
+    api_key: str = Depends(verify_api_key)
+):
+    """
+    Evaluate sentences from a demographic perspective.
+    
+    Args:
+        agent_id: The agent's unique identifier
+        request: Evaluation request with demographic profile and sentences
+        
+    Returns:
+        Evaluation results with judgments for each sentence
+    """
+    agent = agent_manager.get_agent(agent_id)
+    if not agent:
+        raise HTTPException(status_code=404, detail=f"Agent '{agent_id}' not found")
+    
+    agent_type = agent_manager.get_agent_type(agent_id)
+    if agent_type != AgentType.DEMOGRAPHIC_EVALUATOR:
+        raise HTTPException(
+            status_code=400,
+            detail=f"This endpoint requires a 'demographic_evaluator' agent, but agent '{agent_id}' is type '{agent_type}'"
+        )
+    
+    try:
+        result = agent.evaluate_sentences(
+            demography_json=request.demography_json,
+            sentences=request.sentences,
+            use_cot=request.use_cot,
+            execution_mode=request.execution_mode,
+            use_few_shots=request.use_few_shots,
+            custom_few_shots=request.custom_few_shots
+        )
+        
+        # Convert to response model
+        judgments = [
+            JudgmentResponse(**judgment) for judgment in result["judgments"]
+        ]
+        
+        return EvaluateSentencesResponse(judgments=judgments)
+        
+    except ValueError as e:
+        logger.warning(f"Agent {agent_id} evaluate_sentences validation error: {str(e)}")
+        raise HTTPException(status_code=400, detail=str(e))
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Failed to evaluate sentences for agent {agent_id}: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=f"Failed to evaluate sentences: {str(e)}")
+
+
+@app.get("/api/v1/agents/demographic-evaluator/default-shots")
+async def get_demographic_evaluator_default_shots(
+    api_key: str = Depends(verify_api_key)
+):
+    """
+    Get default few-shot examples for Demographic Evaluator agent.
+    
+    Args:
+        api_key: API key for authentication
+        
+    Returns:
+        Default few-shot examples
+    """
+    try:
+        from ..agents.demographic_evaluator.agent import DemographicEvaluatorAgent
+        few_shots = DemographicEvaluatorAgent.get_default_few_shots()
+        return {
+            "agent_type": "demographic_evaluator",
             "few_shots": few_shots
         }
     except Exception as e:
@@ -1459,6 +1587,10 @@ class ExtractOpinionsResponse(BaseModel):
     opinions: List[AtomicOpinionResponse]
     overall_bias_distribution: Optional[BiasDistributionResponse] = None
     mbfc_metadata: Optional[MBFCMetadataResponse] = None
+    mbfc_influence_note: Optional[str] = Field(
+        default=None,
+        description="Brief note describing MBFC prior's influence on bias assessment (e.g., 'strong', 'moderate', 'weak', 'overridden')"
+    )
     text_length: int
     truncated: bool
     error: Optional[str] = None
@@ -1512,6 +1644,10 @@ class BiasScoreResponse(BaseModel):
     url: str
     overall_bias_distribution: Optional[BiasDistributionResponse] = None
     mbfc_metadata: Optional[MBFCMetadataResponse] = None
+    mbfc_influence_note: Optional[str] = Field(
+        default=None,
+        description="Brief note describing MBFC prior's influence on bias assessment (e.g., 'strong', 'moderate', 'weak', 'overridden')"
+    )
     opinions_count: int
     facts_count: int
     error: Optional[str] = None
@@ -1829,6 +1965,10 @@ async def analyze_url_complete(
             )
         
         # Convert to response format
+        # Note: For the /api/v1/web-opinion/analyze endpoint, we follow the
+        # v1 API contract where `atomic_opinions` should only contain items
+        # labeled as "opinion" (no "fact" entries). The `facts` list is the
+        # canonical place for fact-type units.
         atomic_opinions = []
         facts = []
         opinions = []
@@ -1851,11 +1991,12 @@ async def analyze_url_complete(
                     confidence=unit.get("confidence"),
                     reasoning=unit.get("reasoning")
                 )
-                atomic_opinions.append(opinion_resp)
                 if unit["type"] == "fact":
                     facts.append(opinion_resp)
                 else:
+                    # Only opinions are included in atomic_opinions for this endpoint
                     opinions.append(opinion_resp)
+                    atomic_opinions.append(opinion_resp)
         
         # Get overall bias from result
         overall_bias = None
@@ -1881,6 +2022,11 @@ async def analyze_url_complete(
                 raw_db_row=metadata.get("raw_db_row")
             )
         
+        # Get MBFC influence note from bias analysis
+        mbfc_influence_note = None
+        if result.get("bias_analysis"):
+            mbfc_influence_note = result["bias_analysis"].get("mbfc_influence_note")
+        
         return ExtractOpinionsResponse(
             url=result["url"],
             title=result["article"].get("title"),
@@ -1889,6 +2035,7 @@ async def analyze_url_complete(
             opinions=opinions,
             overall_bias_distribution=overall_bias,
             mbfc_metadata=mbfc_metadata,
+            mbfc_influence_note=mbfc_influence_note,
             text_length=result["article"].get("text_length", 0),
             truncated=False
         )
@@ -2043,6 +2190,11 @@ async def get_overall_bias_score(
                 raw_db_row=metadata.get("raw_db_row")
             )
         
+        # Get MBFC influence note from bias analysis
+        mbfc_influence_note = None
+        if result.get("bias_analysis"):
+            mbfc_influence_note = result["bias_analysis"].get("mbfc_influence_note")
+        
         # Count opinions and facts
         opinions_count = 0
         facts_count = 0
@@ -2057,6 +2209,7 @@ async def get_overall_bias_score(
             url=result["url"],
             overall_bias_distribution=overall_bias,
             mbfc_metadata=mbfc_metadata,
+            mbfc_influence_note=mbfc_influence_note,
             opinions_count=opinions_count,
             facts_count=facts_count
         )

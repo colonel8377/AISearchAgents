@@ -283,6 +283,10 @@ class BiasResult(BaseModel):
         ...,
         description="Whether MBFC metadata was used as prior probability"
     )
+    mbfc_influence_note: Optional[str] = Field(
+        default=None,
+        description="Brief note describing how much the MBFC prior influenced the final bias assessment (e.g., 'strong', 'moderate', 'weak', 'overridden')"
+    )
     individual_biases: Optional[List[BiasDistribution]] = Field(
         default=None,
         description="Individual bias distributions for each atomic unit"

@@ -1,0 +1,51 @@
+[
+  {
+    "metadata": {
+      "source_name": "CNN",
+      "bias_rating": "Left-Center",
+      "factual_reporting": "High"
+    },
+    "atomic_units": [
+      {
+        "statement": "Support for universal healthcare",
+        "type": "opinion"
+      },
+      {
+        "statement": "Opposition to corporate tax cuts",
+        "type": "opinion"
+      }
+    ],
+    "output": {
+      "bias_distribution": {
+        "left": 0.8,
+        "neutral": 0.15,
+        "right": 0.05
+      },
+      "reasoning": "Prior from MBFC: Left-Center suggests baseline {left: 0.6, neutral: 0.3, right: 0.1}. Unit 1 'Support for universal healthcare': Progressive policy stance → Evidence strengthens left bias. Unit 2 'Opposition to corporate tax cuts': Progressive economic view → Evidence confirms left bias. Overall: {left: 0.8, neutral: 0.15, right: 0.05}",
+      "metadata_used": true
+    }
+  },
+  {
+    "metadata": null,
+    "atomic_units": [
+      {
+        "statement": "The policy is well-balanced",
+        "type": "opinion"
+      },
+      {
+        "statement": "Both sides have valid concerns",
+        "type": "opinion"
+      }
+    ],
+    "output": {
+      "bias_distribution": {
+        "left": 0.2,
+        "neutral": 0.6,
+        "right": 0.2
+      },
+      "reasoning": "No prior available, analyze text evidence directly. Unit 1 'The policy is well-balanced': Neutral framing → {left: 0.2, neutral: 0.6, right: 0.2}. Unit 2 'Both sides have valid concerns': Centrist perspective → {left: 0.2, neutral: 0.6, right: 0.2}. Overall: {left: 0.2, neutral: 0.6, right: 0.2}",
+      "metadata_used": false
+    }
+  }
+]
+

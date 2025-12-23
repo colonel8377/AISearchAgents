@@ -227,7 +227,8 @@ class TestWebOpinionExtractApi:
         data = response.json()
         assert data["url"] == "https://example.com"
         assert data["title"] == "Test Article"
-        assert len(data["atomic_opinions"]) == 2
+        # atomic_opinions should only contain items with opinion_type == "opinion"
+        assert len(data["atomic_opinions"]) == 1
         assert len(data["opinions"]) == 1
         assert data["overall_bias_distribution"] is not None
         

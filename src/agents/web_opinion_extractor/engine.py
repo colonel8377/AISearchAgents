@@ -947,36 +947,54 @@ Return a JSON array of atomic units with fields: statement, type, original_sente
         
         # Build prompt based on whether we have metadata
         if use_metadata:
-            # With MBFC prior
+            # With MBFC prior (SOFT prior – evidence from opinions must dominate)
             if few_shots_text:
                 system_prompt = f"""You are an expert political bias analyzer. Your task is to calculate bias probability distributions.
 
 INSTRUCTIONS:
-1. Analyze the provided evidence (atomic units or full text)
-2. Determine bias probability distribution:
+1. Analyze the provided evidence (atomic units or full text). Focus your bias judgment ONLY on units labeled as "opinion".
+2. Determine the overall bias probability distribution based on these OPINIONS:
    - left: Probability of Left/Progressive bias (0.0 to 1.0)
    - right: Probability of Right/Conservative bias (0.0 to 1.0)
    - neutral: Probability of Neutral/Centrist stance (0.0 to 1.0)
    - The three probabilities MUST sum to 1.0
-3. Use the Source Metadata (MBFC prior) to inform your analysis
-4. Provide Chain of Thought reasoning explaining your probability assignments
+3. Use the Source Metadata (MBFC) only as a SOFT PRIOR:
+   - Treat MBFC as an initial guess, not a fixed label.
+   - If the OPINIONS in the text clearly disagree with the prior, let the OPINIONS override and dominate the final result.
+   - High factual reporting should increase your trust in using the prior, but should not by itself force left/right labels.
+4. Provide Chain of Thought reasoning explicitly separating:
+   - How the OPINIONS support a particular bias.
+   - How (if at all) the MBFC prior nudges your final probabilities.
 
 {few_shots_text}
-SOURCE HISTORY (MBFC Prior):
+SOURCE HISTORY (MBFC Prior - soft, overridable):
 Source: {metadata.source_name}
 Bias Rating: {metadata.bias_rating}
 Factual Reporting: {metadata.factual_reporting or 'Unknown'}
 
-Use this as your PRIOR probability. Update it based on the text evidence below."""
+Use this as a SOFT PRIOR only. Your final decision MUST primarily reflect the actual OPINIONS in the text evidence below."""
             else:
                 system_prompt = f"""You are an expert political bias analyzer. Calculate bias probability distributions.
 
-SOURCE HISTORY (MBFC Prior):
+INSTRUCTIONS:
+1. Analyze the provided evidence (atomic units or full text). Focus your bias judgment ONLY on units labeled as "opinion".
+2. Determine the overall bias probability distribution based on these OPINIONS:
+   - left: Probability of Left/Progressive bias (0.0 to 1.0)
+   - right: Probability of Right/Conservative bias (0.0 to 1.0)
+   - neutral: Probability of Neutral/Centrist stance (0.0 to 1.0)
+   - The three probabilities MUST sum to 1.0
+3. Use the Source Metadata (MBFC) only as a SOFT PRIOR:
+   - Treat MBFC as an initial guess, not a fixed label.
+   - If the OPINIONS in the text clearly disagree with the prior, let the OPINIONS override and dominate the final result.
+   - High factual reporting should increase your trust in using the prior, but should not by itself force left/right labels.
+4. Provide Chain of Thought reasoning explicitly separating:
+   - How the OPINIONS support a particular bias.
+   - How (if at all) the MBFC prior nudges your final probabilities.
+
+SOURCE HISTORY (MBFC Prior - soft, overridable):
 Source: {metadata.source_name}
 Bias Rating: {metadata.bias_rating}
-Factual Reporting: {metadata.factual_reporting or 'Unknown'}
-
-Use this as your PRIOR probability. Update it based on the text evidence below."""
+Factual Reporting: {metadata.factual_reporting or 'Unknown'}"""
         else:
             # Without MBFC prior
             if few_shots_text:
@@ -1008,6 +1026,12 @@ Provide your bias analysis as a JSON object with:
 - bias_distribution: {{left: float, right: float, neutral: float}} (must sum to 1.0)
 - reasoning: string explaining your analysis step-by-step (Chain of Thought required)
 - metadata_used: boolean (true if MBFC prior was used)
+- mbfc_influence_note: string (only if metadata_used=true) - Brief note describing MBFC prior's influence:
+  * "strong" - MBFC prior strongly influenced the final result
+  * "moderate" - MBFC prior had moderate influence, combined with text evidence
+  * "weak" - MBFC prior had minimal influence, text evidence dominated
+  * "overridden" - Text opinions clearly contradicted MBFC prior, prior was overridden
+  * If metadata_used=false, set to null
 
 Note: Only opinions are included here. Facts are excluded as they don't require bias analysis.
 
@@ -1061,13 +1085,27 @@ Return JSON only."""
                 )
             
             reasoning = result_data.get('reasoning', '')
+            mbfc_influence_note = result_data.get('mbfc_influence_note')
+            # If metadata was used but note not provided, try to infer from reasoning
+            if use_metadata and not mbfc_influence_note:
+                # Simple heuristic: check reasoning for keywords
+                reasoning_lower = reasoning.lower()
+                if any(word in reasoning_lower for word in ['override', 'contradict', 'disagree']):
+                    mbfc_influence_note = "overridden"
+                elif any(word in reasoning_lower for word in ['strong', 'heavily', 'primarily']):
+                    mbfc_influence_note = "strong"
+                elif any(word in reasoning_lower for word in ['moderate', 'somewhat', 'partially']):
+                    mbfc_influence_note = "moderate"
+                else:
+                    mbfc_influence_note = "weak"
             
-            logger.info(f"[Agent 4] Bias calculated: {bias_distribution.dominant_bias}")
+            logger.info(f"[Agent 4] Bias calculated: {bias_distribution.dominant_bias}, MBFC influence: {mbfc_influence_note}")
             
             return BiasResult(
                 bias_distribution=bias_distribution,
                 reasoning=reasoning,
-                metadata_used=use_metadata
+                metadata_used=use_metadata,
+                mbfc_influence_note=mbfc_influence_note if use_metadata else None
             )
         except Exception as e:
             # Retry decorator handles network/timeout errors
@@ -1129,41 +1167,71 @@ Return JSON only."""
                 system_prompt = f"""You are an expert political bias analyzer. Your task is to analyze articles and calculate bias probability distributions.
 
 INSTRUCTIONS:
-1. Analyze the provided article content
+1. Analyze the provided article content. Base your judgment primarily on the OPINIONS expressed in the article, not on raw facts.
 2. Determine bias probability distribution:
    - left: Probability of Left/Progressive bias (0.0 to 1.0)
    - right: Probability of Right/Conservative bias (0.0 to 1.0)
    - neutral: Probability of Neutral/Centrist stance (0.0 to 1.0)
    - The three probabilities MUST sum to 1.0
-3. Use the Source Metadata (MBFC prior) to inform your analysis
-4. Provide Chain of Thought reasoning explaining your probability assignments
+3. Use the Source Metadata (MBFC) only as a SOFT PRIOR:
+   - Treat MBFC as an initial guess, not a fixed label.
+   - If the article’s OPINIONS clearly disagree with the prior, let the OPINIONS override and dominate the final result.
+   - High factual reporting should increase your trust in using the prior, but should not by itself force left/right labels.
+4. Provide Chain of Thought reasoning explicitly separating:
+   - How the article’s OPINIONS support a particular bias.
+   - How (if at all) the MBFC prior nudges your final probabilities.
 
 {few_shots_text}
-SOURCE HISTORY (MBFC Prior):
+SOURCE HISTORY (MBFC Prior - soft, overridable):
 Source: {metadata.source_name}
 Bias Rating: {metadata.bias_rating}
 Factual Reporting: {metadata.factual_reporting or 'Unknown'}
 
-Use this as your PRIOR probability. Update it based on the article content below.
+Use this as a SOFT PRIOR only. Your final decision MUST primarily reflect the actual OPINIONS in the article content below.
 
 Provide your analysis as a JSON object with:
 - bias_distribution: {{left: float, right: float, neutral: float}} (must sum to 1.0)
 - reasoning: string explaining your analysis step-by-step (Chain of Thought required)
-- metadata_used: boolean (true if MBFC prior was used)"""
+- metadata_used: boolean (true if MBFC prior was used)
+- mbfc_influence_note: string (only if metadata_used=true) - Brief note describing MBFC prior's influence:
+  * "strong" - MBFC prior strongly influenced the final result
+  * "moderate" - MBFC prior had moderate influence, combined with text evidence
+  * "weak" - MBFC prior had minimal influence, text evidence dominated
+  * "overridden" - Text opinions clearly contradicted MBFC prior, prior was overridden
+  * If metadata_used=false, set to null"""
             else:
                 system_prompt = f"""You are an expert political bias analyzer. Analyze the following article and calculate bias probability distributions.
 
-SOURCE HISTORY (MBFC Prior):
+INSTRUCTIONS:
+1. Analyze the provided article content. Base your judgment primarily on the OPINIONS expressed in the article, not on raw facts.
+2. Determine bias probability distribution:
+   - left: Probability of Left/Progressive bias (0.0 to 1.0)
+   - right: Probability of Right/Conservative bias (0.0 to 1.0)
+   - neutral: Probability of Neutral/Centrist stance (0.0 to 1.0)
+   - The three probabilities MUST sum to 1.0
+3. Use the Source Metadata (MBFC) only as a SOFT PRIOR:
+   - Treat MBFC as an initial guess, not a fixed label.
+   - If the article’s OPINIONS clearly disagree with the prior, let the OPINIONS override and dominate the final result.
+   - High factual reporting should increase your trust in using the prior, but should not by itself force left/right labels.
+4. Provide Chain of Thought reasoning explicitly separating:
+   - How the article’s OPINIONS support a particular bias.
+   - How (if at all) the MBFC prior nudges your final probabilities.
+
+SOURCE HISTORY (MBFC Prior - soft, overridable):
 Source: {metadata.source_name}
 Bias Rating: {metadata.bias_rating}
 Factual Reporting: {metadata.factual_reporting or 'Unknown'}
 
-Use this as your PRIOR probability. Update it based on the article content below.
-
 Provide your analysis as a JSON object with:
 - bias_distribution: {{left: float, right: float, neutral: float}} (must sum to 1.0)
 - reasoning: string explaining your analysis step-by-step (Chain of Thought required)
-- metadata_used: boolean (true if MBFC prior was used)"""
+- metadata_used: boolean (true if MBFC prior was used)
+- mbfc_influence_note: string (only if metadata_used=true) - Brief note describing MBFC prior's influence:
+  * "strong" - MBFC prior strongly influenced the final result
+  * "moderate" - MBFC prior had moderate influence, combined with text evidence
+  * "weak" - MBFC prior had minimal influence, text evidence dominated
+  * "overridden" - Text opinions clearly contradicted MBFC prior, prior was overridden
+  * If metadata_used=false, set to null"""
         else:
             if few_shots_text:
                 system_prompt = f"""You are an expert political bias analyzer. Your task is to analyze articles and calculate bias probability distributions.
@@ -1223,7 +1291,8 @@ Return JSON only."""
                 return BiasResult(
                     bias_distribution=BiasDistribution(left=0.33, neutral=0.34, right=0.33),
                     reasoning="Failed to parse LLM response: No JSON object found",
-                    metadata_used=use_metadata
+                    metadata_used=use_metadata,
+                    mbfc_influence_note=None
                 )
             
             try:
@@ -1234,7 +1303,8 @@ Return JSON only."""
                 return BiasResult(
                     bias_distribution=BiasDistribution(left=0.33, neutral=0.34, right=0.33),
                     reasoning=f"JSON parse error: {str(e)}",
-                    metadata_used=use_metadata
+                    metadata_used=use_metadata,
+                    mbfc_influence_note=None
                 )
             
             # Extract bias distribution with validation
@@ -1250,17 +1320,32 @@ Return JSON only."""
                 return BiasResult(
                     bias_distribution=BiasDistribution(left=0.33, neutral=0.34, right=0.33),
                     reasoning=f"Invalid bias distribution data: {str(e)}",
-                    metadata_used=use_metadata
+                    metadata_used=use_metadata,
+                    mbfc_influence_note=None
                 )
             
             reasoning = result_data.get('reasoning', '')
+            mbfc_influence_note = result_data.get('mbfc_influence_note')
+            # If metadata was used but note not provided, try to infer from reasoning
+            if use_metadata and not mbfc_influence_note:
+                # Simple heuristic: check reasoning for keywords
+                reasoning_lower = reasoning.lower()
+                if any(word in reasoning_lower for word in ['override', 'contradict', 'disagree']):
+                    mbfc_influence_note = "overridden"
+                elif any(word in reasoning_lower for word in ['strong', 'heavily', 'primarily']):
+                    mbfc_influence_note = "strong"
+                elif any(word in reasoning_lower for word in ['moderate', 'somewhat', 'partially']):
+                    mbfc_influence_note = "moderate"
+                else:
+                    mbfc_influence_note = "weak"
             
-            logger.info(f"[Pure Online] Bias calculated: {bias_distribution.dominant_bias}")
+            logger.info(f"[Pure Online] Bias calculated: {bias_distribution.dominant_bias}, MBFC influence: {mbfc_influence_note}")
             
             return BiasResult(
                 bias_distribution=bias_distribution,
                 reasoning=reasoning,
-                metadata_used=use_metadata
+                metadata_used=use_metadata,
+                mbfc_influence_note=mbfc_influence_note if use_metadata else None
             )
         except Exception as e:
             # Retry decorator handles network/timeout errors
@@ -1352,7 +1437,8 @@ Return JSON only."""
                     bias_result = BiasResult(
                         bias_distribution=BiasDistribution(left=0.33, neutral=0.34, right=0.33),
                         reasoning="No opinions found in text - only facts detected",
-                        metadata_used=False
+                        metadata_used=False,
+                        mbfc_influence_note=None
                     )
                 
             elif mode == LogicMode.NO_CHAIN:
@@ -1415,6 +1501,7 @@ Return JSON only."""
                     "dominant_bias": bias_result.bias_distribution.dominant_bias,
                     "reasoning": bias_result.reasoning,
                     "metadata_used": bias_result.metadata_used,
+                    "mbfc_influence_note": bias_result.mbfc_influence_note,
                 },
                 "pipeline_metadata": {
                     "mode": mode.value,

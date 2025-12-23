@@ -1,0 +1,33 @@
+[
+  {
+    "input": "I support the tax cut but oppose the trade war.",
+    "output": [
+      {
+        "statement": "Support for the tax cut",
+        "type": "opinion",
+        "original_sentence": "I support the tax cut but oppose the trade war."
+      },
+      {
+        "statement": "Opposition to the trade war",
+        "type": "opinion",
+        "original_sentence": "I support the tax cut but oppose the trade war."
+      }
+    ]
+  },
+  {
+    "input": "The unemployment rate fell to 3.5% in October, which shows excellent economic management.",
+    "output": [
+      {
+        "statement": "Unemployment rate fell to 3.5% in October",
+        "type": "fact",
+        "original_sentence": "The unemployment rate fell to 3.5% in October, which shows excellent economic management."
+      },
+      {
+        "statement": "This shows excellent economic management",
+        "type": "opinion",
+        "original_sentence": "The unemployment rate fell to 3.5% in October, which shows excellent economic management."
+      }
+    ]
+  }
+]
+
