@@ -14,6 +14,7 @@ from ...config.settings import settings
 from ...utils.llm_client import llm_manager
 from ...utils.logger import get_logger
 from ...utils.smart_memory import SmartMemory
+from ...utils.agent_cache import cached
 
 logger = get_logger(__name__)
 
@@ -180,6 +181,7 @@ Final Output Structure:
             confidence_score=confidence_score
         )
 
+    @cached()
     def _enhance_report_with_llm(self, basic_report: SynthesisReport, conflict_analyses: List[Dict[str, Any]]) -> SynthesisReport:
         """
         Use LLM to enhance the synthesis report with more detailed analysis.

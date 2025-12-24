@@ -93,6 +93,9 @@ class HTMLExtractor(ABC):
         """
         Fetch HTML content from a URL with comprehensive error handling.
 
+        This method attempts to handle non-standard HTTP status codes that may still
+        contain useful content (like 460 from people.com).
+
         Args:
             url: The URL to fetch
 
@@ -101,15 +104,33 @@ class HTMLExtractor(ABC):
 
         Raises:
             httpx.TimeoutException: If the request times out
-            httpx.HTTPStatusError: If the response has an error status
+            httpx.HTTPStatusError: If the response has a standard error status
             httpx.RequestError: If there's a network error
         """
         logger.info(f"Fetching HTML from: {url}")
 
         try:
-            with httpx.Client(timeout=self.request_timeout, proxy=settings.openai_proxy) as client:
-                response = client.get(url, follow_redirects=True)
-                response.raise_for_status()
+            headers = {
+                "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+                "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8",
+                "Accept-Language": "en-US,en;q=0.5",
+                "Accept-Encoding": "gzip, deflate",
+                "Connection": "keep-alive",
+                "Upgrade-Insecure-Requests": "1",
+            }
+            with httpx.Client(timeout=self.request_timeout, trust_env=True) as client:
+                response = client.get(url, headers=headers, follow_redirects=True)
+
+                # Handle non-standard HTTP status codes (like 460 from people.com)
+                if response.status_code >= 400:
+                    # Check if it's a non-standard code that might still have content
+                    if response.status_code not in [400, 401, 403, 404, 405, 406, 407, 408, 409, 410, 411, 412, 413, 414, 415, 416, 417, 418, 421, 422, 423, 424, 425, 426, 428, 429, 431, 451]:
+                        logger.warning(f"Non-standard HTTP status {response.status_code} from {url}, but response has {len(response.text)} characters. Attempting to use content anyway.")
+                        if len(response.text) > 100:  # Has substantial content
+                            return response.text
+                    # For standard error codes or empty responses, raise the error
+                    response.raise_for_status()
+
                 logger.debug(f"Successfully fetched {len(response.text)} characters from {url}")
                 return response.text
 

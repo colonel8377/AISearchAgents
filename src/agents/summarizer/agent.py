@@ -7,7 +7,7 @@ from langchain_core.prompts import ChatPromptTemplate
 from langchain_core.output_parsers import StrOutputParser
 from tenacity import retry, stop_after_attempt, wait_exponential, retry_if_exception_type
 
-from ...config.settings import settings, ExecutionMode, HistoryMode
+from ...config.settings import settings, ExecutionMode
 from ...utils.logger import get_logger
 from ...utils.llm_client import llm_manager
 from ...utils.smart_memory import SmartMemory
@@ -21,15 +21,18 @@ class SummarizerAgent:
     """
     Implements a Summarizer Agent that accepts user conversation records
     and summarizes the key information found within those conversation logs.
-    
+
     Uses LangChain chains for robust, modular processing. This agent benefits from
     chains because it processes conversation records in a single pass without maintaining
     conversational state between invocations.
-    
+
     Note: NudgeCollapseAgent doesn't use chains as it needs to maintain message history
     and conversational context across multiple turns, which is better suited to direct
     message-based LLM interaction.
     """
+
+    # Class variable to store custom few shots (persistent across instances)
+    _custom_few_shots: Optional[str] = None
     
     SYSTEM_PROMPT_NO_SHOTS = """You are a helpful AI assistant specialized in summarizing conversations.
 Your task is to analyze conversation records and extract the key information, themes, and insights.
@@ -57,11 +60,42 @@ Keep your summary clear, structured, and easy to understand."""
     def get_default_few_shots() -> str:
         """
         Get the default few-shot examples for conversation summarization.
-        
+
         Returns:
             str: Default few-shot examples
         """
         return SUMMARIZER_FEW_SHOTS
+
+    @classmethod
+    def set_custom_few_shots(cls, custom_few_shots: Optional[str] = None) -> None:
+        """
+        Set custom few-shot examples for summarization.
+
+        Args:
+            custom_few_shots: Custom few-shot examples string. If None, clears custom few shots.
+        """
+        cls._custom_few_shots = custom_few_shots
+        logger.info(f"Custom few shots set for SummarizerAgent: {custom_few_shots is not None}")
+
+    @classmethod
+    def get_custom_few_shots(cls) -> Optional[str]:
+        """
+        Get currently set custom few-shot examples.
+
+        Returns:
+            Custom few-shot examples string or None if not set
+        """
+        return cls._custom_few_shots
+
+    @classmethod
+    def get_effective_few_shots(cls) -> str:
+        """
+        Get effective few-shot examples (custom if set, otherwise default).
+
+        Returns:
+            Effective few-shot examples string
+        """
+        return cls._custom_few_shots if cls._custom_few_shots is not None else cls.get_default_few_shots()
     
     def __init__(
         self,
@@ -164,9 +198,15 @@ Keep your summary clear, structured, and easy to understand."""
         few_shots = ""
         if use_few_shots:
             if custom_few_shots is not None:
+                # Use explicitly provided custom few shots
                 few_shots = custom_few_shots
-                logger.info("Using custom few-shot examples")
+                logger.info("Using explicitly provided custom few-shot examples")
+            elif self._custom_few_shots is not None:
+                # Use stored custom few shots
+                few_shots = self._custom_few_shots
+                logger.info("Using stored custom few-shot examples")
             else:
+                # Use default few shots
                 few_shots = SUMMARIZER_FEW_SHOTS
                 logger.info("Using default few-shot examples")
         else:

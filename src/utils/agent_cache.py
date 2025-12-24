@@ -338,7 +338,7 @@ class RedisCache:
     """
     
     def __init__(self, redis_host: str = "localhost", redis_port: int = 6379, 
-                 redis_password: str = "", redis_db: int = 1):
+                 redis_user: str = "default", redis_password: str = "", redis_db: int = 1):
         """
         Initialize the Redis cache.
         
@@ -353,6 +353,7 @@ class RedisCache:
             self.redis_client = redis.Redis(
                 host=redis_host,
                 port=redis_port,
+                username=redis_user if redis_user else None,
                 password=redis_password if redis_password else None,
                 db=redis_db,
                 decode_responses=True
@@ -619,6 +620,7 @@ def create_cache_backend() -> CacheBackend:
             return RedisCache(
                 redis_host=settings.redis_host,
                 redis_port=settings.redis_port,
+                redis_user=settings.redis_user,
                 redis_password=settings.redis_password,
                 redis_db=getattr(settings, 'cache_redis_db', 1)
             )
@@ -642,21 +644,28 @@ def get_agent_cache() -> CacheBackend:
     return _cache_instance
 
 
-def cached(enabled: bool = True):
+def cached(enabled: bool = True, exclude_class_name: bool = False):
     """
     Decorator for caching agent method results.
-    
+
     Uses function signature and all parameters to generate cache keys.
-    Automatically detects if method is instance method (includes class name).
+    Automatically detects if method is instance method (includes class name by default).
     Works with both Redis and local cache backends based on settings.
-    
+
     Args:
         enabled: Whether caching is enabled (default: True). Can be disabled via settings.
-    
+        exclude_class_name: Whether to exclude class name from cache key (default: False).
+                           Useful for one-time evaluations without memory state.
+
     Example:
         @cached()
         def my_method(self, text: str, mode: str = "default"):
             # Method implementation
+            return result
+
+        @cached(exclude_class_name=True)
+        def evaluate_once(self, data):
+            # One-time evaluation, no class prefix in cache key
             return result
     """
     def decorator(func: Callable) -> Callable:
@@ -671,49 +680,49 @@ def cached(enabled: bool = True):
         @functools.wraps(func)
         def wrapper(*args, **kwargs):
             cache = get_agent_cache()
-            
-            # Get class name if instance method
+
+            # Get class name if instance method and not excluded
             class_name = None
-            if is_instance_method and args:
+            if is_instance_method and args and not exclude_class_name:
                 instance = args[0]
                 class_name = type(instance).__name__
-            
+
             # Check cache
             cached_result = cache.get(func, args, kwargs, class_name)
             if cached_result is not None:
                 logger.info(f"Cache hit for {class_name}.{func.__name__ if class_name else func.__name__}")
                 return cached_result
-            
+
             # Execute function
             result = func(*args, **kwargs)
-            
+
             # Cache result
             cache.set(func, args, kwargs, result, class_name)
-            
+
             return result
         
         @functools.wraps(func)
         async def async_wrapper(*args, **kwargs):
             cache = get_agent_cache()
-            
-            # Get class name if instance method
+
+            # Get class name if instance method and not excluded
             class_name = None
-            if is_instance_method and args:
+            if is_instance_method and args and not exclude_class_name:
                 instance = args[0]
                 class_name = type(instance).__name__
-            
+
             # Check cache
             cached_result = cache.get(func, args, kwargs, class_name)
             if cached_result is not None:
                 logger.info(f"Cache hit for {class_name}.{func.__name__ if class_name else func.__name__}")
                 return cached_result
-            
+
             # Execute async function
             result = await func(*args, **kwargs)
-            
+
             # Cache result
             cache.set(func, args, kwargs, result, class_name)
-            
+
             return result
         
         # Return appropriate wrapper based on whether function is async

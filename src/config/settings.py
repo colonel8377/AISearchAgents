@@ -12,9 +12,6 @@ ENV_PATH = BASE_DIR / ".env"
 # Execution mode type for task chains
 ExecutionMode = Literal["chain_online", "chain_local", "no_chain"]
 
-# History mode type for chat
-HistoryMode = Literal["full", "none"]
-
 
 class Settings(BaseSettings):
     """Application settings using Pydantic for validation and environment variable loading."""
@@ -60,6 +57,7 @@ class Settings(BaseSettings):
     # Redis Settings
     redis_host: str = Field(default="localhost", description="Redis host")
     redis_port: int = Field(default=6379, description="Redis port")
+    redis_user: str = Field(default='default', description="Redis user")
     redis_password: str = Field(default="", description="Redis password")
     redis_db: int = Field(default=0, description="Redis database number")
     
@@ -116,9 +114,9 @@ class Settings(BaseSettings):
     max_tokens_per_message: int = Field(default=500, description="Maximum tokens per message in conversation history")
     
     # Chat History Mode Settings
-    default_history_mode: Literal["full", "none"] = Field(
-        default="full",
-        description="Default history mode: 'full' (include conversation history), 'none' (no history, stateless chat)"
+    default_history_mode: bool = Field(
+        default=True,
+        description="Default history mode: True (include conversation history), False (no history, stateless chat)"
     )
     smart_memory_enabled: bool = Field(
         default=True,

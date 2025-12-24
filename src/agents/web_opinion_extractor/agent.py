@@ -17,6 +17,7 @@ from .models import AtomicOpinion, OpinionExtractionResult, BiasDistribution
 from ...config.settings import settings, ExecutionMode
 from ...utils.llm_client import llm_manager
 from ...utils.logger import get_logger
+from ...utils.agent_cache import cached
 
 logger = get_logger(__name__)
 
@@ -183,6 +184,7 @@ Extract ALL viewpoints, even subtle ones. Be thorough but precise."""
         
         logger.debug(f"WebOpinionExtractor initialized successfully with execution_mode={self.execution_mode}")
     
+    @cached()
     def _extract_opinions_with_llm(self, text: str, use_cot: bool = False, custom_few_shots: Optional[str] = None) -> List[Dict[str, Any]]:
         """
         Use LLM to extract atomic opinions from text.

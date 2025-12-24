@@ -27,11 +27,11 @@ def test_bot_creator_history_mode_full():
         bot_id=bot_id,
         user_message="What is Python?",
         conversation_history=None,
-        history_mode="full"
+        history_mode=True
     )
     
     assert "response" in result1
-    assert result1["history_mode"] == "full"
+    assert result1["history_mode"] == True
     assert len(result1["conversation_history"]) == 2  # User + assistant
     
     # Second chat with history
@@ -39,7 +39,7 @@ def test_bot_creator_history_mode_full():
         bot_id=bot_id,
         user_message="What are its main uses?",
         conversation_history=result1["conversation_history"],
-        history_mode="full"
+        history_mode=True
     )
     
     assert "response" in result2
@@ -68,19 +68,19 @@ def test_bot_creator_history_mode_none():
         bot_id=bot_id,
         user_message="What is Python?",
         conversation_history=None,
-        history_mode="none"
+        history_mode=False
     )
     
     assert "response" in result1
-    assert result1["history_mode"] == "none"
-    assert len(result1["conversation_history"]) == 0  # No history in 'none' mode
+    assert result1["history_mode"] == False
+    assert len(result1["conversation_history"]) == 0  # No history when False
     
     # Second chat should also have no history
     result2 = agent.chat_with_bot(
         bot_id=bot_id,
         user_message="What are its main uses?",
         conversation_history=result1["conversation_history"],
-        history_mode="none"
+        history_mode=False
     )
     
     assert "response" in result2
@@ -101,18 +101,18 @@ def test_nudge_collapse_history_mode_full():
     result1 = agent.generate_turn(
         user_query="What is climate change?",
         search_summary="Climate change refers to long-term shifts in temperatures.",
-        history_mode="full"
+        history_mode=True
     )
     
     assert "response" in result1
-    assert result1["history_mode"] == "full"
+    assert result1["history_mode"] == True
     assert result1["turn"] == 0
     
     # Second turn - should include history
     result2 = agent.generate_turn(
         user_query="What causes it?",
         search_summary="Main causes include greenhouse gas emissions.",
-        history_mode="full"
+        history_mode=True
     )
     
     assert "response" in result2
@@ -133,17 +133,17 @@ def test_nudge_collapse_history_mode_none():
     result1 = agent.generate_turn(
         user_query="What is climate change?",
         search_summary="Climate change refers to long-term shifts in temperatures.",
-        history_mode="none"
+        history_mode=False
     )
     
     assert "response" in result1
-    assert result1["history_mode"] == "none"
+    assert result1["history_mode"] == False
     
     # Second turn - should not use history from previous turn
     result2 = agent.generate_turn(
         user_query="What causes it?",
         search_summary="Main causes include greenhouse gas emissions.",
-        history_mode="none"
+        history_mode=False
     )
     
     assert "response" in result2

@@ -9,6 +9,8 @@ import re
 from typing import Optional, Dict, Any, Tuple
 from dataclasses import dataclass
 
+import httpx
+
 from langchain_core.messages import SystemMessage, HumanMessage
 from langchain_openai import ChatOpenAI
 
@@ -17,6 +19,7 @@ from ...config.settings import settings
 from ...utils.llm_client import llm_manager
 from ...utils.logger import get_logger
 from ...utils.smart_memory import SmartMemory
+from ...utils.agent_cache import cached
 
 logger = get_logger(__name__)
 
@@ -42,8 +45,10 @@ class ContentExtractorAgent(HTMLExtractor):
     - Cleaning of non-content tags (script, style, nav, footer, iframe)
     - Network error handling (timeouts, 404s)
     - Academic content focus (main title + main body)
-    - Context window handling (truncation)
     """
+
+    # Class variable to store custom few shots (persistent across instances)
+    _custom_few_shots: Optional[str] = None
 
     SYSTEM_PROMPT = """You are a Precise Web Data Auditor specializing in Academic Content Extraction.
 
@@ -112,7 +117,7 @@ OUTPUT FORMAT:
             temperature: Temperature for LLM responses (lower for more consistent extraction)
             proxy: Optional HTTP proxy for API requests
             request_timeout: Timeout for HTTP requests in seconds
-            execution_mode: Execution mode ('chain_online' for CoT, 'no_chain' for direct)
+            execution_mode: Execution mode (\'chain_online\' for CoT, \'no_chain\' for direct)
         """
         # Initialize parent HTMLExtractor
         super().__init__(request_timeout=request_timeout)
@@ -140,6 +145,7 @@ OUTPUT FORMAT:
 
         logger.debug(f"ContentExtractorAgent initialized successfully with execution_mode={self.execution_mode}")
 
+    @cached()
     def _extract_with_llm(self, text: str, use_cot: bool = False, custom_few_shots: Optional[str] = None) -> Tuple[str, str]:
         """
         Use LLM to extract title and main body from cleaned text.
@@ -168,9 +174,13 @@ OUTPUT FORMAT:
         else:
             system_prompt = self.SYSTEM_PROMPT
 
-        # Add few-shot examples if provided
+        # Add few-shot examples
         if custom_few_shots:
+            # Use explicitly provided custom few shots
             system_prompt = f"{custom_few_shots}\n\n{system_prompt}"
+        elif self._custom_few_shots:
+            # Use stored custom few shots
+            system_prompt = f"{self._custom_few_shots}\n\n{system_prompt}"
 
         user_message = f"""Please extract the main title and body content from the following text:
 
@@ -219,17 +229,45 @@ Return your extraction in the exact format specified:
             custom_few_shots: Optional custom few-shot examples (only when use_llm=True)
 
         Returns:
-            ContentExtractionResult with extracted title and body
-
-        Raises:
+            ContentExtractionResult with extracted title and body. If extraction fails,
+            returns a result with error metadata instead of raising exceptions.
             httpx.TimeoutException: If the request times out
             httpx.HTTPStatusError: If the response has an error status
-            httpx.RequestError: If there's a network error
+            httpx.RequestError: If there\'s a network error
         """
         logger.info(f"Extracting content from URL: {url} (use_llm={use_llm})")
 
-        # Fetch HTML
-        html = self.fetch_html(url)
+        # Fetch HTML with error handling
+        try:
+            html = self.fetch_html(url)
+        except httpx.HTTPStatusError as e:
+            logger.warning(f"HTTP error fetching {url}: {e.response.status_code} - {e.response.reason_phrase}")
+            return ContentExtractionResult(
+                url=url,
+                title=None,
+                main_body="",
+                text_length=0,
+                truncated=False,
+                extraction_metadata={
+                    "error": "http_error",
+                    "status_code": e.response.status_code,
+                    "reason": e.response.reason_phrase
+                }
+            )
+        except (httpx.TimeoutException, httpx.RequestError) as e:
+            logger.warning(f"Network error fetching {url}: {type(e).__name__}: {e}")
+            return ContentExtractionResult(
+                url=url,
+                title=None,
+                main_body="",
+                text_length=0,
+                truncated=False,
+                extraction_metadata={
+                    "error": "network_error",
+                    "error_type": type(e).__name__,
+                    "error_message": str(e)
+                }
+            )
 
         # Use HTML parsing to extract structured content (token-efficient)
         main_body, title = self.clean_html(html)
@@ -380,6 +418,7 @@ Return your extraction in the exact format specified:
         return result
 
     @staticmethod
+    @staticmethod
     def get_default_few_shots() -> str:
         """
         Get default few-shot examples for content extraction.
@@ -400,6 +439,37 @@ Input: "[HTML with paper metadata and abstract]"
 Output:
 - TITLE: Machine Learning Approaches to Natural Language Processing
 - MAIN BODY: This paper presents a comprehensive survey of machine learning techniques applied to natural language processing tasks. We review recent advances in transformer architectures, attention mechanisms, and their applications to text classification, named entity recognition, and machine translation."""
+
+    @classmethod
+    def set_custom_few_shots(cls, custom_few_shots: Optional[str] = None) -> None:
+        """
+        Set custom few-shot examples for content extraction.
+
+        Args:
+            custom_few_shots: Custom few-shot examples string. If None, clears custom few shots.
+        """
+        cls._custom_few_shots = custom_few_shots
+        logger.info(f"Custom few shots set for ContentExtractorAgent: {custom_few_shots is not None}")
+
+    @classmethod
+    def get_custom_few_shots(cls) -> Optional[str]:
+        """
+        Get currently set custom few-shot examples.
+
+        Returns:
+            Custom few-shot examples string or None if not set
+        """
+        return cls._custom_few_shots
+
+    @classmethod
+    def get_effective_few_shots(cls) -> str:
+        """
+        Get effective few-shot examples (custom if set, otherwise default).
+
+        Returns:
+            Effective few-shot examples string
+        """
+        return cls._custom_few_shots if cls._custom_few_shots is not None else cls.get_default_few_shots()
 
     def reset(self) -> None:
         """Reset the agent to initial state."""

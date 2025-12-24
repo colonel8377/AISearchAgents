@@ -11,7 +11,7 @@ from langchain_core.runnables import Runnable
 from tenacity import retry, stop_after_attempt, wait_exponential, retry_if_exception_type
 
 from ...utils.logger import get_logger
-from ...config.settings import settings, ExecutionMode, HistoryMode
+from ...config.settings import settings, ExecutionMode
 from ...utils.llm_client import llm_manager
 from ...utils.smart_memory import SmartMemory
 from ...utils.agent_cache import cached
@@ -38,11 +38,14 @@ BOT_CONFIG_SECTION_MARKERS = [
 class BotCreatorAgent:
     """
     Bot Creator Agent with two persona modes for comparative experiments.
-    
+
     Modes:
     - system_prompt: Persona embedded in system prompt for stricter control
     - user_instruction: Persona provided as user message for more flexibility
     """
+
+    # Class variable to store custom few shots (persistent across instances)
+    _custom_few_shots: Optional[str] = None
     
     # Base prompt without few-shots
     BASE_SYSTEM_PROMPT_NO_SHOTS = """You are a helpful AI assistant specialized in creating and configuring chatbot personas.
@@ -51,11 +54,9 @@ Analyze persona descriptions and create structured bot configurations with:
 - Communication style
 - Behavioral guidelines
 - Comprehensive system prompt for the bot"""
-    
-    # Base system prompt for user_instruction mode (with default few-shots)
-    BASE_SYSTEM_PROMPT = f"""{BASE_SYSTEM_PROMPT_NO_SHOTS}
 
-{BOT_CREATOR_FEW_SHOTS}"""
+    # Base system prompt for user_instruction mode (with default few-shots)
+    BASE_SYSTEM_PROMPT = BASE_SYSTEM_PROMPT_NO_SHOTS + "\n\n" + BOT_CREATOR_FEW_SHOTS
 
     # Template for system_prompt mode - persona is embedded in system
     SYSTEM_PROMPT_TEMPLATE_NO_SHOTS = """You are a helpful AI assistant specialized in creating and configuring chatbot personas.
@@ -68,20 +69,49 @@ Based on this persona, create a structured bot configuration with:
 - Communication style
 - Behavioral guidelines
 - Comprehensive system prompt for the bot"""
-    
-    SYSTEM_PROMPT_TEMPLATE = f"""{SYSTEM_PROMPT_TEMPLATE_NO_SHOTS}
 
-{BOT_CREATOR_FEW_SHOTS}"""
+    SYSTEM_PROMPT_TEMPLATE = SYSTEM_PROMPT_TEMPLATE_NO_SHOTS + "\n\n" + BOT_CREATOR_FEW_SHOTS
     
     @staticmethod
     def get_default_few_shots() -> str:
         """
         Get the default few-shot examples for bot creation.
-        
+
         Returns:
             str: Default few-shot examples
         """
         return BOT_CREATOR_FEW_SHOTS
+
+    @classmethod
+    def set_custom_few_shots(cls, custom_few_shots: Optional[str] = None) -> None:
+        """
+        Set custom few-shot examples for bot creation.
+
+        Args:
+            custom_few_shots: Custom few-shot examples string. If None, clears custom few shots.
+        """
+        cls._custom_few_shots = custom_few_shots
+        logger.info(f"Custom few shots set for BotCreatorAgent: {custom_few_shots is not None}")
+
+    @classmethod
+    def get_custom_few_shots(cls) -> Optional[str]:
+        """
+        Get currently set custom few-shot examples.
+
+        Returns:
+            Custom few-shot examples string or None if not set
+        """
+        return cls._custom_few_shots
+
+    @classmethod
+    def get_effective_few_shots(cls) -> str:
+        """
+        Get effective few-shot examples (custom if set, otherwise default).
+
+        Returns:
+            Effective few-shot examples string
+        """
+        return cls._custom_few_shots if cls._custom_few_shots is not None else cls.get_default_few_shots()
     
     def __init__(
         self,
@@ -260,9 +290,15 @@ Please provide:
         few_shots = ""
         if use_few_shots:
             if custom_few_shots is not None:
+                # Use explicitly provided custom few shots
                 few_shots = custom_few_shots
-                logger.info("Using custom few-shot examples")
+                logger.info("Using explicitly provided custom few-shot examples")
+            elif self._custom_few_shots is not None:
+                # Use stored custom few shots
+                few_shots = self._custom_few_shots
+                logger.info("Using stored custom few-shot examples")
             else:
+                # Use default few shots
                 few_shots = BOT_CREATOR_FEW_SHOTS
                 logger.info("Using default few-shot examples")
         else:
@@ -522,25 +558,25 @@ This bot is suitable for interactions that require these characteristics and sty
         bot_id: str,
         user_message: str,
         conversation_history: Optional[List[Dict[str, str]]] = None,
-        history_mode: Optional[HistoryMode] = None
+        history_mode: Optional[bool] = None
     ) -> Dict[str, Any]:
         """
         Chat with a created bot using its configured persona.
-        
+
         Args:
             bot_id: The ID of the bot to chat with
-            user_message: The user's message to the bot
+            user_message: The user\'s message to the bot
             conversation_history: Optional previous conversation history
-                                 List of {"role": "user"|"assistant", "content": str}
-            history_mode: History mode - 'full' (include history) or 'none' (stateless)
-                         If None, uses default from settings
-        
+                List of {"role": "user"|"assistant", "content": str}
+            history_mode: History mode - True (include history) or False (stateless)
+                If None, uses default from settings
+
         Returns:
             Dictionary containing:
                 - bot_id: The bot's ID
                 - bot_name: The bot's name
                 - response: The bot's response
-                - conversation_history: Updated conversation history (empty if history_mode='none')
+                - conversation_history: Updated conversation history (empty if history_mode=False)
                 - history_mode: The history mode used
         """
         # Use default history mode if not specified
@@ -574,8 +610,8 @@ This bot is suitable for interactions that require these characteristics and sty
             
             messages = [SystemMessage(content=system_prompt)]
             
-            # Add conversation history only if history_mode is 'full'
-            if history_mode == "full" and conversation_history:
+            # Add conversation history only if history_mode is True
+            if history_mode and conversation_history:
                 logger.debug(f"Including {len(conversation_history)} history entries")
                 for entry in conversation_history:
                     role = entry.get("role", "")
@@ -584,8 +620,8 @@ This bot is suitable for interactions that require these characteristics and sty
                         messages.append(HumanMessage(content=content))
                     elif role == "assistant":
                         messages.append(AIMessage(content=content))
-            elif history_mode == "none":
-                logger.debug("History mode is 'none', skipping conversation history")
+            else:
+                logger.debug("History mode is False, skipping conversation history")
             
             # Add current user message
             messages.append(HumanMessage(content=user_message))
@@ -599,12 +635,12 @@ This bot is suitable for interactions that require these characteristics and sty
             logger.info(f"Bot {bot_id} responded with {len(bot_response)} characters")
             
             # Build updated conversation history based on mode
-            if history_mode == "full":
+            if history_mode:
                 updated_history = list(conversation_history) if conversation_history else []
                 updated_history.append({"role": "user", "content": user_message})
                 updated_history.append({"role": "assistant", "content": bot_response})
             else:
-                # In 'none' mode, don't maintain history
+                # In False mode, don't maintain history
                 updated_history = []
             
             # Smart memory: detect and store important information

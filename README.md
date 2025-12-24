@@ -1,122 +1,92 @@
-# AI Search Agents Platform v2.0
+# AI Search Agents Platform
 
-Platform for AI search agents with multi-agent support, featuring **Nudge-and-Collapse**, **Summarizer**, **Bot Creator**, and **Multi-Agent Debate System**.
+AI-powered content analysis platform with multi-agent support for academic research and debate simulation.
 
 ## Quick Start
 
 ```bash
-# Install
 git clone https://github.com/colonel8377/AISearchAgents.git && cd AISearchAgents
 pip install -r requirements.txt
-
-# Configure
-cp .env.example .env  # Edit with your settings
-
-# Run
+cp .env.example .env  # Configure your API keys
 python src/main.py
-# API at http://localhost:8000, docs at http://localhost:8000/docs
 ```
+
+API: http://localhost:8000 | Docs: http://localhost:8000/docs
 
 ## Configuration
 
-Key settings in `.env`:
-
 ```bash
-# LLM Settings (Required)
-OPENAI_API_KEY=your_api_key_here
-OPENAI_API_BASE=https://api.openai.com/v1
+# Required
+OPENAI_API_KEY=your_key
 OPENAI_MODEL=gpt-3.5-turbo
 
-# Proxy Configuration (if needed)
-# Use standard environment variables instead of OPENAI_PROXY
-# HTTP_PROXY=http://proxy:8080
-# HTTPS_PROXY=http://proxy:8080
-
-# API Settings
+# Optional
 API_HOST=0.0.0.0
 API_PORT=8000
-API_KEY_REQUIRED=false           # Enable authentication
-API_KEYS=                        # Comma-separated API keys
-
-# Vector Store (redis, postgres, or chroma)
 VECTOR_STORE_TYPE=chroma
-
-# Agent Settings
-AGENT_TEMPERATURE=0.7
-
-# Web Opinion Extractor Settings
-MBFC_DB_PATH=data/media_bias.db  # Path to MBFC database (default: data/media_bias.db)
 ```
 
-> **Note**: Proxy configuration has been updated. Use standard `HTTP_PROXY` and `HTTPS_PROXY` environment variables instead of the deprecated `OPENAI_PROXY` setting. See [PROXY_MIGRATION_GUIDE.md](PROXY_MIGRATION_GUIDE.md) for details.
+## Core Features
 
-## API Overview
+- **Content Analysis**: Extract, atomize, and verify claims against sources
+- **Multi-Agent System**: Nudge-collapse, summarizer, bot creator agents
+- **Consistency Checking**: Verify if website summaries accurately reflect their content
+- **Debate Simulation**: Multi-agent debates with stability analysis
+- **Quality Assessment**: Content metrics and bias detection
 
-| Endpoint | Description |
-|----------|-------------|
-| `POST /api/v1/agents` | Create agent (nudge_collapse, summarizer, bot_creator) |
-| `GET /api/v1/agents` | List all agents |
-| `GET /api/v1/agents/{id}` | Get agent status |
-| `DELETE /api/v1/agents/{id}` | Delete agent |
-| `POST /api/v1/agents/{id}/nudge-collapse/generate` | Generate turn |
-| `POST /api/v1/agents/{id}/summarizer/summarize` | Summarize conversation |
-| `POST /api/v1/agents/{id}/bot-creator/create` | Create bot |
-| `POST /debate/init` | Initialize debate session |
-| `POST /agent/{id}/chat` | Chat with debate agent |
-| `POST /debate/{session_id}/stability_check` | Check debate stability |
+## API Structure
 
-## Example
+```
+/api/v1/
+├── agents/          # Agent management
+├── agent/           # Agent operations
+├── content/         # Content processing
+├── consistency/     # Website summary vs content verification
+│   ├── check-summary-url    # Verify summary accuracy
+│   ├── complete             # Full 5-step analysis
+│   └── evidence-locate      # Evidence location
+├── quality/         # Quality assessment
+├── opinion/         # Bias analysis
+└── debate/          # Debate system
+```
+
+## Examples
 
 ```python
 import requests
 
 BASE_URL = "http://localhost:8000"
-headers = {"X-API-Key": "your-key"}  # if auth enabled
 
-# Create agent
-resp = requests.post(f"{BASE_URL}/api/v1/agents", 
-    json={"agent_type": "summarizer"}, headers=headers)
+# 1. Create summarizer agent
+resp = requests.post(f"{BASE_URL}/api/v1/agents/create",
+    json={"agent_type": "summarizer"})
 agent_id = resp.json()["agent_id"]
 
-# Use agent
-resp = requests.post(f"{BASE_URL}/api/v1/agents/{agent_id}/summarizer/summarize",
-    json={"conversation_records": [{"turn": 0, "user": "Hello", "assistant": "Hi!"}]},
-    headers=headers)
-print(resp.json()["summary"])
+# 2. Summarize conversation
+resp = requests.post(f"{BASE_URL}/api/v1/agent/{agent_id}/summarizer/summarize",
+    json={"conversation_records": [
+        {"role": "user", "content": "What is AI?"},
+        {"role": "assistant", "content": "AI is artificial intelligence..."}
+    ]})
+print("Summary:", resp.json()["summary"])
 
-# Cleanup
-requests.delete(f"{BASE_URL}/api/v1/agents/{agent_id}", headers=headers)
+# 3. Check website summary vs full content consistency
+resp = requests.post(f"{BASE_URL}/api/v1/consistency/check-summary-url",
+    json={
+        "summary": "This article explores how AI is revolutionizing healthcare delivery systems.",
+        "url": "https://example.com/ai-healthcare-article",
+        "enable_deep_analysis": True
+    })
+result = resp.json()
+print(f"Summary-content consistency: {result['consistency_score']:.2f}")
+if result['conflicting_points']:
+    print(f"Found {len(result['conflicting_points'])} inconsistencies")
 ```
-
-## Key Features
-
-- **Multi-Agent Support**: Run multiple agent instances with unique IDs
-- **Chat History Modes**: Two modes for conversation management:
-  - `full`: Maintain complete conversation history (default)
-  - `none`: Stateless chat without history (faster, lower cost)
-- **Smart Memory**: Automatically detects and stores important user information:
-  - News interests and topics
-  - Political stances and opinions
-  - Personal preferences and context
-- **Optimized Performance**: HTTP connection pooling and chain caching for faster execution
-- **Proxy Support**: Standard HTTP_PROXY/HTTPS_PROXY environment variable support
-- **RESTful API**: Intuitive endpoints with optional authentication
-- **Vector Stores**: Redis, PostgreSQL (pgvector), or Chroma
-- **Debate System**: Multi-agent debates with KS-statistic stability detection
-- **Bot Creator Modes**: Two persona modes for comparative experiments:
-  - `system_prompt`: Persona embedded in system prompt (stricter control)
-  - `user_instruction`: Persona as user message (more flexibility)
 
 ## Documentation
 
-- [Quick Reference](doc/QUICK_REFERENCE.md) - API reference
-- [History Modes & Smart Memory](doc/HISTORY_MODES.md) - Chat history modes and intelligent memory
-- [Debate System](doc/DEBATE_SYSTEM.md) - Multi-agent debate guide
-- [Task Chain Optimization](doc/TASK_CHAIN_OPTIMIZATION.md) - Performance optimization details
-- [Logging Guide](doc/LOGGING_GUIDE.md) - Debugging and logging
-- [Migration Guide](doc/MIGRATION_GUIDE.md) - v1 to v2 migration
-- [Proxy Migration Guide](PROXY_MIGRATION_GUIDE.md) - Proxy configuration update
+- [API Reference](doc/QUICK_REFERENCE.md)
+- [Consistency Pipeline](doc/HISTORY_MODES.md)
+- [Debate System](doc/DEBATE_SYSTEM.md)
 
-## License
-
-Experimental research platform. Use responsibly.
+Use responsibly. Research platform only.

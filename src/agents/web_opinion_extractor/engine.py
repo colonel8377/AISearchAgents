@@ -107,7 +107,7 @@ def estimate_tokens(text: str) -> int:
 class WebOpinionEngine:
     """
     Modular "Glass Box" Web Opinion Analysis Engine.
-    
+
     This engine implements a 4-agent pipeline with configurable options:
     
     Agent 1: extract_content(url) -> ArticleContent
@@ -286,7 +286,67 @@ class WebOpinionEngine:
         # Return empty list if no default shots available
         logger.warning("No default scorer shots found")
         return []
-    
+
+    @classmethod
+    def set_custom_atomizer_shots(cls, custom_shots: Optional[List[dict]] = None) -> None:
+        """
+        Set custom atomizer few-shot examples for all instances.
+
+        Args:
+            custom_shots: Custom atomizer few-shot examples as list of dicts. If None, clears custom shots.
+        """
+        cls._custom_atomizer_shots = custom_shots
+        logger.info(f"Custom atomizer shots set: {custom_shots is not None}")
+
+    @classmethod
+    def set_custom_scorer_shots(cls, custom_shots: Optional[List[dict]] = None) -> None:
+        """
+        Set custom scorer few-shot examples for all instances.
+
+        Args:
+            custom_shots: Custom scorer few-shot examples as list of dicts. If None, clears custom shots.
+        """
+        cls._custom_scorer_shots = custom_shots
+        logger.info(f"Custom scorer shots set: {custom_shots is not None}")
+
+    @classmethod
+    def get_custom_atomizer_shots(cls) -> Optional[List[dict]]:
+        """
+        Get currently set custom atomizer few-shot examples.
+
+        Returns:
+            Custom atomizer shots or None if not set
+        """
+        return cls._custom_atomizer_shots
+
+    @classmethod
+    def get_custom_scorer_shots(cls) -> Optional[List[dict]]:
+        """
+        Get currently set custom scorer few-shot examples.
+
+        Returns:
+            Custom scorer shots or None if not set
+        """
+        return cls._custom_scorer_shots
+
+    def get_effective_atomizer_shots(self) -> List[dict]:
+        """
+        Get effective atomizer few-shot examples (custom if set, otherwise system default).
+
+        Returns:
+            Effective atomizer shots as list of dicts
+        """
+        return self._custom_atomizer_shots if self._custom_atomizer_shots is not None else self.get_default_atomizer_shots()
+
+    def get_effective_scorer_shots(self) -> List[dict]:
+        """
+        Get effective scorer few-shot examples (custom if set, otherwise system default).
+
+        Returns:
+            Effective scorer shots as list of dicts
+        """
+        return self._custom_scorer_shots if self._custom_scorer_shots is not None else self.get_default_scorer_shots()
+
     # ========== AGENT 1: EXTRACTION API ==========
     
     @NETWORK_RETRY
@@ -1026,7 +1086,7 @@ Provide your bias analysis as a JSON object with:
 - bias_distribution: {{left: float, right: float, neutral: float}} (must sum to 1.0)
 - reasoning: string explaining your analysis step-by-step (Chain of Thought required)
 - metadata_used: boolean (true if MBFC prior was used)
-- mbfc_influence_note: string (only if metadata_used=true) - Brief note describing MBFC prior's influence:
+- mbfc_influence_note: string (only if metadata_used=true) - Brief note describing MBFC prior\'s influence:
   * "strong" - MBFC prior strongly influenced the final result
   * "moderate" - MBFC prior had moderate influence, combined with text evidence
   * "weak" - MBFC prior had minimal influence, text evidence dominated
@@ -1193,7 +1253,7 @@ Provide your analysis as a JSON object with:
 - bias_distribution: {{left: float, right: float, neutral: float}} (must sum to 1.0)
 - reasoning: string explaining your analysis step-by-step (Chain of Thought required)
 - metadata_used: boolean (true if MBFC prior was used)
-- mbfc_influence_note: string (only if metadata_used=true) - Brief note describing MBFC prior's influence:
+- mbfc_influence_note: string (only if metadata_used=true) - Brief note describing MBFC prior\'s influence:
   * "strong" - MBFC prior strongly influenced the final result
   * "moderate" - MBFC prior had moderate influence, combined with text evidence
   * "weak" - MBFC prior had minimal influence, text evidence dominated
@@ -1226,7 +1286,7 @@ Provide your analysis as a JSON object with:
 - bias_distribution: {{left: float, right: float, neutral: float}} (must sum to 1.0)
 - reasoning: string explaining your analysis step-by-step (Chain of Thought required)
 - metadata_used: boolean (true if MBFC prior was used)
-- mbfc_influence_note: string (only if metadata_used=true) - Brief note describing MBFC prior's influence:
+- mbfc_influence_note: string (only if metadata_used=true) - Brief note describing MBFC prior\'s influence:
   * "strong" - MBFC prior strongly influenced the final result
   * "moderate" - MBFC prior had moderate influence, combined with text evidence
   * "weak" - MBFC prior had minimal influence, text evidence dominated

@@ -15,6 +15,7 @@ from ...config.settings import settings
 from ...utils.llm_client import llm_manager
 from ...utils.logger import get_logger
 from ...utils.smart_memory import SmartMemory
+from ...utils.agent_cache import cached
 
 logger = get_logger(__name__)
 
@@ -138,6 +139,7 @@ Output Format:
 
         return paragraphs
 
+    @cached()
     def _find_evidence_with_llm(self, claims: List[Dict[str, Any]], main_body: str) -> List[Dict[str, Any]]:
         """
         Use LLM to find evidence for each claim in the main body text.

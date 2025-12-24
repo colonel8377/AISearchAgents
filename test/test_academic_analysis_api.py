@@ -43,7 +43,7 @@ class TestAcademicAnalysisAPI:
             mock_agent_class.return_value = mock_agent
 
             response = client.post(
-                "/api/v1/content-extractor/extract",
+                "/api/v1/content/extract",
                 json={"url": "http://example.com"},
                 headers={"X-API-Key": "test-key"}
             )
@@ -218,10 +218,10 @@ class TestAcademicAnalysisAPI:
             assert data["synthesis_report"]["research_summary"] == "Test summary"
             assert data["synthesis_report"]["confidence_score"] == 0.9
 
-    def test_get_content_extractor_default_shots(self, client):
-        """Test getting default few-shot examples for content extractor."""
+    def test_get_content_extractor_shots(self, client):
+        """Test getting few-shot examples for content extractor."""
         response = client.get(
-            "/api/v1/content-extractor/default-shots",
+            "/api/v1/content/shots",
             headers={"X-API-Key": "test-key"}
         )
 
@@ -229,11 +229,12 @@ class TestAcademicAnalysisAPI:
         data = response.json()
         assert data["agent_type"] == "content_extractor"
         assert "few_shots" in data
+        assert "is_custom" in data
 
-    def test_get_claim_atomizer_default_shots(self, client):
-        """Test getting default few-shot examples for claim atomizer."""
+    def test_get_claim_atomizer_shots(self, client):
+        """Test getting few-shot examples for claim atomizer."""
         response = client.get(
-            "/api/v1/claim-atomizer/default-shots",
+            "/api/v1/content/atomize-shots",
             headers={"X-API-Key": "test-key"}
         )
 
@@ -241,11 +242,12 @@ class TestAcademicAnalysisAPI:
         data = response.json()
         assert data["agent_type"] == "claim_atomizer"
         assert "few_shots" in data
+        assert "is_custom" in data
 
-    def test_get_conflict_auditor_default_shots(self, client):
-        """Test getting default few-shot examples for conflict auditor."""
+    def test_get_conflict_auditor_shots(self, client):
+        """Test getting few-shot examples for conflict auditor."""
         response = client.get(
-            "/api/v1/conflict-auditor/default-shots",
+            "/api/v1/consistency/conflict-audit-shots",
             headers={"X-API-Key": "test-key"}
         )
 
@@ -253,6 +255,7 @@ class TestAcademicAnalysisAPI:
         data = response.json()
         assert data["agent_type"] == "conflict_auditor"
         assert "few_shots" in data
+        assert "is_custom" in data
 
 
     @patch('src.api.main._evaluate_content')
@@ -263,7 +266,7 @@ class TestAcademicAnalysisAPI:
         mock_content_eval.return_value = {"content_type": "summary", "metrics": {"content_length": 100}}
 
         response = client.post(
-            "/api/v1/evaluation/overall",
+            "/api/v1/quality/overall",
             json={"summary": "Test summary"},
             headers={"X-API-Key": "test-key"}
         )
@@ -284,7 +287,7 @@ class TestAcademicAnalysisAPI:
         mock_comp.return_value = {"compression_ratio": 0.2}
 
         response = client.post(
-            "/api/v1/evaluation/overall",
+            "/api/v1/quality/overall",
             json={"summary": "Test summary", "url": "http://example.com"},
             headers={"X-API-Key": "test-key"}
         )
@@ -298,7 +301,7 @@ class TestAcademicAnalysisAPI:
     def test_overall_evaluation_no_input(self, client):
         """Test overall evaluation with no input provided."""
         response = client.post(
-            "/api/v1/evaluation/overall",
+            "/api/v1/quality/overall",
             json={},
             headers={"X-API-Key": "test-key"}
         )
@@ -321,7 +324,7 @@ class TestAcademicAnalysisAPI:
             mock_eval.return_value = {"content_type": "summary"}
 
             response = client.post(
-                "/api/v1/evaluation/overall",
+                "/api/v1/quality/overall",
                 json={
                     "summary": "Test summary",
                     "include_full_analysis": True
@@ -338,10 +341,51 @@ class TestAcademicAnalysisAPI:
         # This would require extensive mocking of all agents
         # For now, just test that the endpoint exists and requires proper auth
         response = client.post(
-            "/api/v1/analysis/complete",
+            "/api/v1/consistency/complete",
             json={"url": "http://example.com"},
             headers={"X-API-Key": "test-key"}
         )
 
         # Should either succeed with mocked agents or fail gracefully
         assert response.status_code in [200, 500]  # 200 if agents are properly mocked, 500 if not
+
+    def test_check_summary_url_consistency(self, client):
+        """Test website summary vs full content consistency checking endpoint."""
+        # Mock the consistency checking function
+        with patch('src.api.main._check_summary_vs_url_consistency', new_callable=AsyncMock) as mock_consistency:
+            mock_consistency.return_value = {
+                "consistency_score": 0.8,
+                "cross_references": [
+                    {
+                        "summary_claim_text": "AI is transforming healthcare",
+                        "evidence_found": True,
+                        "status": "supported"
+                    }
+                ],
+                "conflicting_points": [],
+                "processing_time": 2.5
+            }
+
+            response = client.post(
+                "/api/v1/consistency/check-summary-url",
+                json={
+                    "summary": "AI is transforming healthcare and education.",
+                    "url": "https://example.com/ai-impact",
+                    "enable_deep_analysis": True
+                },
+                headers={"X-API-Key": "test-key"}
+            )
+
+            assert response.status_code == 200
+            data = response.json()
+            assert "consistency_score" in data
+            assert "cross_references" in data
+            assert "conflicting_points" in data
+            assert data["consistency_score"] == 0.8
+
+            # Verify the function was called with correct arguments
+            mock_consistency.assert_called_once()
+            args = mock_consistency.call_args[0]
+            assert args[0] == "AI is transforming healthcare and education."
+            assert args[1] == "https://example.com/ai-impact"
+            assert args[2] == True  # enable_deep_analysis

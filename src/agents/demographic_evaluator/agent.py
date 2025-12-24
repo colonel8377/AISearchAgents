@@ -9,6 +9,7 @@ from tenacity import retry, stop_after_attempt, wait_exponential, retry_if_excep
 from ...utils.logger import get_logger
 from ...config.settings import settings, ExecutionMode
 from ...utils.llm_client import llm_manager
+from ...utils.agent_cache import cached
 from ...prompts.demographic_evaluator.few_shots import DEMOGRAPHIC_EVALUATOR_FEW_SHOTS
 
 logger = get_logger(__name__)
@@ -16,26 +17,60 @@ logger = get_logger(__name__)
 
 class DemographicEvaluatorAgent:
     """
-    Implements a Demographic Evaluator Agent that evaluates sentences from 
+    Implements a Demographic Evaluator Agent that evaluates sentences from
     a specific demographic perspective.
-    
+
     The agent takes a demographic profile (JSON) and a list of sentences,
     then evaluates each sentence from that demographic's perspective, providing
     agree/disagree judgments with reasoning.
-    
+
     Supports optional Chain of Thought (CoT) reasoning via execution_mode parameter.
     Supports optional few-shot examples for better evaluation quality.
     """
+
+    # Class variable to store custom few shots (persistent across instances)
+    _custom_few_shots: Optional[str] = None
     
     @staticmethod
     def get_default_few_shots() -> str:
         """
         Get the default few-shot examples for demographic evaluation.
-        
+
         Returns:
             str: Default few-shot examples
         """
         return DEMOGRAPHIC_EVALUATOR_FEW_SHOTS
+
+    @classmethod
+    def set_custom_few_shots(cls, custom_few_shots: Optional[str] = None) -> None:
+        """
+        Set custom few-shot examples for demographic evaluation.
+
+        Args:
+            custom_few_shots: Custom few-shot examples string. If None, clears custom few shots.
+        """
+        cls._custom_few_shots = custom_few_shots
+        logger.info(f"Custom few shots set for DemographicEvaluatorAgent: {custom_few_shots is not None}")
+
+    @classmethod
+    def get_custom_few_shots(cls) -> Optional[str]:
+        """
+        Get currently set custom few-shot examples.
+
+        Returns:
+            Custom few-shot examples string or None if not set
+        """
+        return cls._custom_few_shots
+
+    @classmethod
+    def get_effective_few_shots(cls) -> str:
+        """
+        Get effective few-shot examples (custom if set, otherwise default).
+
+        Returns:
+            Effective few-shot examples string
+        """
+        return cls._custom_few_shots if cls._custom_few_shots is not None else cls.get_default_few_shots()
     
     SYSTEM_PROMPT_TEMPLATE_COT = """You are a person with the following demographic profile:
 {demography_json}
@@ -128,6 +163,7 @@ OUTPUT SCHEMA:
         wait=wait_exponential(multiplier=1, min=2, max=10),
         retry=retry_if_exception_type(Exception)
     )
+    @cached(exclude_class_name=True)
     def evaluate_sentences(
         self,
         demography_json: Dict[str, Any],
@@ -180,9 +216,15 @@ OUTPUT SCHEMA:
         few_shots = ""
         if use_few_shots:
             if custom_few_shots is not None:
+                # Use explicitly provided custom few shots
                 few_shots = custom_few_shots
-                logger.info("Using custom few-shot examples")
+                logger.info("Using explicitly provided custom few-shot examples")
+            elif self._custom_few_shots is not None:
+                # Use stored custom few shots
+                few_shots = self._custom_few_shots
+                logger.info("Using stored custom few-shot examples")
             else:
+                # Use default few shots
                 few_shots = DEMOGRAPHIC_EVALUATOR_FEW_SHOTS
                 logger.info("Using default few-shot examples")
         else:

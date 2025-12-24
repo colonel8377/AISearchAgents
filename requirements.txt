@@ -27,6 +27,7 @@ tenacity==8.2.3
 # Scientific computing for debate stability analysis
 scipy==1.11.4
 numpy==1.24.3
+scikit-learn==1.3.2
 
 # Testing
 pytest==7.4.3

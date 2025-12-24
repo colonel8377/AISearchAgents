@@ -7,9 +7,10 @@ from langchain_core.messages import SystemMessage, HumanMessage, AIMessage
 from tenacity import retry, stop_after_attempt, wait_exponential, retry_if_exception_type
 
 from ...utils.logger import get_logger
-from ...config.settings import settings, HistoryMode
+from ...config.settings import settings
 from ...utils.llm_client import llm_manager
 from ...utils.smart_memory import SmartMemory
+from ...utils.agent_cache import cached
 from ...prompts.nudge_collapse.few_shots import NUDGE_COLLAPSE_FEW_SHOTS
 
 logger = get_logger(__name__)
@@ -18,15 +19,18 @@ logger = get_logger(__name__)
 class NudgeCollapseAgent:
     """
     Implements the Nudge-and-Collapse experiment agent with a strict 4-turn loop.
-    
+
     Turn 0: Neutral Initial Query
     Turn 1: Focus Shift (Rejection Level 1)
     Turn 2: Source Attack (Rejection Level 2)
     Turn 3: Echo Chamber Demand (Rejection Level 3)
-    
+
     Uses LangChain chains for robust, modular processing.
     """
-    
+
+    # Class variable to store custom few shots (persistent across instances)
+    _custom_few_shots: Optional[Dict[str, str]] = None
+
     # Base turn prompts without few-shots (extracted from NUDGE_COLLAPSE_FEW_SHOTS)
     TURN_PROMPTS_BASE = {
         0: "You are a helpful AI assistant providing neutral, balanced responses.",
@@ -50,16 +54,56 @@ class NudgeCollapseAgent:
     def get_default_few_shots(turn: int = None) -> str:
         """
         Get the default few-shot examples for nudge-collapse turns.
-        
+
         Args:
             turn: Turn number (0-3). If None, returns all turns as dict
-            
+
         Returns:
             str or dict: Few-shot examples for the specified turn or all turns
         """
         if turn is not None:
             return NUDGE_COLLAPSE_FEW_SHOTS.get(f'turn_{turn}', '')
         return NUDGE_COLLAPSE_FEW_SHOTS
+
+    @classmethod
+    def set_custom_few_shots(cls, custom_few_shots: Optional[Dict[str, str]] = None) -> None:
+        """
+        Set custom few-shot examples for all turns.
+
+        Args:
+            custom_few_shots: Dictionary with keys 'turn_0', 'turn_1', 'turn_2', 'turn_3'
+                            If None, clears custom few shots (reverts to defaults)
+        """
+        cls._custom_few_shots = custom_few_shots
+        logger.info(f"Custom few shots set: {custom_few_shots is not None}")
+
+    @classmethod
+    def get_custom_few_shots(cls) -> Optional[Dict[str, str]]:
+        """
+        Get currently set custom few-shot examples.
+
+        Returns:
+            Dict with custom few shots or None if not set
+        """
+        return cls._custom_few_shots
+
+    @classmethod
+    def get_effective_few_shots(cls, turn: int = None) -> str:
+        """
+        Get effective few-shot examples (custom if set, otherwise default).
+
+        Args:
+            turn: Turn number (0-3). If None, returns all turns as dict
+
+        Returns:
+            str or dict: Effective few-shot examples for the specified turn or all turns
+        """
+        if cls._custom_few_shots is not None:
+            if turn is not None:
+                return cls._custom_few_shots.get(f'turn_{turn}', '')
+            return cls._custom_few_shots
+        else:
+            return cls.get_default_few_shots(turn)
     
     def __init__(
         self,
@@ -119,12 +163,13 @@ class NudgeCollapseAgent:
         wait=wait_exponential(multiplier=1, min=2, max=10),
         retry=retry_if_exception_type(Exception)
     )
+    @cached()
     def generate_turn(
         self,
         user_query: str,
         search_summary: str = "",
         search_urls: Optional[List[str]] = None,
-        history_mode: Optional[HistoryMode] = None,
+        history_mode:bool = False,
         use_few_shots: bool = True,
         custom_few_shots: Optional[Dict[str, str]] = None
     ) -> Dict[str, Any]:
@@ -135,8 +180,8 @@ class NudgeCollapseAgent:
             user_query: The user's question or input
             search_summary: Summary from the mock search engine
             search_urls: List of URLs from the search results
-            history_mode: History mode - 'full' (include history) or 'none' (stateless)
-                         If None, uses default from settings
+            history_mode: History mode - True (include history) or False (stateless)
+                         If false, uses default from settings
             use_few_shots: Whether to include few-shot examples in the prompt (default: True)
             custom_few_shots: Optional custom few-shot examples to use instead of defaults
                             Should be a dict with keys 'turn_0', 'turn_1', 'turn_2', 'turn_3'
@@ -146,15 +191,21 @@ class NudgeCollapseAgent:
             Dictionary containing the response and metadata
         """
         # Use default history mode if not specified
-        if history_mode is None:
+        if history_mode is False:
             history_mode = settings.default_history_mode
         
         # Determine which few-shots to use for this turn
         if use_few_shots:
             if custom_few_shots is not None and f'turn_{self.current_turn}' in custom_few_shots:
+                # Use explicitly provided custom few shots
                 system_prompt = custom_few_shots[f'turn_{self.current_turn}']
-                logger.info(f"Using custom few-shot examples for turn {self.current_turn}")
+                logger.info(f"Using explicitly provided custom few-shot examples for turn {self.current_turn}")
+            elif self._custom_few_shots is not None and f'turn_{self.current_turn}' in self._custom_few_shots:
+                # Use stored custom few shots
+                system_prompt = self._custom_few_shots[f'turn_{self.current_turn}']
+                logger.info(f"Using stored custom few-shot examples for turn {self.current_turn}")
             else:
+                # Use default few shots
                 system_prompt = self.TURN_PROMPTS.get(self.current_turn, self.TURN_PROMPTS[0])
                 logger.info(f"Using default few-shot examples for turn {self.current_turn}")
         else:
@@ -183,14 +234,14 @@ class NudgeCollapseAgent:
             # Build messages for the LLM
             messages = [SystemMessage(content=system_prompt)]
             
-            # Add conversation history only if history_mode is 'full'
-            if history_mode == "full":
+            # Add conversation history only if history_mode is True
+            if history_mode:
                 logger.debug(f"Including {len(self.conversation_history)} history entries")
                 for entry in self.conversation_history:
                     messages.append(HumanMessage(content=entry["user"]))
                     messages.append(AIMessage(content=entry["assistant"]))
-            elif history_mode == "none":
-                logger.debug("History mode is 'none', skipping conversation history")
+            else:
+                logger.debug("History mode is False, skipping conversation history")
             
             # Add current query with context
             current_message = f"{user_query}\n\n{context}" if context else user_query
