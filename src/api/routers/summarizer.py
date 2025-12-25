@@ -70,9 +70,7 @@ async def summarize_conversation(
 
             execution_mode=request.execution_mode,
 
-            use_few_shots=request.use_few_shots,
-
-            custom_few_shots=request.custom_few_shots
+            use_few_shots=request.use_few_shots
 
         )
 
@@ -307,20 +305,23 @@ async def list_conversations(
 async def get_conversation(
     agent_id: str,
     conversation_id: str,
+    turn: Optional[int] = Query(None, description="Turn number (0-based index). If not specified, returns all turns."),
     _api_key: str = Depends(get_api_key)  # Authentication dependency (value not used)
 ):
     """
     Get detailed information about a specific conversation.
-    
-    Returns all turns and the summary (if available) for the conversation.
-    
+
+    If turn is not specified, returns all turns and the summary (if available) for the conversation.
+    If turn is specified, returns only the specified turn.
+
     Args:
         agent_id: The agent's unique identifier
         conversation_id: The conversation ID
+        turn: Optional turn number (0-based index). If None, returns all turns.
         _api_key: Authentication dependency (value not used, required for auth check)
-    
+
     Returns:
-        Conversation details including turns and summary
+        Conversation details including turns and summary, or specific turn data
     """
     agent = agent_manager.get_agent(agent_id)
     
@@ -336,18 +337,31 @@ async def get_conversation(
         )
     
     try:
-        conversation = agent.get_conversation(conversation_id)
-        
+        conversation = agent.get_conversation(conversation_id, turn=turn)
+
         if conversation is None:
-            raise HTTPException(status_code=404, detail=f"Conversation '{conversation_id}' not found")
-        
-        return {
-            "conversation_id": conversation["conversation_id"],
-            "turn_count": len(conversation["turns"]),
-            "turns": conversation["turns"],
-            "summary": conversation["summary"],
-            "has_summary": conversation["summary"] is not None
-        }
+            if turn is not None:
+                raise HTTPException(status_code=404, detail=f"Conversation '{conversation_id}' or turn {turn} not found")
+            else:
+                raise HTTPException(status_code=404, detail=f"Conversation '{conversation_id}' not found")
+
+        if turn is not None:
+            # Return specific turn data
+            return {
+                "conversation_id": conversation["conversation_id"],
+                "turn": turn,
+                "turn_data": conversation["turn_data"],
+                "turn_count": conversation["turn_count"]
+            }
+        else:
+            # Return full conversation data
+            return {
+                "conversation_id": conversation["conversation_id"],
+                "turn_count": len(conversation["turns"]),
+                "turns": conversation["turns"],
+                "summary": conversation["summary"],
+                "has_summary": conversation["summary"] is not None
+            }
     except HTTPException:
         raise
     except Exception as e:

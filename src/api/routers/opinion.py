@@ -903,8 +903,8 @@ async def get_overall_bias_score(
 async def compare_claims(
     summary_claims: List[AtomicClaim],
     url_claims: List[AtomicClaim],
-
-    use_cot: bool = False
+    use_cot: bool = False,
+    use_few_shots: bool = True
 
 ) -> ClaimComparisonResponse:
 
@@ -1045,6 +1045,12 @@ Return a JSON array where each object contains:
   * What specific evidence from the claims supports this conclusion
 
   * Any nuances or partial agreements/disagreements that were considered"""
+
+    # Add few-shot examples if requested
+    if use_few_shots:
+        from ...agents.compare_claims_agent import CompareClaimsAgent
+        few_shots = CompareClaimsAgent.get_effective_few_shots()
+        system_prompt += "\n\n" + few_shots
 
     if use_cot:
 

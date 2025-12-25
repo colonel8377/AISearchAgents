@@ -38,6 +38,7 @@ VECTOR_STORE_TYPE=chroma
 - **Consistency Checking**: Verify if website summaries accurately reflect their content
 - **Debate Simulation**: Multi-agent debates with stability analysis
 - **Quality Assessment**: Content metrics and bias detection
+- **Bot Chat System**: Create custom AI personas and chat in persistent conversation threads or incognito mode
 
 ## API Structure
 
@@ -45,6 +46,11 @@ VECTOR_STORE_TYPE=chroma
 /api/v1/
 ├── agents/          # Agent management
 ├── agent/           # Agent operations
+├── bot/             # Custom AI chatbots
+│   ├── create               # Create custom bot with persona
+│   ├── chat                 # Chat with bot (conversation/incognito modes)
+│   ├── {bot_id}/conversation # Conversation thread management
+│   └── {bot_id}/conversations # List/manage conversations
 ├── content/         # Content processing
 ├── consistency/     # Website summary vs content verification
 │   ├── check-summary-url    # Verify summary accuracy
@@ -57,6 +63,55 @@ VECTOR_STORE_TYPE=chroma
 ```
 
 ## Examples
+
+### Bot Chat System
+
+Create a custom AI assistant and chat with it:
+
+```python
+import requests
+
+# 1. Create a coding assistant bot (persona auto-generated)
+bot_response = requests.post("http://localhost:8000/api/v1/bot/create", json={
+    "bot_name": "PythonExpert",
+    "execution_mode": "chain_local",
+    "use_few_shots": True
+})
+bot_id = bot_response.json()["bot_id"]
+print(f"Created bot: {bot_id}")
+
+# 2. Create a conversation thread
+conv_response = requests.post(f"http://localhost:8000/api/v1/bot/{bot_id}/conversation", json={
+    "title": "Python Learning Session"
+})
+conversation_id = conv_response.json()["conversation_id"]
+
+# 3. Chat in the conversation thread (remembers history)
+chat_response = requests.post("http://localhost:8000/api/v1/bot/chat", json={
+    "bot_id": bot_id,
+    "message": "How do I create a list in Python?",
+    "conversation_id": conversation_id
+})
+print(chat_response.json()["response"])
+
+# Continue the conversation
+chat_response = requests.post("http://localhost:8000/api/v1/bot/chat", json={
+    "bot_id": bot_id,
+    "message": "How do I add items to it?",
+    "conversation_id": conversation_id  # Same conversation - bot remembers
+})
+print(chat_response.json()["response"])
+
+# 4. Incognito chat (no history saved)
+incognito_response = requests.post("http://localhost:8000/api/v1/bot/chat", json={
+    "bot_id": bot_id,
+    "message": "What is machine learning?"
+    # No conversation_id = incognito mode
+})
+print("Incognito response:", incognito_response.json()["response"])
+```
+
+### Content Analysis
 
 ```python
 import requests
@@ -133,6 +188,70 @@ resp = requests.post(f"{BASE_URL}/api/v1/agent/{agent_id}/synthesis_aggregator/a
     json={"conflict_analyses": conflict_analyses, "use_llm_enhancement": True})
 result = resp.json()
 print(f"Synthesis confidence: {result['synthesis_report']['confidence_score']:.2f}")
+
+# 5. Create and chat with bot (persona auto-generated)
+resp = requests.post(f"{BASE_URL}/api/v1/bot/create",
+    json={
+        "bot_name": "ML Assistant"
+    })
+bot_result = resp.json()
+bot_id = bot_result["bot_id"]
+print(f"Created bot: {bot_id}")
+
+# Create a new conversation thread
+resp = requests.post(f"{BASE_URL}/api/v1/bot/{bot_id}/conversation",
+    json={
+        "title": "Machine Learning Study Session",
+        "system_prompt": "You are an expert machine learning tutor who explains concepts clearly with examples."
+    })
+conv_result = resp.json()
+conversation_id = conv_result["conversation_id"]
+print(f"Created conversation: {conversation_id}")
+
+# Chat with bot in conversation thread (remembers history)
+resp = requests.post(f"{BASE_URL}/api/v1/bot/chat",
+    json={
+        "bot_id": bot_id,
+        "conversation_id": conversation_id,  # Continue this conversation thread
+        "message": "What is gradient descent?"
+    })
+chat_result = resp.json()
+print(f"Bot response: {chat_result['response']}")
+
+# Chat in incognito mode (no history saved)
+resp = requests.post(f"{BASE_URL}/api/v1/bot/chat",
+    json={
+        "bot_id": bot_id,
+        "message": "What is overfitting?"
+        # No conversation_id = incognito mode
+    })
+chat_result = resp.json()
+print(f"Incognito response: {chat_result['response']}")
+
+# Continue conversation (history maintained)
+resp = requests.post(f"{BASE_URL}/api/v1/bot/chat",
+    json={
+        "bot_id": bot_id,
+        "conversation_id": conversation_id,  # Same conversation
+        "message": "Can you explain it with an example?"
+    })
+chat_result = resp.json()
+print(f"Bot continues: {chat_result['response']}")
+
+# Chat in incognito mode (no conversation_id - bot has no memory)
+resp = requests.post(f"{BASE_URL}/api/v1/bot/chat",
+    json={
+        "bot_id": bot_id,
+        # No conversation_id - incognito mode
+        "message": "What is overfitting?"
+    })
+incognito_result = resp.json()
+print(f"Incognito response: {incognito_result['response']}")
+
+# Get conversation history
+resp = requests.get(f"{BASE_URL}/api/v1/bot/{bot_id}/conversation")
+history = resp.json()
+print(f"Total turns: {history['total_turns']}")
 ```
 
 ## Few-shot Management
@@ -237,6 +356,17 @@ System-provided default few-shot examples are professionally crafted for each ag
 
 ## API Endpoints Summary
 
+### Bot Chat System
+- `POST /api/v1/bot/create` - Create custom AI bot with persona
+- `POST /api/v1/bot/chat` - Chat with bot (conversation threads or incognito mode)
+- `GET /api/v1/bot/list` - List all created bots
+- `POST /api/v1/bot/{bot_id}/conversation` - Create new conversation thread
+- `GET /api/v1/bot/{bot_id}/conversations` - List bot's conversation threads
+- `GET /api/v1/bot/{bot_id}/conversation/{conversation_id}` - Get conversation details
+- `PUT /api/v1/bot/{bot_id}/conversation/{conversation_id}` - Rename conversation
+- `DELETE /api/v1/bot/{bot_id}/conversation/{conversation_id}` - Delete conversation
+- `DELETE /api/v1/bot/{bot_id}` - Delete bot
+
 ### Agent Management
 - `POST /api/v1/agents/create` - Create new agent instance
 - `GET /api/v1/agents/list` - List all active agents
@@ -268,6 +398,17 @@ System-provided default few-shot examples are professionally crafted for each ag
 - `POST /api/v1/debate/{session_id}/chat` - Send message in debate
 - `POST /api/v1/debate/{session_id}/stability-check` - Check debate stability
 - `GET /api/v1/debate/{session_id}/statistics` - Get debate statistics
+
+### Bot Management
+- `POST /api/v1/bot/create` - Create new bot with auto-generated persona
+- `GET /api/v1/bot/list` - List all created bots
+- `POST /api/v1/bot/{bot_id}/conversation` - Create new conversation for bot
+- `POST /api/v1/bot/chat` - Chat with bot (conversation mode or incognito mode)
+- `GET /api/v1/bot/{bot_id}/conversation` - Get bot conversation history
+- `POST /api/v1/bot/{bot_id}/conversation/turn` - Add conversation turn manually
+- `DELETE /api/v1/bot/{bot_id}/conversation/turn` - Delete specific conversation turn
+- `DELETE /api/v1/bot/{bot_id}/conversations` - Clear all conversation threads
+- `DELETE /api/v1/bot/{bot_id}` - Delete bot
 
 ### System Management
 - `POST /api/v1/system/reset` - Reset entire system (clear all databases, caches, and state)

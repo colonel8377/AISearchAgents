@@ -283,23 +283,18 @@ Please provide:
     @cached()
     def create_bot(
         self,
-        persona_prompt: str,
         bot_name: Optional[str] = None,
         execution_mode: Optional[ExecutionMode] = None,
-        use_few_shots: bool = True,
-        custom_few_shots: Optional[str] = None
+        use_few_shots: bool = True
     ) -> Dict[str, Any]:
         """
-        Create a new bot with the specified persona prompt.
-        
+        Create a new bot with auto-generated persona.
+
         Args:
-            persona_prompt: Persona description for the bot
             bot_name: Optional name for the bot
             execution_mode: Execution mode - 'chain_online', 'chain_local', or 'no_chain'
                           If None, uses default from settings
             use_few_shots: Whether to include few-shot examples in the prompt (default: True)
-            custom_few_shots: Optional custom few-shot examples to use instead of defaults
-                            If provided, use_few_shots must be True
         """
         # Use default execution mode if not specified
         if execution_mode is None:
@@ -308,11 +303,7 @@ Please provide:
         # Determine which few-shots to use
         few_shots = ""
         if use_few_shots:
-            if custom_few_shots is not None:
-                # Use explicitly provided custom few shots
-                few_shots = custom_few_shots
-                logger.info("Using explicitly provided custom few-shot examples")
-            elif self._custom_few_shots is not None:
+            if self._custom_few_shots is not None:
                 # Use stored custom few shots
                 few_shots = self._custom_few_shots
                 logger.info("Using stored custom few-shot examples")
@@ -325,15 +316,11 @@ Please provide:
         
         # Store few_shots in instance for use by helper methods
         self._current_few_shots = few_shots
-            
-        logger.info(f"Creating bot with persona_prompt: {persona_prompt[:100]}... (mode={self.persona_mode}, execution_mode={execution_mode}, use_few_shots={use_few_shots})")
-        
-        if not persona_prompt or not persona_prompt.strip():
-            logger.warning("Empty persona prompt provided")
-            return {
-                "error": "Persona prompt cannot be empty",
-                "bot_config": None
-            }
+
+        # Use default persona prompt for all bots
+        persona_prompt = "You are a helpful and friendly AI assistant. You provide clear, accurate, and engaging responses to user questions. You are knowledgeable about a wide range of topics and always strive to be maximally truthful and helpful."
+
+        logger.info(f"Creating bot with auto-generated persona (mode={self.persona_mode}, execution_mode={execution_mode}, use_few_shots={use_few_shots})")
         
         try:
             logger.debug(f"Building bot configuration (mode={self.persona_mode}, execution_mode={execution_mode})")
@@ -759,21 +746,22 @@ This bot is suitable for interactions that require these characteristics and sty
             
             logger.info(f"Bot {bot_name} responded with {len(bot_response)} characters")
             
-            # Build updated conversation history based on mode
+            # Build result based on mode
+            result = {
+                "bot_name": bot_name,
+                "response": bot_response,
+                "history_mode": history_mode
+            }
+
+            # Only include conversation history in history mode
             if history_mode:
                 updated_history = list(conversation_history) if conversation_history else []
                 updated_history.append({"role": "user", "content": user_message})
                 updated_history.append({"role": "assistant", "content": bot_response})
-            else:
-                # In False mode, don't maintain history
-                updated_history = []
-            
-            return {
-                "bot_name": bot_name,
-                "response": bot_response,
-                "conversation_history": updated_history,
-                "history_mode": history_mode
-            }
+                result["conversation_history"] = updated_history
+            # In incognito mode, don't include conversation_history at all
+
+            return result
             
         except Exception as e:
             logger.error(f"Failed to chat with bot: {e}", exc_info=True)

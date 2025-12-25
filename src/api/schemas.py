@@ -145,10 +145,6 @@ class SummarizeRequest(BaseModel):
         default=True,
         description="Whether to use few-shot examples in the prompt (default: True)"
     )
-    custom_few_shots: Optional[str] = Field(
-        default=None,
-        description="Optional custom few-shot examples to use instead of defaults. If provided, use_few_shots must be True."
-    )
 
 
 class SummaryResponse(BaseModel):
@@ -163,7 +159,6 @@ class SummaryResponse(BaseModel):
 
 class CreateBotRequest(BaseModel):
     """Request model for creating a bot."""
-    persona_prompt: str = Field(..., description="Persona prompt corpus for the bot")
     bot_name: Optional[str] = Field(default=None, description="Optional name for the bot")
     execution_mode: Optional[ExecutionMode] = Field(
         default=None,
@@ -173,10 +168,6 @@ class CreateBotRequest(BaseModel):
         default=True,
         description="Whether to use few-shot examples in the prompt (default: True)"
     )
-    custom_few_shots: Optional[str] = Field(
-        default=None,
-        description="Optional custom few-shot examples to use instead of defaults. If provided, use_few_shots must be True."
-    )
 
 
 class BotCreationResponse(BaseModel):
@@ -184,7 +175,6 @@ class BotCreationResponse(BaseModel):
     bot_id: str
     bot_name: str
     status: str
-    persona_prompt: str
     persona_mode: Optional[str] = None
     execution_mode: Optional[str] = None
     bot_configuration: str
@@ -206,6 +196,7 @@ class ExtractContentRequest(BaseModel):
     summary: Optional[str] = Field(default=None, description="Optional summary text for claim-level comparison with URL content")
     use_llm: bool = Field(default=False, description="Whether to use LLM for content refinement")
     use_cot: bool = Field(default=False, description="Whether to use Chain of Thought reasoning (only when use_llm=True)")
+    use_few_shots: bool = Field(default=True, description="Whether to use few-shot examples for claim comparison (only when compare_claims=True)")
     custom_few_shots: Optional[str] = Field(default=None, description="Optional custom few-shot examples (only when use_llm=True)")
     compare_claims: bool = Field(default=False, description="Whether to perform claim-level comparison (requires summary to be provided)")
 
@@ -363,13 +354,26 @@ class ChatWithBotRequest(BaseModel):
     """Request model for chatting with a bot."""
     bot_id: str = Field(..., description="UUID of the bot to chat with")
     message: str = Field(..., description="User message to send to the bot")
+    conversation_id: Optional[str] = Field(
+        default=None,
+        description="Conversation ID for continuing a conversation thread. If provided, bot remembers all previous messages in this conversation thread. If not provided, creates a new temporary conversation (incognito mode)."
+    )
+    conversation_title: Optional[str] = Field(
+        default=None,
+        description="Optional title for new conversations (only used when conversation_id is not provided)"
+    )
 
     model_config = {
         "json_schema_extra": {
             "examples": [
                 {
                     "bot_id": "550e8400-e29b-41d4-a716-446655440000",
-                    "message": "What is machine learning?"
+                    "message": "What is machine learning?",
+                    "conversation_id": "conv-123"  # Continue existing conversation
+                },
+                {
+                    "bot_id": "550e8400-e29b-41d4-a716-446655440000",
+                    "message": "What is machine learning?"  # Incognito mode - no conversation_id
                 }
             ]
         }
@@ -381,13 +385,75 @@ class ChatWithBotResponse(BaseModel):
     bot_id: str
     bot_name: str
     response: str
-    conversation_history: List[Dict[str, str]]
-    history_mode: str  # "stateless" or "stateful"
+    mode: str = Field(..., description="Mode: 'conversation' (persistent thread) or 'incognito' (temporary)")
+    conversation_history: Optional[List[Dict[str, str]]] = Field(default=None, description="Conversation history (only returned in conversation mode)")
+    conversation_id: Optional[str] = Field(default=None, description="Conversation ID if this was part of a conversation thread")
+    conversation_title: Optional[str] = Field(default=None, description="Conversation title if applicable")
+    turn_count: Optional[int] = Field(default=None, description="Number of turns in this conversation (only for conversation mode)")
 
 
-class DeleteConversationTurnRequest(BaseModel):
-    """Request model for deleting a conversation turn."""
-    turn_index: int = Field(..., ge=0, description="Index of the turn to delete (0-based, each turn is user+assistant)")
+
+class CreateConversationRequest(BaseModel):
+    """Request model for creating a new conversation."""
+    title: Optional[str] = Field(default=None, description="Optional title for the conversation")
+    system_prompt: Optional[str] = Field(default=None, description="Optional system prompt to initialize the conversation")
+
+class RenameConversationRequest(BaseModel):
+    """Request model for renaming a conversation."""
+    title: str = Field(..., description="New title for the conversation")
+
+
+class BotInfo(BaseModel):
+    """Bot information for listing."""
+    bot_id: str = Field(..., description="Bot UUID")
+    bot_name: str = Field(..., description="Bot name")
+    status: str = Field(..., description="Bot status")
+    conversations_count: int = Field(..., description="Number of conversations")
+    created_at: Optional[str] = Field(None, description="Creation timestamp")
+
+
+class BotListResponse(BaseModel):
+    """Response model for listing bots."""
+    bots: List[BotInfo] = Field(..., description="List of bots with their information")
+    total_count: int = Field(..., description="Total number of bots")
+
+
+class ConversationInfo(BaseModel):
+    """Conversation information for listing."""
+    conversation_id: str = Field(..., description="Conversation UUID")
+    title: str = Field(..., description="Conversation title")
+    created_at: str = Field(..., description="Creation timestamp")
+    updated_at: str = Field(..., description="Last update timestamp")
+    turn_count: int = Field(..., description="Number of turns in conversation")
+    last_message: Optional[str] = Field(None, description="Last message in conversation")
+
+
+class ConversationTurn(BaseModel):
+    """A single conversation turn."""
+    turn_index: int = Field(..., description="Turn index (0-based)")
+    user_message: str = Field(..., description="User's message")
+    assistant_response: str = Field(..., description="Assistant's response")
+    user_role: str = Field(..., description="User role")
+    assistant_role: str = Field(..., description="Assistant role")
+
+
+class ConversationListResponse(BaseModel):
+    """Response model for listing conversations."""
+    bot_id: str = Field(..., description="Bot UUID")
+    conversations: List[ConversationInfo] = Field(..., description="List of conversations with metadata")
+    total_count: int = Field(..., description="Total number of conversations")
+
+
+class ConversationDetailResponse(BaseModel):
+    """Response model for conversation details."""
+    bot_id: str = Field(..., description="Bot UUID")
+    conversation_id: str = Field(..., description="Conversation UUID")
+    title: str = Field(..., description="Conversation title")
+    created_at: str = Field(..., description="Creation timestamp")
+    updated_at: str = Field(..., description="Last update timestamp")
+    total_turns: int = Field(..., description="Total number of conversation turns")
+    turns: List[ConversationTurn] = Field(..., description="Conversation turns with user/assistant messages")
+    raw_history: List[Dict[str, Any]] = Field(..., description="Raw conversation history")
 
 
 class AddTurnRequest(BaseModel):

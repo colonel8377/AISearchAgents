@@ -295,8 +295,21 @@ class WebOpinionEngine:
         Args:
             custom_shots: Custom atomizer few-shot examples as list of dicts. If None, clears custom shots.
         """
+        from ...config.settings import settings
+        from ...storage import get_database
+
         cls._custom_atomizer_shots = custom_shots
-        logger.info(f"Custom atomizer shots set: {custom_shots is not None}")
+
+        if settings.enable_persistence:
+            database = get_database()
+            if database:
+                success = database.save_custom_few_shots("web_opinion_extractor_atomizer", custom_shots)
+                if success:
+                    logger.info(f"Custom atomizer shots saved to database: {custom_shots is not None}")
+                else:
+                    logger.warning("Failed to save custom atomizer shots to database")
+        else:
+            logger.info(f"Custom atomizer shots set (no persistence): {custom_shots is not None}")
 
     @classmethod
     def set_custom_scorer_shots(cls, custom_shots: Optional[List[dict]] = None) -> None:
@@ -306,8 +319,21 @@ class WebOpinionEngine:
         Args:
             custom_shots: Custom scorer few-shot examples as list of dicts. If None, clears custom shots.
         """
+        from ...config.settings import settings
+        from ...storage import get_database
+
         cls._custom_scorer_shots = custom_shots
-        logger.info(f"Custom scorer shots set: {custom_shots is not None}")
+
+        if settings.enable_persistence:
+            database = get_database()
+            if database:
+                success = database.save_custom_few_shots("web_opinion_extractor_scorer", custom_shots)
+                if success:
+                    logger.info(f"Custom scorer shots saved to database: {custom_shots is not None}")
+                else:
+                    logger.warning("Failed to save custom scorer shots to database")
+        else:
+            logger.info(f"Custom scorer shots set (no persistence): {custom_shots is not None}")
 
     @classmethod
     def get_custom_atomizer_shots(cls) -> Optional[List[dict]]:
@@ -317,6 +343,18 @@ class WebOpinionEngine:
         Returns:
             Custom atomizer shots or None if not set
         """
+        from ...config.settings import settings
+        from ...storage import get_database
+
+        # If not loaded yet, try to load from database
+        if cls._custom_atomizer_shots is None and settings.enable_persistence:
+            database = get_database()
+            if database:
+                stored_shots = database.load_custom_few_shots("web_opinion_extractor_atomizer")
+                if isinstance(stored_shots, list):
+                    cls._custom_atomizer_shots = stored_shots
+                    logger.info("Loaded custom atomizer shots from database")
+
         return cls._custom_atomizer_shots
 
     @classmethod
@@ -327,6 +365,18 @@ class WebOpinionEngine:
         Returns:
             Custom scorer shots or None if not set
         """
+        from ...config.settings import settings
+        from ...storage import get_database
+
+        # If not loaded yet, try to load from database
+        if cls._custom_scorer_shots is None and settings.enable_persistence:
+            database = get_database()
+            if database:
+                stored_shots = database.load_custom_few_shots("web_opinion_extractor_scorer")
+                if isinstance(stored_shots, list):
+                    cls._custom_scorer_shots = stored_shots
+                    logger.info("Loaded custom scorer shots from database")
+
         return cls._custom_scorer_shots
 
     def get_effective_atomizer_shots(self) -> List[dict]:

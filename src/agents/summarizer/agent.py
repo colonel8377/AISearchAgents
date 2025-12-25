@@ -197,21 +197,18 @@ Keep your summary clear, structured, and easy to understand."""
         self,
         conversation_records: List[Dict[str, str]],
         execution_mode: Optional[ExecutionMode] = None,
-        use_few_shots: bool = True,
-        custom_few_shots: Optional[str] = None
+        use_few_shots: bool = True
     ) -> Dict[str, Any]:
         """
         Summarize a list of conversation records.
-        
+
         Args:
             conversation_records: List of conversation records, each containing
                                 'user' and 'assistant' keys, and optionally other metadata
             execution_mode: Execution mode - 'chain_online', 'chain_local', or 'no_chain'
                           If None, uses default from settings
             use_few_shots: Whether to include few-shot examples in the prompt (default: True)
-            custom_few_shots: Optional custom few-shot examples to use instead of defaults
-                            If provided, use_few_shots must be True
-            
+
         Returns:
             Dictionary containing the summary and metadata
         """
@@ -222,11 +219,7 @@ Keep your summary clear, structured, and easy to understand."""
         # Determine which few-shots to use
         few_shots = ""
         if use_few_shots:
-            if custom_few_shots is not None:
-                # Use explicitly provided custom few shots
-                few_shots = custom_few_shots
-                logger.info("Using explicitly provided custom few-shot examples")
-            elif self._custom_few_shots is not None:
+            if self._custom_few_shots is not None:
                 # Use stored custom few shots
                 few_shots = self._custom_few_shots
                 logger.info("Using stored custom few-shot examples")
@@ -618,17 +611,35 @@ Provide a clear, structured summary."""
             "message": "Turn added successfully"
         }
     
-    def get_conversation(self, conversation_id: str) -> Optional[Dict[str, Any]]:
+    def get_conversation(self, conversation_id: str, turn: Optional[int] = None) -> Optional[Dict[str, Any]]:
         """
         Get a conversation by ID.
-        
+
         Args:
             conversation_id: The conversation ID
-            
+            turn: Optional turn number (0-based index). If None, returns full conversation.
+
         Returns:
-            Conversation data or None if not found
+            Full conversation data or specific turn data, or None if not found
         """
-        return self.conversations.get(conversation_id)
+        conversation = self.conversations.get(conversation_id)
+        if conversation is None:
+            return None
+
+        if turn is not None:
+            # Return specific turn data
+            turns = conversation["turns"]
+            if 0 <= turn < len(turns):
+                return {
+                    "conversation_id": conversation_id,
+                    "turn_data": turns[turn],
+                    "turn_count": len(turns)
+                }
+            else:
+                return None  # Invalid turn number
+        else:
+            # Return full conversation
+            return conversation
     
     def list_conversations(self) -> List[Dict[str, Any]]:
         """

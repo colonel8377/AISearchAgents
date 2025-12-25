@@ -927,6 +927,133 @@ async def reset_privacy_detector_custom_shots(
 
 
 # ============================================================================
+# Compare Claims Few-Shot Endpoints
+# ============================================================================
+
+@router.get("/compare-claims")
+async def get_compare_claims_shots(
+    _api_key: str = Depends(get_api_key)  # Authentication dependency (value not used)
+):
+    """
+    Get few-shot examples for Compare Claims functionality.
+
+    Returns the effective few-shot examples (custom if set, otherwise system default).
+
+    Args:
+        _api_key: Authentication dependency (value not used, required for auth check)
+
+    Returns:
+        Dictionary with agent_type, few_shots, and is_custom flag
+    """
+    try:
+        from ...agents.compare_claims_agent import CompareClaimsAgent
+
+        few_shots = CompareClaimsAgent.get_effective_few_shots()
+        custom_set = CompareClaimsAgent.get_custom_few_shots() is not None
+
+        return {
+            "agent_type": "compare_claims",
+            "few_shots": few_shots,
+            "is_custom": custom_set
+        }
+    except Exception as e:
+        logger.error(f"Failed to get few shots: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=f"Failed to get few shots: {str(e)}")
+
+
+@router.post("/compare-claims/custom")
+async def set_compare_claims_custom_shots(
+    request: SetCustomFewShotsRequest,
+    _api_key: str = Depends(get_api_key)  # Authentication dependency (value not used)
+):
+    """
+    Set custom few-shot examples for Compare Claims functionality.
+
+    Args:
+        request: Custom few-shot examples request
+        _api_key: Authentication dependency (value not used, required for auth check)
+
+    Returns:
+        Success message
+    """
+    try:
+        from ...agents.compare_claims_agent import CompareClaimsAgent
+
+        # Validate the format for compare-claims (should be string)
+        if request.custom_few_shots is not None and not isinstance(request.custom_few_shots, str):
+            raise HTTPException(
+                status_code=400,
+                detail="Custom few shots for compare-claims must be a string"
+            )
+
+        CompareClaimsAgent.set_custom_few_shots(request.custom_few_shots)
+
+        return {
+            "message": "Custom few-shot examples set successfully for Compare Claims",
+            "agent_type": "compare_claims"
+        }
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Failed to set custom few shots: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=f"Failed to set custom few shots: {str(e)}")
+
+
+@router.get("/compare-claims/custom")
+async def get_compare_claims_custom_shots(
+    _api_key: str = Depends(get_api_key)  # Authentication dependency (value not used)
+):
+    """
+    Get currently set custom few-shot examples for Compare Claims functionality.
+
+    Args:
+        _api_key: Authentication dependency (value not used, required for auth check)
+
+    Returns:
+        Currently set custom few-shot examples or null if not set
+    """
+    try:
+        from ...agents.compare_claims_agent import CompareClaimsAgent
+
+        custom_shots = CompareClaimsAgent.get_custom_few_shots()
+
+        return {
+            "agent_type": "compare_claims",
+            "custom_few_shots": custom_shots
+        }
+    except Exception as e:
+        logger.error(f"Failed to get custom few shots: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=f"Failed to get custom few shots: {str(e)}")
+
+
+@router.delete("/compare-claims/custom")
+async def reset_compare_claims_custom_shots(
+    _api_key: str = Depends(get_api_key)  # Authentication dependency (value not used)
+):
+    """
+    Reset custom few-shot examples for Compare Claims functionality (revert to defaults).
+
+    Args:
+        _api_key: Authentication dependency (value not used, required for auth check)
+
+    Returns:
+        Success message
+    """
+    try:
+        from ...agents.compare_claims_agent import CompareClaimsAgent
+
+        CompareClaimsAgent.set_custom_few_shots(None)
+
+        return {
+            "message": "Custom few-shot examples reset successfully for Compare Claims",
+            "agent_type": "compare_claims"
+        }
+    except Exception as e:
+        logger.error(f"Failed to reset custom few shots: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=f"Failed to reset custom few shots: {str(e)}")
+
+
+# ============================================================================
 # Conflict Auditor Agent Few-Shot Endpoints
 # ============================================================================
 

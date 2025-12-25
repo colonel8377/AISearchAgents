@@ -145,7 +145,9 @@ async def extract_content(
 
                 url_claims=url_atomization.atomic_claims,
 
-                use_cot=request.use_cot
+                use_cot=request.use_cot,
+
+                use_few_shots=request.use_few_shots
 
             )
 

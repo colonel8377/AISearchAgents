@@ -11,7 +11,7 @@ from ...utils.logger import get_logger
 from ...config.settings import settings, ExecutionMode
 from ...utils.llm_client import llm_manager
 from ...utils.agent_cache import cached, llm_cached
-from .few_shots import PRIVACY_DETECTOR_FEW_SHOTS
+from ...few_shots.privacy_detector.few_shots import PRIVACY_DETECTOR_FEW_SHOTS
 from ...storage import get_database
 import uuid
 

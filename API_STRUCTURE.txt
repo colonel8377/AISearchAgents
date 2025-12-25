@@ -189,3 +189,228 @@ Atomic Opinion Structure:
    print(f"Content provided: {result['content_provided']}")
 
 ═══════════════════════════════════════════════════════════════════════════════
+                              Bot Chat API Structure
+═══════════════════════════════════════════════════════════════════════════════
+
+┌─────────────────────────────────────────────────────────────────────────────┐
+│                         Base: /api/v1/bot                                   │
+└─────────────────────────────────────────────────────────────────────────────┘
+
+┌─────────────────────────────────────────────────────────────────────────────┐
+│ 1. Create Bot API                                                          │
+├─────────────────────────────────────────────────────────────────────────────┤
+│ Endpoint:  POST /bot/create                                                 │
+│ Input:     {                                                                │
+│              "bot_name": "MyBot",                                           │
+│              "execution_mode": "chain_local",                               │
+│              "use_few_shots": true                                          │
+│            }                                                                │
+│ Output:    {                                                                │
+│              "bot_id": "uuid...",                                           │
+│              "bot_name": "MyBot",                                           │
+│              "status": "initialized"                                        │
+│            }                                                                │
+│ Use:       Create a new bot with custom persona                             │
+└─────────────────────────────────────────────────────────────────────────────┘
+
+┌─────────────────────────────────────────────────────────────────────────────┐
+│ 2. Chat with Bot API ⭐⭐                                                    │
+├─────────────────────────────────────────────────────────────────────────────┤
+│ Endpoint:  POST /bot/chat                                                   │
+│ Input:     {                                                                │
+│              "bot_id": "uuid...",                                           │
+│              "message": "Hello!",                                           │
+│              "conversation_id": "conv-uuid"  // Optional                     │
+│            }                                                                │
+│ Output:    {                                                                │
+│              "bot_id": "uuid...",                                           │
+│              "response": "Hi there! How can I help?",                       │
+│              "conversation_id": "conv-uuid",                                │
+│              "mode": "conversation",                                        │
+│              "turn_count": 1                                                │
+│            }                                                                │
+│ Modes:     Conversation (with conversation_id) - Persistent chat thread     │
+│            Incognito (no conversation_id) - Temporary, no history saved     │
+│ Use:       Chat with bot in conversation threads or incognito mode          │
+└─────────────────────────────────────────────────────────────────────────────┘
+
+┌─────────────────────────────────────────────────────────────────────────────┐
+│ 3. Create Conversation API                                                  │
+├─────────────────────────────────────────────────────────────────────────────┤
+│ Endpoint:  POST /bot/{bot_id}/conversation                                  │
+│ Input:     {                                                                │
+│              "title": "My Conversation",                                    │
+│              "system_prompt": "You are a helpful assistant..."              │
+│            }                                                                │
+│ Output:    {                                                                │
+│              "conversation_id": "conv-uuid...",                             │
+│              "title": "My Conversation",                                    │
+│              "message": "Conversation created successfully"                 │
+│            }                                                                │
+│ Use:       Create a new persistent conversation thread                      │
+└─────────────────────────────────────────────────────────────────────────────┘
+
+┌─────────────────────────────────────────────────────────────────────────────┐
+│ 4. List Conversations API                                                   │
+├─────────────────────────────────────────────────────────────────────────────┤
+│ Endpoint:  GET /bot/{bot_id}/conversations                                  │
+│ Output:    {                                                                │
+│              "bot_id": "uuid...",                                           │
+│              "conversations": [                                              │
+│                {                                                            │
+│                  "conversation_id": "conv-uuid",                            │
+│                  "title": "My Conversation",                                │
+│                  "turn_count": 5,                                           │
+│                  "updated_at": "2024-01-01T12:00:00Z"                       │
+│                }                                                            │
+│              ],                                                             │
+│              "total_count": 3                                               │
+│            }                                                                │
+│ Use:       List all conversation threads for a bot                          │
+└─────────────────────────────────────────────────────────────────────────────┘
+
+┌─────────────────────────────────────────────────────────────────────────────┐
+│ 5. Get Conversation API                                                     │
+├─────────────────────────────────────────────────────────────────────────────┤
+│ Endpoint:  GET /bot/{bot_id}/conversation/{conversation_id}                 │
+│ Output:    {                                                                │
+│              "conversation_id": "conv-uuid",                                │
+│              "title": "My Conversation",                                    │
+│              "total_turns": 3,                                              │
+│              "turns": [                                                      │
+│                {                                                            │
+│                  "turn_index": 0,                                           │
+│                  "user_message": "Hello!",                                  │
+│                  "assistant_response": "Hi there!"                          │
+│                }                                                            │
+│              ]                                                              │
+│            }                                                                │
+│ Use:       Get detailed conversation history                                │
+└─────────────────────────────────────────────────────────────────────────────┘
+
+┌─────────────────────────────────────────────────────────────────────────────┐
+│ 6. Rename Conversation API                                                  │
+├─────────────────────────────────────────────────────────────────────────────┤
+│ Endpoint:  PUT /bot/{bot_id}/conversation/{conversation_id}                 │
+│ Input:     {"title": "New Conversation Title"}                              │
+│ Output:    {                                                                │
+│              "message": "Conversation renamed successfully",                │
+│              "old_title": "Old Title",                                      │
+│              "new_title": "New Conversation Title"                          │
+│            }                                                                │
+│ Use:       Rename a conversation thread                                     │
+└─────────────────────────────────────────────────────────────────────────────┘
+
+┌─────────────────────────────────────────────────────────────────────────────┐
+│ 7. Delete Conversation API                                                  │
+├─────────────────────────────────────────────────────────────────────────────┤
+│ Endpoint:  DELETE /bot/{bot_id}/conversation/{conversation_id}              │
+│ Output:    {                                                                │
+│              "message": "Conversation deleted successfully (memory and cache cleared)" │
+│              "cache_cleared": true                                          │
+│            }                                                                │
+│ Use:       Delete a conversation thread, its history, and clear related cache/memory │
+└─────────────────────────────────────────────────────────────────────────────┘
+
+┌─────────────────────────────────────────────────────────────────────────────┐
+│ 8. Clear All Conversations API                                             │
+├─────────────────────────────────────────────────────────────────────────────┤
+│ Endpoint:  DELETE /bot/{bot_id}/conversations                               │
+│ Output:    {                                                                │
+│              "message": "All conversations cleared successfully (memory and cache cleared)" │
+│              "cache_cleared": true                                          │
+│            }                                                                │
+│ Use:       Delete all conversation threads for a bot and clear related cache/memory │
+└─────────────────────────────────────────────────────────────────────────────┘
+
+┌─────────────────────────────────────────────────────────────────────────────┐
+│ 9. Summarize Conversation API                                              │
+├─────────────────────────────────────────────────────────────────────────────┤
+│ Endpoint:  POST /bot/{bot_id}/conversation/{conversation_id}/summarize     │
+│ Input:     turn=5  // Optional turn limit                                   │
+│ Output:    {                                                                │
+│              "summary": "Conversation summary text...",                    │
+│              "conversation_length": 10,                                     │
+│              "execution_mode": "chain_local"                                │
+│            }                                                                │
+│ Use:       Summarize a specific conversation thread                         │
+└─────────────────────────────────────────────────────────────────────────────┘
+
+═══════════════════════════════════════════════════════════════════════════════
+                              Chat Modes Comparison
+═══════════════════════════════════════════════════════════════════════════════
+
+┌─────────────┬─────────────────┬──────────────────┬─────────────────────────┐
+│    Mode     │   Persistence   │    History       │       Example           │
+├─────────────┼─────────────────┼──────────────────┼─────────────────────────┤
+│ Conversation│     Persistent  │ Full thread      │ ChatGPT conversation    │
+│             │     (Saved)     │ history          │ threads                 │
+├─────────────┼─────────────────┼──────────────────┼─────────────────────────┤
+│  Incognito  │   Temporary     │ No history       │ ChatGPT temporary       │
+│             │   (Not saved)   │ saved            │ chats                   │
+└─────────────┴─────────────────┴──────────────────┴─────────────────────────┘
+
+═══════════════════════════════════════════════════════════════════════════════
+                              Usage Patterns
+═══════════════════════════════════════════════════════════════════════════════
+
+Pattern 1: Conversation Thread (Persistent)
+──────────────────────────────────────────
+┌────────────┐      ┌─────────────────┐      ┌────────────────┐      ┌─────┐
+│ Create Bot │─────▶│ Create Conversation│────▶│     Chat      │─────▶│ ... │
+└────────────┘      └─────────────────┘      └────────────────┘      └─────┘
+
+Pattern 2: Incognito Chat (Temporary)
+────────────────────────────────────
+┌────────────┐      ┌────────────────┐
+│ Create Bot │─────▶│   Chat (no ID) │
+└────────────┘      └────────────────┘
+
+Pattern 3: Manage Conversations
+──────────────────────────────
+┌────────────┐      ┌─────────────┐      ┌────────────┐      ┌────────────┐
+│ List Convs │─────▶│ Get Conv    │─────▶│ Rename Conv │─────▶│ Delete Conv│
+└────────────┘      └─────────────┘      └────────────┘      └────────────┘
+
+═══════════════════════════════════════════════════════════════════════════════
+                              Quick Examples
+═══════════════════════════════════════════════════════════════════════════════
+
+1. Create Bot & Conversation Thread:
+   # Create bot (persona auto-generated, no history_mode needed)
+   curl -X POST http://localhost:8000/api/v1/bot/create \
+     -H "Content-Type: application/json" \
+     -d '{"bot_name": "CodeBot"}'
+
+   # Create conversation
+   curl -X POST http://localhost:8000/api/v1/bot/{bot_id}/conversation \
+     -H "Content-Type: application/json" \
+     -d '{"title": "Python Help Session"}'
+
+   # Chat in conversation
+   curl -X POST http://localhost:8000/api/v1/bot/chat \
+     -H "Content-Type: application/json" \
+     -d '{"bot_id": "'$BOT_ID'", "message": "How do I use lists in Python?", "conversation_id": "'$CONV_ID'"}'
+
+2. Incognito Chat (No History):
+   curl -X POST http://localhost:8000/api/v1/bot/chat \
+     -H "Content-Type: application/json" \
+     -d '{"bot_id": "'$BOT_ID'", "message": "What is AI?"}'
+   # Note: No conversation_id provided = incognito mode
+
+3. Manage Conversations:
+   # List all conversations
+   curl http://localhost:8000/api/v1/bot/{bot_id}/conversations
+
+   # Get conversation details
+   curl http://localhost:8000/api/v1/bot/{bot_id}/conversation/{conversation_id}
+
+   # Rename conversation
+   curl -X PUT http://localhost:8000/api/v1/bot/{bot_id}/conversation/{conversation_id} \
+     -H "Content-Type: application/json" \
+     -d '{"title": "Advanced Python Help"}'
+
+   # Delete conversation
+   curl -X DELETE http://localhost:8000/api/v1/bot/{bot_id}/conversation/{conversation_id}
+
+═══════════════════════════════════════════════════════════════════════════════
