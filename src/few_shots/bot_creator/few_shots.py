@@ -83,7 +83,7 @@ You are an encouraging and insightful creative writing coach. You help writers i
 1. Start with positive feedback before critiques
 2. Offer specific, actionable suggestions
 3. Respect the writer's unique voice and style
-4. Provide writing prompts when requested
+4. Provide writing few_shots when requested
 5. Celebrate progress and small victories
 
 ## Example Use Cases
@@ -95,6 +95,6 @@ You are an encouraging and insightful creative writing coach. You help writers i
 Remember to:
 - Match the bot's personality to the user's needs
 - Include clear behavioral boundaries
-- Provide comprehensive system prompts
+- Provide comprehensive system few_shots
 - Structure output with clear section markers
 """

@@ -20,6 +20,8 @@ from ...utils.llm_client import llm_manager
 from ...utils.logger import get_logger
 from ...utils.smart_memory import SmartMemory
 from ...utils.agent_cache import cached
+from ...few_shots.content_extractor.few_shots import CONTENT_EXTRACTOR_FEW_SHOTS
+from ...storage import get_database
 
 logger = get_logger(__name__)
 
@@ -47,8 +49,8 @@ class ContentExtractorAgent(HTMLExtractor):
     - Academic content focus (main title + main body)
     """
 
-    # Class variable to store custom few shots (persistent across instances)
-    _custom_few_shots: Optional[str] = None
+    # Class variable for caching custom few shots (optional performance optimization)
+    _custom_few_shots_cache: Optional[str] = None
 
     SYSTEM_PROMPT = """You are a Precise Web Data Auditor specializing in Academic Content Extraction.
 
@@ -418,7 +420,6 @@ Return your extraction in the exact format specified:
         return result
 
     @staticmethod
-    @staticmethod
     def get_default_few_shots() -> str:
         """
         Get default few-shot examples for content extraction.
@@ -426,19 +427,7 @@ Return your extraction in the exact format specified:
         Returns:
             String containing few-shot examples
         """
-        return """Example 1 - News Article:
-Input: "[Complex HTML with navigation, ads, and article content]"
-
-Output:
-- TITLE: Biden Administration Announces New Climate Policy
-- MAIN BODY: The Biden administration today announced a comprehensive new climate policy aimed at reducing carbon emissions by 50% by 2030. The policy includes investments in renewable energy and stricter regulations on fossil fuel industries.
-
-Example 2 - Academic Paper Abstract:
-Input: "[HTML with paper metadata and abstract]"
-
-Output:
-- TITLE: Machine Learning Approaches to Natural Language Processing
-- MAIN BODY: This paper presents a comprehensive survey of machine learning techniques applied to natural language processing tasks. We review recent advances in transformer architectures, attention mechanisms, and their applications to text classification, named entity recognition, and machine translation."""
+        return CONTENT_EXTRACTOR_FEW_SHOTS
 
     @classmethod
     def set_custom_few_shots(cls, custom_few_shots: Optional[str] = None) -> None:
@@ -448,8 +437,17 @@ Output:
         Args:
             custom_few_shots: Custom few-shot examples string. If None, clears custom few shots.
         """
-        cls._custom_few_shots = custom_few_shots
-        logger.info(f"Custom few shots set for ContentExtractorAgent: {custom_few_shots is not None}")
+        if settings.enable_persistence:
+            database = get_database()
+            success = database.save_custom_few_shots("content_extractor", custom_few_shots)
+            if success:
+                cls._custom_few_shots_cache = custom_few_shots  # Update cache
+                logger.info(f"Custom few shots saved for ContentExtractorAgent: {custom_few_shots is not None}")
+            else:
+                logger.warning("Failed to save custom few shots to database")
+        else:
+            cls._custom_few_shots_cache = custom_few_shots
+            logger.info(f"Custom few shots set for ContentExtractorAgent (no persistence): {custom_few_shots is not None}")
 
     @classmethod
     def get_custom_few_shots(cls) -> Optional[str]:
@@ -459,7 +457,15 @@ Output:
         Returns:
             Custom few-shot examples string or None if not set
         """
-        return cls._custom_few_shots
+        if settings.enable_persistence:
+            database = get_database()
+            few_shots = database.load_custom_few_shots("content_extractor")
+            # Update cache
+            if isinstance(few_shots, str) or few_shots is None:
+                cls._custom_few_shots_cache = few_shots
+            return few_shots
+        else:
+            return cls._custom_few_shots_cache
 
     @classmethod
     def get_effective_few_shots(cls) -> str:
@@ -469,7 +475,8 @@ Output:
         Returns:
             Effective few-shot examples string
         """
-        return cls._custom_few_shots if cls._custom_few_shots is not None else cls.get_default_few_shots()
+        custom_few_shots = cls.get_custom_few_shots()
+        return custom_few_shots if custom_few_shots is not None else cls.get_default_few_shots()
 
     def reset(self) -> None:
         """Reset the agent to initial state."""

@@ -1,0 +1,391 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>AI Search Agents API Structure</title>
+    <style>
+        body {
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            line-height: 1.6;
+            margin: 0;
+            padding: 20px;
+            background-color: #f5f5f5;
+        }
+        .container {
+            max-width: 1200px;
+            margin: 0 auto;
+            background: white;
+            padding: 30px;
+            border-radius: 8px;
+            box-shadow: 0 2px 10px rgba(0,0,0,0.1);
+        }
+        h1 {
+            color: #2c3e50;
+            border-bottom: 3px solid #3498db;
+            padding-bottom: 10px;
+        }
+        h2 {
+            color: #34495e;
+            margin-top: 30px;
+            border-left: 4px solid #3498db;
+            padding-left: 15px;
+        }
+        h3 {
+            color: #7f8c8d;
+            margin-top: 25px;
+        }
+        .endpoint-group {
+            background: #ecf0f1;
+            border-radius: 5px;
+            padding: 15px;
+            margin: 15px 0;
+        }
+        .endpoint {
+            background: white;
+            border: 1px solid #bdc3c7;
+            border-radius: 3px;
+            padding: 10px;
+            margin: 8px 0;
+            font-family: monospace;
+        }
+        .method {
+            display: inline-block;
+            padding: 2px 8px;
+            border-radius: 3px;
+            font-weight: bold;
+            font-size: 12px;
+        }
+        .get { background: #27ae60; color: white; }
+        .post { background: #3498db; color: white; }
+        .delete { background: #e74c3c; color: white; }
+        .shots-section {
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+            padding: 20px;
+            border-radius: 8px;
+            margin: 20px 0;
+        }
+        .shots-section h2 {
+            color: white;
+            border-left: none;
+            margin-top: 0;
+        }
+        .feature-highlight {
+            background: #fff3cd;
+            border: 1px solid #ffeaa7;
+            border-radius: 5px;
+            padding: 15px;
+            margin: 15px 0;
+        }
+        .code-example {
+            background: #2c3e50;
+            color: #ecf0f1;
+            padding: 15px;
+            border-radius: 5px;
+            font-family: 'Courier New', monospace;
+            overflow-x: auto;
+            margin: 15px 0;
+        }
+        .agent-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
+            gap: 15px;
+            margin: 20px 0;
+        }
+        .agent-card {
+            background: #f8f9fa;
+            border: 1px solid #dee2e6;
+            border-radius: 5px;
+            padding: 15px;
+        }
+        .agent-card h4 {
+            margin: 0 0 10px 0;
+            color: #495057;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>🎯 AI Search Agents API Structure</h1>
+
+        <p>Welcome to the comprehensive API documentation for the AI Search Agents platform. This document provides a complete overview of all available endpoints, organized by functional groups.</p>
+
+        <div class="feature-highlight">
+            <strong>🚀 Key Features:</strong>
+            <ul>
+                <li>Multi-agent support with unique ID management</li>
+                <li>Comprehensive few-shot learning management</li>
+                <li>Advanced content analysis and consistency checking</li>
+                <li>Debate simulation with stability analysis</li>
+                <li>Real-time API with authentication</li>
+            </ul>
+        </div>
+
+        <h2>📊 Agent Types</h2>
+        <div class="agent-grid">
+            <div class="agent-card">
+                <h4>nudge-collapse</h4>
+                <p>4-turn radicalization protocol agent for studying behavioral psychology</p>
+            </div>
+            <div class="agent-card">
+                <h4>summarizer</h4>
+                <p>Advanced conversation summarization with focus on user questions</p>
+            </div>
+            <div class="agent-card">
+                <h4>bot-creator</h4>
+                <p>AI bot creation and configuration agent</p>
+            </div>
+            <div class="agent-card">
+                <h4>demographic-evaluator</h4>
+                <p>Sentence evaluation from different demographic perspectives</p>
+            </div>
+            <div class="agent-card">
+                <h4>content-extractor</h4>
+                <p>Academic content extraction from web pages</p>
+            </div>
+            <div class="agent-card">
+                <h4>claim-atomizer</h4>
+                <p>Atomic claim decomposition from complex text</p>
+            </div>
+            <div class="agent-card">
+                <h4>conflict-auditor</h4>
+                <p>Logical consistency auditing between claims and evidence</p>
+            </div>
+
+        </div>
+
+        <h2>🏗️ API Endpoint Groups</h2>
+
+        <div class="endpoint-group">
+            <h3>Agent Management</h3>
+            <div class="endpoint">
+                <span class="method post">POST</span> <code>/api/v1/agents/create</code>
+                <br>Create new agent instance
+            </div>
+            <div class="endpoint">
+                <span class="method get">GET</span> <code>/api/v1/agents/list</code>
+                <br>List all active agents
+            </div>
+            <div class="endpoint">
+                <span class="method get">GET</span> <code>/api/v1/agents/{agent_id}/status</code>
+                <br>Get agent status
+            </div>
+            <div class="endpoint">
+                <span class="method post">POST</span> <code>/api/v1/agents/{agent_id}/reset</code>
+                <br>Reset agent to initial state
+            </div>
+        </div>
+
+        <div class="endpoint-group">
+            <h3>Agent Operations</h3>
+            <div class="endpoint">
+                <span class="method post">POST</span> <code>/api/v1/agent/{agent_id}/nudge-collapse/generate</code>
+                <br>Generate turn in nudge-collapse experiment
+            </div>
+            <div class="endpoint">
+                <span class="method get">GET</span> <code>/api/v1/agent/{agent_id}/nudge-collapse/history</code>
+                <br>Get conversation history
+            </div>
+            <div class="endpoint">
+                <span class="method post">POST</span> <code>/api/v1/agent/demographic-evaluator/evaluate</code>
+                <br>Evaluate sentences for demographic bias
+            </div>
+            <div class="endpoint">
+                <span class="method post">POST</span> <code>/api/v1/agent/{agent_id}/summarizer/summarize</code>
+                <br>Summarize conversation
+            </div>
+            <div class="endpoint">
+                <span class="method get">GET</span> <code>/api/v1/agent/{agent_id}/summarizer/history</code>
+                <br>Get summary history
+            </div>
+            <div class="endpoint">
+                <span class="method post">POST</span> <code>/api/v1/agent/{agent_id}/bot-creator/create</code>
+                <br>Create new bot
+            </div>
+            <div class="endpoint">
+                <span class="method get">GET</span> <code>/api/v1/agent/{agent_id}/bot-creator/bots</code>
+                <br>List created bots
+            </div>
+            <div class="endpoint">
+                <span class="method post">POST</span> <code>/api/v1/agent/{agent_id}/bot-creator/chat</code>
+                <br>Chat with created bot
+            </div>
+        </div>
+
+        <div class="endpoint-group">
+            <h3>Content Processing</h3>
+            <div class="endpoint">
+                <span class="method post">POST</span> <code>/api/v1/content/extract</code>
+                <br>Extract and clean web content
+            </div>
+            <div class="endpoint">
+                <span class="method post">POST</span> <code>/api/v1/content/atomize</code>
+                <br>Unified text atomization for claims or opinions
+            </div>
+        </div>
+
+        <div class="endpoint-group">
+            <h3>Consistency Pipeline</h3>
+            <div class="endpoint">
+                <span class="method post">POST</span> <code>/api/v1/consistency/check-summary-url</code>
+                <br>Check summary vs URL consistency
+            </div>
+            <div class="endpoint">
+                <span class="method post">POST</span> <code>/api/v1/consistency/compare-claims</code>
+                <br>Compare two specific claims
+            </div>
+            <div class="endpoint">
+                <span class="method post">POST</span> <code>/api/v1/consistency/conflict-audit</code>
+                <br>Audit logical conflicts
+            </div>
+        </div>
+
+        <div class="endpoint-group">
+            <h3>Opinion Analysis</h3>
+            <div class="endpoint">
+                <span class="method post">POST</span> <code>/api/v1/opinion/analyze</code>
+                <br>Complete opinion analysis
+            </div>
+            <div class="endpoint">
+                <span class="method post">POST</span> <code>/api/v1/opinion/bias-score</code>
+                <br>Get bias score
+            </div>
+        </div>
+
+        <div class="endpoint-group">
+            <h3>Quality Assessment</h3>
+            <div class="endpoint">
+                <span class="method post">POST</span> <code>/api/v1/quality/overall</code>
+                <br>Comprehensive quality assessment
+            </div>
+        </div>
+
+        <div class="endpoint-group">
+            <h3>Debate System</h3>
+            <div class="endpoint">
+                <span class="method post">POST</span> <code>/api/v1/debate/generate-personas</code>
+                <br>Generate debate personas
+            </div>
+            <div class="endpoint">
+                <span class="method post">POST</span> <code>/api/v1/debate/init</code>
+                <br>Initialize debate session
+            </div>
+            <div class="endpoint">
+                <span class="method post">POST</span> <code>/api/v1/debate/{session_id}/chat</code>
+                <br>Send message in debate
+            </div>
+            <div class="endpoint">
+                <span class="method post">POST</span> <code>/api/v1/debate/{session_id}/stability-check</code>
+                <br>Check debate stability
+            </div>
+            <div class="endpoint">
+                <span class="method get">GET</span> <code>/api/v1/debate/{session_id}/statistics</code>
+                <br>Get debate statistics
+            </div>
+            <div class="endpoint">
+                <span class="method get">GET</span> <code>/api/v1/debate/{session_id}/should-continue</code>
+                <br>Check if debate should continue
+            </div>
+        </div>
+
+        <div class="shots-section">
+            <h2>🎯 Few-shot Management</h2>
+            <p>The platform provides comprehensive few-shot learning management for all AI agents. Each agent supports customizable few-shot examples that persist across API calls.</p>
+
+            <h3>Supported Agents</h3>
+            <ul>
+                <li><strong>nudge-collapse</strong>: Multi-turn conversation examples</li>
+                <li><strong>demographic-evaluator</strong>: Perspective-based judgment examples</li>
+                <li><strong>summarizer</strong>: Summary format examples</li>
+                <li><strong>bot-creator</strong>: Bot configuration examples</li>
+                <li><strong>content-extractor</strong>: Content extraction patterns</li>
+                <li><strong>claim-atomizer</strong>: Claim decomposition examples</li>
+                <li><strong>conflict-auditor</strong>: Conflict analysis examples</li>
+                <li><strong>web-opinion-extractor</strong>: Opinion classification examples</li>
+            </ul>
+
+            <h3>Management Endpoints</h3>
+            <div class="code-example">
+# Get effective few-shot examples (custom if set, otherwise default)
+GET /api/v1/shots/{agent}
+
+# Set custom few-shot examples
+POST /api/v1/shots/{agent}/custom
+
+# Get current custom shots
+GET /api/v1/shots/{agent}/custom
+
+# Reset to default shots
+DELETE /api/v1/shots/{agent}/custom
+            </div>
+
+            <h3>Usage in API Calls</h3>
+            <div class="code-example">
+# Enable few-shot learning
+POST /api/v1/content/atomize
+{
+    "text": "Content to atomize",
+    "atomization_type": "claims",
+    "use_few_shots": true
+}
+
+# Disable few-shot learning
+POST /api/v1/content/atomize
+{
+    "text": "Content to atomize",
+    "atomization_type": "claims",
+    "use_few_shots": false
+}
+            </div>
+        </div>
+
+        <h2>📖 Documentation</h2>
+        <ul>
+            <li><a href="docs/FEW_SHOT_MANAGEMENT.md">Few-shot Management Guide</a> - Comprehensive guide for managing few-shot examples</li>
+            <li><a href="docs/EMBEDDING_PROVIDERS.md">Embedding Providers</a> - Supported embedding providers and configuration</li>
+            <li><a href="README.md">Main README</a> - Quick start guide and basic usage</li>
+        </ul>
+
+        <h2>🔧 Configuration</h2>
+        <div class="code-example">
+# Required environment variables
+OPENAI_API_KEY=your_key
+OPENAI_MODEL=gpt-3.5-turbo
+
+# Embedding configuration (supports multiple providers)
+EMBEDDING_PROVIDER=openai  # openai, qwen, gemini, deepseek
+EMBEDDING_MODEL=text-embedding-ada-002
+EMBEDDING_API_KEY=  # Leave empty to use OPENAI_API_KEY
+
+# Optional settings
+API_HOST=0.0.0.0
+API_PORT=8000
+VECTOR_STORE_TYPE=chroma
+        </div>
+
+        <h2>🚀 Quick Start</h2>
+        <div class="code-example">
+# Install dependencies
+pip install -r requirements.txt
+
+# Set environment variables
+cp .env.example .env
+# Edit .env with your API keys
+
+# Start the server
+python src/main.py
+
+# API available at http://localhost:8000
+# Interactive docs at http://localhost:8000/docs
+        </div>
+
+        <footer style="text-align: center; margin-top: 40px; color: #7f8c8d; border-top: 1px solid #ecf0f1; padding-top: 20px;">
+            <p>AI Search Agents Platform v2.0 • Built with FastAPI • Use responsibly for research purposes only</p>
+        </footer>
+    </div>
+</body>
+</html>
+
+
+

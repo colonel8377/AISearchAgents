@@ -4,8 +4,9 @@ Data models for Multi-Agent Debate System.
 Incorporates concepts from ChatEval (Personas) and Adaptive Stability (Stopping Logic).
 """
 
-from typing import List, Optional, Union, Literal
+from typing import List, Optional, Union, Literal, Dict, Any
 from uuid import UUID
+
 from pydantic import BaseModel, Field
 
 
@@ -13,7 +14,8 @@ class PersonaConfig(BaseModel):
     """Configuration for a debate agent persona."""
     name: str = Field(..., description="Name of the persona")
     description: str = Field(..., description="Description of the persona's characteristics")
-    style: str = Field(..., description="Style of the persona (e.g., 'Skeptical', 'Optimistic', 'Neutral')")
+    style: Optional[str] = Field(default=None, description="Optional style of the persona (e.g., 'Skeptical', 'Optimistic', 'Neutral') - auto-detected if not provided")
+    corpus: Optional[List[str]] = Field(default=None, description="Optional corpus of statements specific to this persona's background and expertise")
 
 
 class AgentMetadata(BaseModel):
@@ -22,6 +24,7 @@ class AgentMetadata(BaseModel):
     role_name: str = Field(..., description="Role name of the agent")
     system_prompt: str = Field(..., description="System prompt for the agent")
     few_shot_example: str = Field(..., description="Static example showing the expected JSON output format")
+    corpus: Optional[List[str]] = Field(default=None, description="Optional corpus of statements specific to this agent's background and expertise")
 
 
 class InitRequest(BaseModel):
@@ -31,6 +34,7 @@ class InitRequest(BaseModel):
     auto_agent_count: int = Field(default=0, description="Number of agents to auto-generate if custom_personas is empty")
     max_rounds: Optional[int] = Field(default=10, ge=1, le=50, description="Maximum number of debate rounds")
     context: str = Field(default="", description="Additional context for persona generation")
+    corpus: Optional[List[str]] = Field(default=None, description="Optional user history statements for style detection and few-shot examples")
     execution_mode: Optional[Literal["chain_online", "chain_local", "no_chain"]] = Field(
         default=None,
         description="Persona generation mode when using auto_agent_count"
@@ -49,3 +53,38 @@ class VoteResponse(BaseModel):
     agent_id: UUID = Field(..., description="Agent identifier")
     verdict: Union[int, str] = Field(..., description="The agent's verdict/vote")
     reasoning: str = Field(..., description="Reasoning behind the verdict")
+
+
+class AgentReasoning(BaseModel):
+    """Response model for a single agent's reasoning in a round."""
+    agent_id: UUID = Field(..., description="Agent identifier")
+    statement: str = Field(..., description="Agent's position statement")
+    reasoning: str = Field(..., description="Detailed reasoning behind the statement")
+    timestamp: float = Field(..., description="Timestamp when reasoning was generated")
+    word_count: int = Field(..., description="Word count of the combined statement and reasoning")
+
+
+class AgentVote(BaseModel):
+    """Response model for a single agent's vote in a round."""
+    agent_id: UUID = Field(..., description="Agent identifier")
+    verdict: Union[int, str] = Field(..., description="The agent's verdict/vote")
+    reasoning: str = Field(..., description="Reasoning behind the verdict")
+    timestamp: float = Field(..., description="Timestamp when vote was cast")
+    word_count: int = Field(..., description="Word count of the reasoning")
+
+
+class RoundReasoningResponse(BaseModel):
+    """Response model for a complete reasoning round."""
+    round_number: int = Field(..., description="Current round number")
+    reasonings: List[AgentReasoning] = Field(..., description="All agents' reasoning for this round")
+    timestamp: float = Field(..., description="Timestamp when round was completed")
+    total_word_count: int = Field(..., description="Total word count across all reasonings")
+
+
+class RoundVotingResponse(BaseModel):
+    """Response model for a complete voting round."""
+    round_number: int = Field(..., description="Current round number")
+    votes: List[AgentVote] = Field(..., description="All agents' votes for this round")
+    timestamp: float = Field(..., description="Timestamp when round was completed")
+    total_word_count: int = Field(..., description="Total word count across all vote reasonings")
+    statistics: Dict[str, Any] = Field(..., description="Round statistics including consensus level, distributions, etc.")

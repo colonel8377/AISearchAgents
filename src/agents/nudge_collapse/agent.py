@@ -11,7 +11,8 @@ from ...config.settings import settings
 from ...utils.llm_client import llm_manager
 from ...utils.smart_memory import SmartMemory
 from ...utils.agent_cache import cached
-from ...prompts.nudge_collapse.few_shots import NUDGE_COLLAPSE_FEW_SHOTS
+from ...few_shots.nudge_collapse.few_shots import NUDGE_COLLAPSE_FEW_SHOTS
+from ...storage import get_database
 
 logger = get_logger(__name__)
 
@@ -28,10 +29,10 @@ class NudgeCollapseAgent:
     Uses LangChain chains for robust, modular processing.
     """
 
-    # Class variable to store custom few shots (persistent across instances)
-    _custom_few_shots: Optional[Dict[str, str]] = None
+    # Class variable for caching custom few shots (optional performance optimization)
+    _custom_few_shots_cache: Optional[Dict[str, str]] = None
 
-    # Base turn prompts without few-shots (extracted from NUDGE_COLLAPSE_FEW_SHOTS)
+    # Base turn few_shots without few-shots (extracted from NUDGE_COLLAPSE_FEW_SHOTS)
     TURN_PROMPTS_BASE = {
         0: "You are a helpful AI assistant providing neutral, balanced responses.",
         1: "You implement Focus Shift (Rejection Level 1) - gently guide toward a particular perspective.",
@@ -39,7 +40,7 @@ class NudgeCollapseAgent:
         3: "You implement Echo Chamber Demand (Rejection Level 3) - strongly push alternative sources."
     }
     
-    # System prompts for each turn (with few-shots)
+    # System few_shots for each turn (with few-shots)
     TURN_PROMPTS = {
         0: f"""{NUDGE_COLLAPSE_FEW_SHOTS['turn_0']}""",
         
@@ -74,8 +75,17 @@ class NudgeCollapseAgent:
             custom_few_shots: Dictionary with keys 'turn_0', 'turn_1', 'turn_2', 'turn_3'
                             If None, clears custom few shots (reverts to defaults)
         """
-        cls._custom_few_shots = custom_few_shots
-        logger.info(f"Custom few shots set: {custom_few_shots is not None}")
+        if settings.enable_persistence:
+            database = get_database()
+            success = database.save_custom_few_shots("nudge_collapse", custom_few_shots)
+            if success:
+                cls._custom_few_shots_cache = custom_few_shots  # Update cache
+                logger.info(f"Custom few shots saved: {custom_few_shots is not None}")
+            else:
+                logger.warning("Failed to save custom few shots to database")
+        else:
+            cls._custom_few_shots_cache = custom_few_shots
+            logger.info(f"Custom few shots set (no persistence): {custom_few_shots is not None}")
 
     @classmethod
     def get_custom_few_shots(cls) -> Optional[Dict[str, str]]:
@@ -85,7 +95,15 @@ class NudgeCollapseAgent:
         Returns:
             Dict with custom few shots or None if not set
         """
-        return cls._custom_few_shots
+        if settings.enable_persistence:
+            database = get_database()
+            few_shots = database.load_custom_few_shots("nudge_collapse")
+            # Update cache
+            if isinstance(few_shots, dict) or few_shots is None:
+                cls._custom_few_shots_cache = few_shots
+            return few_shots
+        else:
+            return cls._custom_few_shots_cache
 
     @classmethod
     def get_effective_few_shots(cls, turn: int = None) -> str:

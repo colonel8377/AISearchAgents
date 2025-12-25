@@ -6,19 +6,13 @@ including HTML extraction, opinion analysis, and bias scoring.
 """
 
 import pytest
-from fastapi.testclient import TestClient
 from unittest.mock import Mock, patch, MagicMock
 
-from src.api.main import app
 from src.agents.web_opinion_extractor import (
     OpinionExtractionResult,
     AtomicOpinion,
     BiasDistribution
 )
-
-
-# Create a test client
-client = TestClient(app)
 
 
 class TestWebOpinionExtractApi:
@@ -284,17 +278,18 @@ class TestWebOpinionExtractApi:
         assert "timeout" in data["error_message"].lower()
     
     def test_bias_score_success(self, mock_analyzer, sample_result):
-        """Test getting overall bias score."""
+        """Test getting overall bias score with URL."""
         mock_analyzer.extract_and_analyze.return_value = sample_result
         
         response = client.post(
-            "/api/v1/web-opinion/bias-score",
+            "/api/v1/opinion/bias-score",
             json={"url": "https://example.com"}
         )
         
         assert response.status_code == 200
         data = response.json()
         assert data["url"] == "https://example.com"
+        assert data["content_provided"] is False
         assert data["overall_bias_distribution"] is not None
         assert data["opinions_count"] == 1
         assert data["facts_count"] == 1
@@ -307,15 +302,57 @@ class TestWebOpinionExtractApi:
         assert bias["neutral"] == 0.2
         assert bias["dominant_bias"] == "right"
     
+    def test_bias_score_with_content(self, mock_analyzer, sample_result):
+        """Test getting overall bias score with content."""
+        # Mock the engine methods for content analysis
+        with patch('src.api.main.WebOpinionEngine') as mock_engine_class:
+            mock_engine = Mock()
+            mock_engine_class.return_value = mock_engine
+            
+            # Mock atomize_text and calculate_bias
+            from src.agents.web_opinion_extractor.models import AtomicUnit, BiasResult, BiasDistribution
+            mock_atoms = [
+                AtomicUnit(statement="Test opinion", type="opinion", original_sentence="Test"),
+                AtomicUnit(statement="Test fact", type="fact", original_sentence="Test")
+            ]
+            mock_bias_result = BiasResult(
+                bias_distribution=BiasDistribution(left=0.3, right=0.5, neutral=0.2),
+                reasoning="Test reasoning",
+                metadata_used=False,
+                mbfc_influence_note=None
+            )
+            
+            mock_engine.atomize_text.return_value = mock_atoms
+            mock_engine.calculate_bias.return_value = mock_bias_result
+            
+            response = client.post(
+                "/api/v1/opinion/bias-score",
+                json={
+                    "content": "This is a test article about politics. Some experts believe the policy will help.",
+                    "title": "Test Article",
+                    "mode": "LOCAL_CHAIN",
+                    "use_mbfc": False,
+                    "use_few_shots": True
+                }
+            )
+            
+            assert response.status_code == 200
+            data = response.json()
+            assert data["url"] is None
+            assert data["content_provided"] is True
+            assert data["overall_bias_distribution"] is not None
+            assert data["opinions_count"] == 1
+            assert data["facts_count"] == 1
+    
     def test_bias_score_with_execution_mode(self, mock_analyzer, sample_result):
         """Test bias score with specific execution mode."""
         mock_analyzer.extract_and_analyze.return_value = sample_result
         
         response = client.post(
-            "/api/v1/web-opinion/bias-score",
+            "/api/v1/opinion/bias-score",
             json={
                 "url": "https://example.com",
-                "execution_mode": "chain_online"
+                "mode": "PURE_ONLINE"
             }
         )
         
@@ -339,14 +376,39 @@ class TestWebOpinionExtractApi:
         mock_analyzer.extract_and_analyze.return_value = error_result
         
         response = client.post(
-            "/api/v1/web-opinion/bias-score",
+            "/api/v1/opinion/bias-score",
             json={"url": "https://empty-page.com"}
         )
         
         assert response.status_code == 200
         data = response.json()
-        assert data["error"] == "content_extraction_error"
-        assert data["overall_bias_distribution"] is None
+            assert data["error"] == "content_extraction_error"
+            assert data["overall_bias_distribution"] is None
+    
+    def test_bias_score_validation_error_no_input(self):
+        """Test bias score with validation error (neither url nor content)."""
+        response = client.post(
+            "/api/v1/opinion/bias-score",
+            json={}
+        )
+        
+        assert response.status_code == 422  # Validation error
+        error_detail = response.json()["detail"]
+        assert "url" in str(error_detail).lower() or "content" in str(error_detail).lower()
+    
+    def test_bias_score_validation_error_both_provided(self):
+        """Test bias score with both url and content (should fail validation)."""
+        response = client.post(
+            "/api/v1/opinion/bias-score",
+            json={
+                "url": "https://example.com",
+                "content": "Test content"
+            }
+        )
+        
+        assert response.status_code == 422  # Validation error
+        error_detail = response.json()["detail"]
+        assert "both" in str(error_detail).lower() or "cannot" in str(error_detail).lower()
     
     def test_atomic_opinion_response_structure(self, mock_analyzer, sample_result):
         """Test that atomic opinion response has correct structure."""

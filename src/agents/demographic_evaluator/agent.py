@@ -10,7 +10,8 @@ from ...utils.logger import get_logger
 from ...config.settings import settings, ExecutionMode
 from ...utils.llm_client import llm_manager
 from ...utils.agent_cache import cached
-from ...prompts.demographic_evaluator.few_shots import DEMOGRAPHIC_EVALUATOR_FEW_SHOTS
+from ...few_shots.demographic_evaluator.few_shots import DEMOGRAPHIC_EVALUATOR_FEW_SHOTS
+from ...storage import get_database
 
 logger = get_logger(__name__)
 
@@ -28,8 +29,8 @@ class DemographicEvaluatorAgent:
     Supports optional few-shot examples for better evaluation quality.
     """
 
-    # Class variable to store custom few shots (persistent across instances)
-    _custom_few_shots: Optional[str] = None
+    # Class variable for caching custom few shots (optional performance optimization)
+    _custom_few_shots_cache: Optional[str] = None
     
     @staticmethod
     def get_default_few_shots() -> str:
@@ -49,8 +50,17 @@ class DemographicEvaluatorAgent:
         Args:
             custom_few_shots: Custom few-shot examples string. If None, clears custom few shots.
         """
-        cls._custom_few_shots = custom_few_shots
-        logger.info(f"Custom few shots set for DemographicEvaluatorAgent: {custom_few_shots is not None}")
+        if settings.enable_persistence:
+            database = get_database()
+            success = database.save_custom_few_shots("demographic_evaluator", custom_few_shots)
+            if success:
+                cls._custom_few_shots_cache = custom_few_shots  # Update cache
+                logger.info(f"Custom few shots saved for DemographicEvaluatorAgent: {custom_few_shots is not None}")
+            else:
+                logger.warning("Failed to save custom few shots to database")
+        else:
+            cls._custom_few_shots_cache = custom_few_shots
+            logger.info(f"Custom few shots set for DemographicEvaluatorAgent (no persistence): {custom_few_shots is not None}")
 
     @classmethod
     def get_custom_few_shots(cls) -> Optional[str]:
@@ -60,7 +70,15 @@ class DemographicEvaluatorAgent:
         Returns:
             Custom few-shot examples string or None if not set
         """
-        return cls._custom_few_shots
+        if settings.enable_persistence:
+            database = get_database()
+            few_shots = database.load_custom_few_shots("demographic_evaluator")
+            # Update cache
+            if isinstance(few_shots, str) or few_shots is None:
+                cls._custom_few_shots_cache = few_shots
+            return few_shots
+        else:
+            return cls._custom_few_shots_cache
 
     @classmethod
     def get_effective_few_shots(cls) -> str:
@@ -70,7 +88,8 @@ class DemographicEvaluatorAgent:
         Returns:
             Effective few-shot examples string
         """
-        return cls._custom_few_shots if cls._custom_few_shots is not None else cls.get_default_few_shots()
+        custom_few_shots = cls.get_custom_few_shots()
+        return custom_few_shots if custom_few_shots is not None else cls.get_default_few_shots()
     
     SYSTEM_PROMPT_TEMPLATE_COT = """You are a person with the following demographic profile:
 {demography_json}

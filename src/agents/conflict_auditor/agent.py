@@ -15,6 +15,9 @@ from tenacity import retry, stop_after_attempt, wait_exponential, retry_if_excep
 from ...utils.logger import get_logger
 from ...config.settings import settings
 from ...utils.agent_cache import cached
+from ...memory.factory import VectorStoreFactory
+from ...few_shots.conflict_auditor.few_shots import CONFLICT_AUDITOR_FEW_SHOTS
+from ...storage import get_database
 
 logger = get_logger(__name__)
 
@@ -63,8 +66,8 @@ class ConflictAuditorAgent:
     - Confidence scoring
     """
 
-    # Class variable to store custom few shots (persistent across instances)
-    _custom_few_shots: Optional[str] = None
+    # Class variable for caching custom few shots (optional performance optimization)
+    _custom_few_shots_cache: Optional[str] = None
 
     SYSTEM_PROMPT = """You are an Academic Peer Reviewer specializing in Fact-Consistency Auditing.
 
@@ -423,15 +426,10 @@ For each claim, provide analysis in the specified format."""
 
         if use_embedding_similarity and summary_claims and url_claims:
             try:
-                from langchain_openai import OpenAIEmbeddings
                 from sklearn.metrics.pairwise import cosine_similarity
                 import numpy as np
 
-                embeddings = OpenAIEmbeddings(
-                    api_key=settings.openai_api_key,
-                    base_url=settings.openai_api_base,
-                    model="text-embedding-3-small"  # Use smaller model for efficiency
-                )
+                embeddings = VectorStoreFactory.create_embeddings()
 
                 # Get all claim texts
                 all_texts = [claim['text'] for claim in summary_claims + url_claims]
@@ -757,34 +755,7 @@ ENTITIES:"""
         Returns:
             String containing few-shot examples
         """
-        return """Example 1 - Numerical Discrepancy:
-CLAIM_1: The company reported .1 billion in revenue for Q3 2023.
-EVIDENCE:
-  - "The company reported .3 billion in revenue for Q3 2023, representing a 15% increase."
-
--- CLAIM_ID: 1
--- VERDICT: Contradicted
--- CONFLICT_TYPE: Numerical discrepancy
-- ANALYSIS: The claim states .1 billion but evidence shows .3 billion, indicating a numerical conflict.
-
-Example 2 - Supported:
-CLAIM_2: The revenue increased by 15%.
-EVIDENCE:
-  - "The company reported .3 billion in revenue for Q3 2023, representing a 15% increase."
-
--- CLAIM_ID: 2
--- VERDICT: Supported
--- CONFLICT_TYPE: N/A
-- ANALYSIS: The evidence explicitly confirms the 15% increase figure.
-
-Example 3 - Missing Evidence:
-CLAIM_3: The CEO is named John Smith.
-EVIDENCE: NO_EVIDENCE_FOUND
-
--- CLAIM_ID: 3
--- VERDICT: Neutral
--- CONFLICT_TYPE: Missing evidence
-- ANALYSIS: No evidence was found in the text to either confirm or contradict the CEO's name."""
+        return CONFLICT_AUDITOR_FEW_SHOTS
 
     @classmethod
     def set_custom_few_shots(cls, custom_few_shots: Optional[str] = None) -> None:
@@ -794,8 +765,17 @@ EVIDENCE: NO_EVIDENCE_FOUND
         Args:
             custom_few_shots: Custom few-shot examples string. If None, clears custom few shots.
         """
-        cls._custom_few_shots = custom_few_shots
-        logger.info(f"Custom few shots set for ConflictAuditorAgent: {custom_few_shots is not None}")
+        if settings.enable_persistence:
+            database = get_database()
+            success = database.save_custom_few_shots("conflict_auditor", custom_few_shots)
+            if success:
+                cls._custom_few_shots_cache = custom_few_shots  # Update cache
+                logger.info(f"Custom few shots saved for ConflictAuditorAgent: {custom_few_shots is not None}")
+            else:
+                logger.warning("Failed to save custom few shots to database")
+        else:
+            cls._custom_few_shots_cache = custom_few_shots
+            logger.info(f"Custom few shots set for ConflictAuditorAgent (no persistence): {custom_few_shots is not None}")
 
     @classmethod
     def get_custom_few_shots(cls) -> Optional[str]:
@@ -805,7 +785,15 @@ EVIDENCE: NO_EVIDENCE_FOUND
         Returns:
             Custom few-shot examples string or None if not set
         """
-        return cls._custom_few_shots
+        if settings.enable_persistence:
+            database = get_database()
+            few_shots = database.load_custom_few_shots("conflict_auditor")
+            # Update cache
+            if isinstance(few_shots, str) or few_shots is None:
+                cls._custom_few_shots_cache = few_shots
+            return few_shots
+        else:
+            return cls._custom_few_shots_cache
 
     @classmethod
     def get_effective_few_shots(cls) -> str:
@@ -815,7 +803,8 @@ EVIDENCE: NO_EVIDENCE_FOUND
         Returns:
             Effective few-shot examples string
         """
-        return cls._custom_few_shots if cls._custom_few_shots is not None else cls.get_default_few_shots()
+        custom_few_shots = cls.get_custom_few_shots()
+        return custom_few_shots if custom_few_shots is not None else cls.get_default_few_shots()
 
     def reset(self) -> None:
         """Reset the agent to initial state."""

@@ -7,7 +7,7 @@ import sys
 import os
 
 # Add src to path
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), 'src'))
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', 'src'))
 
 def test_imports():
     """Test that all modules can be imported."""
@@ -103,19 +103,31 @@ def test_api_structure():
         routes = [route.path for route in app.routes]
         expected_paths = [
             "/",
-            "/api/v1/agents",
+            "/api/v1/agents/create",
+            "/api/v1/agents/list",
             "/api/v1/agents/{agent_id}",
+            "/api/v1/agents/{agent_id}/status",
             "/api/v1/agents/{agent_id}/reset",
-            "/api/v1/agents/{agent_id}/nudge-collapse/generate",
-            "/api/v1/agents/{agent_id}/summarizer/summarize",
-            "/api/v1/agents/{agent_id}/bot-creator/create",
+            "/api/v1/agent/{agent_id}/nudge-collapse/generate",
+            "/api/v1/agent/{agent_id}/summarizer/summarize",
+            "/api/v1/agent/{agent_id}/bot-creator/create",
+            "/api/v1/consistency/check-summary-url",
+            "/api/v1/consistency/compare-claims",
+            "/api/v1/consistency/complete",
+            "/api/v1/quality/overall",
         ]
         
+        missing_paths = []
         for expected in expected_paths:
             if expected not in routes:
-                print(f"Warning: Expected path '{expected}' not found in routes")
+                missing_paths.append(expected)
         
-        print(f"  Found {len(routes)} routes")
+        if missing_paths:
+            print(f"Warning: {len(missing_paths)} expected paths not found:")
+            for path in missing_paths:
+                print(f"  - {path}")
+        
+        print(f"  Found {len(routes)} total routes")
         print("✓ API structure tests passed")
         return True
     except Exception as e:

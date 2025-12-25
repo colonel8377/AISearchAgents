@@ -25,6 +25,10 @@ class Settings(BaseSettings):
     # API Settings
     api_host: str = Field(default="0.0.0.0", description="API host")
     api_port: int = Field(default=8000, description="API port")
+    cors_origins: Optional[List[str]] = Field(
+        default=None,
+        description="CORS allowed origins (comma-separated list or None to disable CORS)"
+    )
     
     # Authentication Settings
     api_key_required: bool = Field(default=False, description="Whether API key authentication is required")
@@ -47,6 +51,13 @@ class Settings(BaseSettings):
     openai_api_base: str = Field(default="https://api.openai.com/v1", description="OpenAI API base URL")
     openai_model: str = Field(default="gpt-3.5-turbo", description="Model name (e.g., qwen-turbo)")
     openai_proxy: str = Field(default="", description="HTTP proxy for OpenAI API requests (optional)")
+
+    # Embedding Settings
+    embedding_provider: str = Field(default="openai", description="Embedding provider: 'openai', 'qwen', 'gemini', 'deepseek', etc.")
+    embedding_model: str = Field(default="text-embedding-ada-002", description="Embedding model name")
+    embedding_api_key: str = Field(default="", description="API key for embedding provider (uses openai_api_key if empty)")
+    embedding_api_base: str = Field(default="", description="API base URL for embedding provider (uses openai_api_base if empty)")
+    embedding_proxy: str = Field(default="", description="HTTP proxy for embedding requests (uses openai_proxy if empty)")
     
     # Vector Store Settings
     vector_store_type: Literal["redis", "postgres", "chroma"] = Field(
@@ -102,6 +113,10 @@ class Settings(BaseSettings):
         default=1,
         description="Redis database number for cache (only used when cache_backend='redis'). Defaults to 1 to separate from vector store"
     )
+    use_llm_cache: bool = Field(
+        default=True,
+        description="Enable caching for LLM API calls to reduce token consumption"
+    )
     
     # Task Execution Mode (can be overridden per-request via API)
     default_execution_mode: ExecutionMode = Field(
@@ -133,6 +148,10 @@ class Settings(BaseSettings):
     log_level: str = Field(default="INFO", description="Logging level (DEBUG, INFO, WARNING, ERROR, CRITICAL)")
     log_file: str = Field(default="logs/ai_search_agents.log", description="Path to log file")
     enable_debug: bool = Field(default=False, description="Enable debug mode with verbose logging")
+
+    # Persistence Settings
+    enable_persistence: bool = Field(default=True, description="Enable persistent storage for bots, conversations, and sessions")
+    storage_db_path: Optional[str] = Field(default=None, description="Path to SQLite database for persistent storage. Defaults to data/app_storage.db")
 
 # Global settings instance
 settings = Settings()

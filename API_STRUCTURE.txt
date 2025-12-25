@@ -57,8 +57,16 @@
 │ 5. Bias Score API ⭐⭐⭐                                                     │
 ├─────────────────────────────────────────────────────────────────────────────┤
 │ Endpoint:  POST /bias-score                                                 │
-│ Input:     {"url": "https://example.com"}                                   │
+│ Input:     {"url": "https://example.com"}  OR  {"content": "text..."}      │
+│            - url: URL to fetch and analyze (supports MBFC, caching)        │
+│            - content: Direct text content to analyze (no URL fetching)     │
+│            - title: Optional title (used when content is provided)          │
+│            - mode: "LOCAL_CHAIN", "NO_CHAIN", or "PURE_ONLINE"              │
+│            - use_mbfc: Whether to use MBFC database (only for URL)          │
+│            - use_few_shots: Whether to use few-shot examples                  │
 │ Output:    {                                                                │
+│              "url": "https://example.com" or null,                          │
+│              "content_provided": true/false,                                │
 │              "overall_bias_distribution": {                                 │
 │                "left": 0.45, "right": 0.35, "neutral": 0.20,               │
 │                "dominant_bias": "left", "bias_score": -0.1                  │
@@ -67,6 +75,7 @@
 │              "facts_count": 3                                               │
 │            }                                                                │
 │ Use:       Quick bias check without opinion details (FASTEST)               │
+│            Supports both URL fetching and direct content analysis            │
 └─────────────────────────────────────────────────────────────────────────────┘
 
 ═══════════════════════════════════════════════════════════════════════════════
@@ -78,6 +87,12 @@ Pattern 1: Quick Bias Check (Simplest)
 ┌─────────┐      ┌──────────────┐      ┌────────────────┐
 │   URL   │─────▶│  bias-score  │─────▶│  Bias Score    │
 └─────────┘      └──────────────┘      └────────────────┘
+
+OR (Direct Content Analysis)
+
+┌──────────┐      ┌──────────────┐      ┌────────────────┐
+│ Content  │─────▶│  bias-score  │─────▶│  Bias Score    │
+└──────────┘      └──────────────┘      └────────────────┘
 
 Pattern 2: Complete Analysis (Recommended)
 ──────────────────────────────────────────
@@ -134,23 +149,43 @@ Atomic Opinion Structure:
                               Quick Examples
 ═══════════════════════════════════════════════════════════════════════════════
 
-1. Quick Bias Check:
-   curl -X POST http://localhost:8000/api/v1/web-opinion/bias-score \
+1. Quick Bias Check (with URL):
+   curl -X POST http://localhost:8000/api/v1/opinion/bias-score \
      -H "Content-Type: application/json" \
      -d '{"url": "https://example.com/article"}'
+
+1b. Quick Bias Check (with Content):
+   curl -X POST http://localhost:8000/api/v1/opinion/bias-score \
+     -H "Content-Type: application/json" \
+     -d '{"content": "This article discusses political policies...", "title": "Article Title"}'
 
 2. Complete Analysis:
    curl -X POST http://localhost:8000/api/v1/web-opinion/analyze \
      -H "Content-Type: application/json" \
      -d '{"url": "https://example.com/article", "execution_mode": "chain_local"}'
 
-3. Python Example:
+3. Python Example (URL):
    import requests
    response = requests.post(
-       "http://localhost:8000/api/v1/web-opinion/bias-score",
+       "http://localhost:8000/api/v1/opinion/bias-score",
        json={"url": "https://example.com/article"}
    )
    result = response.json()
    print(f"Bias: {result['overall_bias_distribution']['dominant_bias']}")
+
+3b. Python Example (Content):
+   import requests
+   response = requests.post(
+       "http://localhost:8000/api/v1/opinion/bias-score",
+       json={
+           "content": "This article discusses political policies and their impact...",
+           "title": "Political Analysis",
+           "mode": "LOCAL_CHAIN",
+           "use_few_shots": True
+       }
+   )
+   result = response.json()
+   print(f"Bias: {result['overall_bias_distribution']['dominant_bias']}")
+   print(f"Content provided: {result['content_provided']}")
 
 ═══════════════════════════════════════════════════════════════════════════════

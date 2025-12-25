@@ -191,11 +191,11 @@ class PipelineConfig(BaseModel):
     )
     atomizer_shots_path: Optional[str] = Field(
         default=None,
-        description="Path to JSON file with atomizer few-shot examples (default: src/prompts/web_opinion_extractor/shots/atomizer_shots.json)"
+        description="Path to JSON file with atomizer few-shot examples (default: src/few_shots/web_opinion_extractor/shots/atomizer_shots.json)"
     )
     scorer_shots_path: Optional[str] = Field(
         default=None,
-        description="Path to JSON file with scorer few-shot examples (default: src/prompts/web_opinion_extractor/shots/scorer_shots.json)"
+        description="Path to JSON file with scorer few-shot examples (default: src/few_shots/web_opinion_extractor/shots/scorer_shots.json)"
     )
 
 

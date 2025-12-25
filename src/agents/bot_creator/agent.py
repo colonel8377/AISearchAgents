@@ -15,7 +15,8 @@ from ...config.settings import settings, ExecutionMode
 from ...utils.llm_client import llm_manager
 from ...utils.smart_memory import SmartMemory
 from ...utils.agent_cache import cached
-from ...prompts.bot_creator.few_shots import BOT_CREATOR_FEW_SHOTS
+from ...few_shots.bot_creator.few_shots import BOT_CREATOR_FEW_SHOTS
+from ...storage import get_database
 
 logger = get_logger(__name__)
 
@@ -44,8 +45,8 @@ class BotCreatorAgent:
     - user_instruction: Persona provided as user message for more flexibility
     """
 
-    # Class variable to store custom few shots (persistent across instances)
-    _custom_few_shots: Optional[str] = None
+    # Class variable for caching custom few shots (optional performance optimization)
+    _custom_few_shots_cache: Optional[str] = None
     
     # Base prompt without few-shots
     BASE_SYSTEM_PROMPT_NO_SHOTS = """You are a helpful AI assistant specialized in creating and configuring chatbot personas.
@@ -90,8 +91,17 @@ Based on this persona, create a structured bot configuration with:
         Args:
             custom_few_shots: Custom few-shot examples string. If None, clears custom few shots.
         """
-        cls._custom_few_shots = custom_few_shots
-        logger.info(f"Custom few shots set for BotCreatorAgent: {custom_few_shots is not None}")
+        if settings.enable_persistence:
+            database = get_database()
+            success = database.save_custom_few_shots("bot_creator", custom_few_shots)
+            if success:
+                cls._custom_few_shots_cache = custom_few_shots  # Update cache
+                logger.info(f"Custom few shots saved for BotCreatorAgent: {custom_few_shots is not None}")
+            else:
+                logger.warning("Failed to save custom few shots to database")
+        else:
+            cls._custom_few_shots_cache = custom_few_shots
+            logger.info(f"Custom few shots set for BotCreatorAgent (no persistence): {custom_few_shots is not None}")
 
     @classmethod
     def get_custom_few_shots(cls) -> Optional[str]:
@@ -101,7 +111,15 @@ Based on this persona, create a structured bot configuration with:
         Returns:
             Custom few-shot examples string or None if not set
         """
-        return cls._custom_few_shots
+        if settings.enable_persistence:
+            database = get_database()
+            few_shots = database.load_custom_few_shots("bot_creator")
+            # Update cache
+            if isinstance(few_shots, str) or few_shots is None:
+                cls._custom_few_shots_cache = few_shots
+            return few_shots
+        else:
+            return cls._custom_few_shots_cache
 
     @classmethod
     def get_effective_few_shots(cls) -> str:
@@ -111,7 +129,8 @@ Based on this persona, create a structured bot configuration with:
         Returns:
             Effective few-shot examples string
         """
-        return cls._custom_few_shots if cls._custom_few_shots is not None else cls.get_default_few_shots()
+        custom_few_shots = cls.get_custom_few_shots()
+        return custom_few_shots if custom_few_shots is not None else cls.get_default_few_shots()
     
     def __init__(
         self,
@@ -678,6 +697,88 @@ This bot is suitable for interactions that require these characteristics and sty
             return {
                 "error": f"Failed to chat with bot: {str(e)}",
                 "bot_id": bot_id
+            }
+    
+    def chat_with_bot_by_config(
+        self,
+        bot_configuration: str,
+        bot_name: str,
+        user_message: str,
+        conversation_history: Optional[List[Dict[str, str]]] = None,
+        history_mode: bool = False
+    ) -> Dict[str, Any]:
+        """
+        Chat with a bot using its configuration (without needing bot_id lookup).
+        
+        Args:
+            bot_configuration: Bot configuration string
+            bot_name: Bot name
+            user_message: The user's message to the bot
+            conversation_history: Optional previous conversation history
+            history_mode: History mode - True (include history) or False (stateless)
+            
+        Returns:
+            Dictionary containing bot response and updated conversation history
+        """
+        if not user_message or not user_message.strip():
+            logger.warning("Empty user message provided")
+            return {
+                "error": "User message cannot be empty"
+            }
+        
+        try:
+            # Build the system prompt from bot configuration
+            system_prompt = self._extract_system_prompt_from_config(bot_configuration)
+            
+            # Build messages
+            from langchain_core.messages import SystemMessage, AIMessage
+            
+            messages = [SystemMessage(content=system_prompt)]
+            
+            # Add conversation history only if history_mode is True
+            if history_mode and conversation_history:
+                logger.debug(f"Including {len(conversation_history)} history entries")
+                for entry in conversation_history:
+                    role = entry.get("role", "")
+                    content = entry.get("content", "")
+                    if role == "user":
+                        messages.append(HumanMessage(content=content))
+                    elif role == "assistant":
+                        messages.append(AIMessage(content=content))
+            else:
+                logger.debug("History mode is False, skipping conversation history")
+            
+            # Add current user message
+            messages.append(HumanMessage(content=user_message))
+            
+            logger.debug(f"Calling LLM for bot chat with {len(messages)} messages")
+            
+            # Call LLM
+            response = self.llm.invoke(messages)
+            bot_response = response.content
+            
+            logger.info(f"Bot {bot_name} responded with {len(bot_response)} characters")
+            
+            # Build updated conversation history based on mode
+            if history_mode:
+                updated_history = list(conversation_history) if conversation_history else []
+                updated_history.append({"role": "user", "content": user_message})
+                updated_history.append({"role": "assistant", "content": bot_response})
+            else:
+                # In False mode, don't maintain history
+                updated_history = []
+            
+            return {
+                "bot_name": bot_name,
+                "response": bot_response,
+                "conversation_history": updated_history,
+                "history_mode": history_mode
+            }
+            
+        except Exception as e:
+            logger.error(f"Failed to chat with bot: {e}", exc_info=True)
+            return {
+                "error": f"Failed to chat with bot: {str(e)}"
             }
     
     def _extract_system_prompt_from_config(self, bot_configuration: str) -> str:

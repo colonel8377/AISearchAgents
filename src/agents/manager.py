@@ -16,9 +16,9 @@ class AgentType(str, Enum):
     DEMOGRAPHIC_EVALUATOR = "demographic_evaluator"
     CONTENT_EXTRACTOR = "content_extractor"
     CLAIM_ATOMIZER = "claim_atomizer"
-    EVIDENCE_LOCATOR = "evidence_locator"
     CONFLICT_AUDITOR = "conflict_auditor"
     SYNTHESIS_AGGREGATOR = "synthesis_aggregator"
+    PRIVACY_DETECTOR = "privacy_detector"
 
 
 class AgentManager:

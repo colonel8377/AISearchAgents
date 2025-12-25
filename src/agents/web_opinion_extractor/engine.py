@@ -33,8 +33,8 @@ from ...utils.logger import get_logger
 from ...config.settings import settings
 from ...utils.llm_client import llm_manager
 from ...utils.agent_cache import cached
-from ...prompts.web_opinion_extractor.atomizer_shots import ATOMIZER_FEW_SHOTS
-from ...prompts.web_opinion_extractor.scorer_shots import SCORER_FEW_SHOTS
+from ...few_shots.web_opinion_extractor.atomizer_shots import ATOMIZER_FEW_SHOTS
+from ...few_shots.web_opinion_extractor.scorer_shots import SCORER_FEW_SHOTS
 from .models import (
     ArticleContent,
     SourceMetadata,
@@ -211,13 +211,13 @@ class WebOpinionEngine:
         self.max_chunk_tokens = max_chunk_tokens
         
         # Set default paths if not provided
-        # Default shots are stored in: src/prompts/web_opinion_extractor/shots/
+        # Default shots are stored in: src/few_shots/web_opinion_extractor/shots/
         if not atomizer_shots_path:
-            default_shots_dir = Path(__file__).parent.parent.parent / "prompts" / "web_opinion_extractor" / "shots"
+            default_shots_dir = Path(__file__).parent.parent.parent / "few_shots" / "web_opinion_extractor" / "shots"
             atomizer_shots_path = str(default_shots_dir / "atomizer_shots.json")
         
         if not scorer_shots_path:
-            default_shots_dir = Path(__file__).parent.parent.parent / "prompts" / "web_opinion_extractor" / "shots"
+            default_shots_dir = Path(__file__).parent.parent.parent / "few_shots" / "web_opinion_extractor" / "shots"
             scorer_shots_path = str(default_shots_dir / "scorer_shots.json")
         
         self.atomizer_shots_path = atomizer_shots_path
@@ -383,7 +383,7 @@ class WebOpinionEngine:
             'User-Agent': 'Mozilla/5.0 (compatible; WebOpinionEngine/1.0; +https://github.com/colonel8377/AISearchAgents)'
         }
         try:
-            with httpx.Client(timeout=self.request_timeout) as client:
+            with httpx.Client(timeout=self.request_timeout, trust_env=True) as client:
                 response = client.get(url, headers=headers, follow_redirects=True)
                 response.raise_for_status()
                 html = response.text
@@ -415,6 +415,7 @@ class WebOpinionEngine:
         if HAS_TRAFILATURA and trafilatura is not None:
             try:
                 # Extract with trafilatura
+                # trafilatura will automatically use HTTP_PROXY and HTTPS_PROXY environment variables
                 downloaded = trafilatura.fetch_url(url)
                 if downloaded:
                     # Extract main text
@@ -1415,6 +1416,7 @@ Return JSON only."""
     
     # ========== PRODUCTION ORCHESTRATOR ==========
     
+    @cached()
     def run(
         self,
         url: str,
@@ -1595,7 +1597,7 @@ Return JSON only."""
         Args:
             url: URL to analyze
             use_mbfc: Whether to use MBFC database (default: True)
-            use_few_shots: Whether to include few-shot examples in prompts (default: True)
+            use_few_shots: Whether to include few-shot examples in few_shots (default: True)
             custom_atomizer_few_shots: Optional custom few-shot examples for atomization (deprecated)
             custom_scorer_few_shots: Optional custom few-shot examples for bias scoring (deprecated)
             

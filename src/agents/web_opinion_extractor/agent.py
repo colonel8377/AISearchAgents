@@ -18,6 +18,7 @@ from ...config.settings import settings, ExecutionMode
 from ...utils.llm_client import llm_manager
 from ...utils.logger import get_logger
 from ...utils.agent_cache import cached
+from ...storage import get_database
 
 logger = get_logger(__name__)
 
@@ -718,7 +719,89 @@ class WebOpinionAnalyzer:
         ...         if opinion.reasoning:
         ...             print(f"    CoT: {opinion.reasoning[:100]}...")
     """
-    
+
+    # Class variables for custom few shots
+    _custom_few_shots_cache: Optional[str] = None
+
+    @classmethod
+    def get_default_few_shots(cls) -> str:
+        """
+        Get default few-shot examples for opinion extraction.
+
+        Returns:
+            Default few-shot examples string
+        """
+        return """EXAMPLE 1 - Opinion Classification:
+Text: "I believe the new tax policy will devastate small businesses and hurt our economy."
+Analysis:
+- Opinion: "the new tax policy will devastate small businesses and hurt our economy"
+- Type: opinion
+- Bias: left-leaning (concern for small businesses and economy)
+
+EXAMPLE 2 - Fact vs Opinion:
+Text: "The unemployment rate rose to 4.8% last month, which is the highest in three years."
+Analysis:
+- Fact: "The unemployment rate rose to 4.8% last month"
+- Fact: "which is the highest in three years"
+- No opinions identified
+
+EXAMPLE 3 - Multiple Opinions:
+Text: "This policy is absolutely brilliant and will solve all our problems. The politicians who oppose it are clearly incompetent."
+Analysis:
+- Opinion: "This policy is absolutely brilliant and will solve all our problems"
+- Type: opinion, bias: positive/supportive
+- Opinion: "The politicians who oppose it are clearly incompetent"
+- Type: opinion, bias: negative/critical"""
+
+    @classmethod
+    def set_custom_few_shots(cls, custom_few_shots: Optional[str] = None) -> None:
+        """
+        Set custom few-shot examples for opinion extraction.
+
+        Args:
+            custom_few_shots: Custom few-shot examples string. If None, clears custom few shots.
+        """
+        if settings.enable_persistence:
+            database = get_database()
+            success = database.save_custom_few_shots("web_opinion_extractor", custom_few_shots)
+            if success:
+                cls._custom_few_shots_cache = custom_few_shots  # Update cache
+                logger.info(f"Custom few shots saved for WebOpinionAnalyzer: {custom_few_shots is not None}")
+            else:
+                logger.warning("Failed to save custom few shots to database")
+        else:
+            cls._custom_few_shots_cache = custom_few_shots
+            logger.info(f"Custom few shots set for WebOpinionAnalyzer (no persistence): {custom_few_shots is not None}")
+
+    @classmethod
+    def get_custom_few_shots(cls) -> Optional[str]:
+        """
+        Get currently set custom few-shot examples.
+
+        Returns:
+            Custom few-shot examples string or None if not set
+        """
+        if settings.enable_persistence:
+            database = get_database()
+            few_shots = database.load_custom_few_shots("web_opinion_extractor")
+            # Update cache
+            if isinstance(few_shots, str) or few_shots is None:
+                cls._custom_few_shots_cache = few_shots
+            return few_shots
+        else:
+            return cls._custom_few_shots_cache
+
+    @classmethod
+    def get_effective_few_shots(cls) -> str:
+        """
+        Get effective few-shot examples (custom if set, otherwise default).
+
+        Returns:
+            Effective few-shot examples string
+        """
+        custom_few_shots = cls.get_custom_few_shots()
+        return custom_few_shots if custom_few_shots is not None else cls.get_default_few_shots()
+
     def __init__(
         self,
         model_name: Optional[str] = None,

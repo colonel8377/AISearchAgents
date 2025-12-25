@@ -8,6 +8,7 @@ from langchain_core.messages import HumanMessage, SystemMessage
 
 from .logger import get_logger
 from ..config.settings import settings
+from .agent_cache import cached
 
 logger = get_logger(__name__)
 
@@ -146,6 +147,7 @@ Analyze this message:
         # Fallback: Store with heuristic analysis
         return self._store_memory_heuristic(user_message, bot_response, context)
     
+    @cached(exclude_class_name=True)
     async def _llm_analyze_message(self, user_message: str) -> Optional[Dict[str, Any]]:
         """
         Use LLM to intelligently analyze if message is worth storing.

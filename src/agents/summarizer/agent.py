@@ -1,5 +1,6 @@
 """Summarizer Agent implementation for summarizing conversation records."""
 
+import uuid
 from typing import Dict, List, Optional, Any
 from langchain_openai import ChatOpenAI
 from langchain_core.messages import SystemMessage, HumanMessage
@@ -12,7 +13,8 @@ from ...utils.logger import get_logger
 from ...utils.llm_client import llm_manager
 from ...utils.smart_memory import SmartMemory
 from ...utils.agent_cache import cached
-from ...prompts.summarizer.few_shots import SUMMARIZER_FEW_SHOTS
+from ...few_shots.summarizer.few_shots import SUMMARIZER_FEW_SHOTS
+from ...storage import get_database
 
 logger = get_logger(__name__)
 
@@ -31,8 +33,8 @@ class SummarizerAgent:
     message-based LLM interaction.
     """
 
-    # Class variable to store custom few shots (persistent across instances)
-    _custom_few_shots: Optional[str] = None
+    # Class variable for caching custom few shots (optional performance optimization)
+    _custom_few_shots_cache: Optional[str] = None
     
     SYSTEM_PROMPT_NO_SHOTS = """You are a helpful AI assistant specialized in summarizing conversations.
 Your task is to analyze conversation records and extract the key information, themes, and insights.
@@ -74,8 +76,17 @@ Keep your summary clear, structured, and easy to understand."""
         Args:
             custom_few_shots: Custom few-shot examples string. If None, clears custom few shots.
         """
-        cls._custom_few_shots = custom_few_shots
-        logger.info(f"Custom few shots set for SummarizerAgent: {custom_few_shots is not None}")
+        if settings.enable_persistence:
+            database = get_database()
+            success = database.save_custom_few_shots("summarizer", custom_few_shots)
+            if success:
+                cls._custom_few_shots_cache = custom_few_shots  # Update cache
+                logger.info(f"Custom few shots saved for SummarizerAgent: {custom_few_shots is not None}")
+            else:
+                logger.warning("Failed to save custom few shots to database")
+        else:
+            cls._custom_few_shots_cache = custom_few_shots
+            logger.info(f"Custom few shots set for SummarizerAgent (no persistence): {custom_few_shots is not None}")
 
     @classmethod
     def get_custom_few_shots(cls) -> Optional[str]:
@@ -85,7 +96,15 @@ Keep your summary clear, structured, and easy to understand."""
         Returns:
             Custom few-shot examples string or None if not set
         """
-        return cls._custom_few_shots
+        if settings.enable_persistence:
+            database = get_database()
+            few_shots = database.load_custom_few_shots("summarizer")
+            # Update cache
+            if isinstance(few_shots, str) or few_shots is None:
+                cls._custom_few_shots_cache = few_shots
+            return few_shots
+        else:
+            return cls._custom_few_shots_cache
 
     @classmethod
     def get_effective_few_shots(cls) -> str:
@@ -95,7 +114,8 @@ Keep your summary clear, structured, and easy to understand."""
         Returns:
             Effective few-shot examples string
         """
-        return cls._custom_few_shots if cls._custom_few_shots is not None else cls.get_default_few_shots()
+        custom_few_shots = cls.get_custom_few_shots()
+        return custom_few_shots if custom_few_shots is not None else cls.get_default_few_shots()
     
     def __init__(
         self,
@@ -134,7 +154,12 @@ Keep your summary clear, structured, and easy to understand."""
             http_client=http_client
         )
         self.vector_store = vector_store
-        self.summary_history: List[Dict[str, Any]] = []
+        self.summary_history: List[Dict[str, Any]] = []  # Legacy: kept for backward compatibility
+        
+        # Conversations management: Each conversation contains multiple turns and an optional summary
+        # Structure: {conversation_id: {"turns": List[Dict], "summary": Optional[str], "conversation_id": str}}
+        self.conversations: Dict[str, Dict[str, Any]] = {}
+        self._conversation_counter = 0
         
         # Initialize smart memory if enabled
         self.smart_memory = SmartMemory(llm=self.llm, vector_store=vector_store) if settings.smart_memory_enabled else None
@@ -537,8 +562,164 @@ Provide a clear, structured summary."""
         """Get the history of all summaries generated."""
         return self.summary_history
     
+    def create_conversation(self, conversation_id: Optional[str] = None) -> str:
+        """
+        Create a new conversation.
+        
+        Args:
+            conversation_id: Optional conversation ID. If None, auto-generate UUID.
+            
+        Returns:
+            The conversation ID
+        """
+        if conversation_id is None:
+            self._conversation_counter += 1
+            conversation_id = f"conv_{self._conversation_counter}"
+        
+        if conversation_id in self.conversations:
+            logger.warning(f"Conversation {conversation_id} already exists")
+            return conversation_id
+        
+        self.conversations[conversation_id] = {
+            "conversation_id": conversation_id,
+            "turns": [],
+            "summary": None
+        }
+        logger.info(f"Created conversation: {conversation_id}")
+        return conversation_id
+    
+    def add_turn(self, conversation_id: str, user_message: str, assistant_message: str) -> Dict[str, Any]:
+        """
+        Add a turn (user + assistant) to a conversation.
+        
+        Args:
+            conversation_id: The conversation ID
+            user_message: User's message
+            assistant_message: Assistant's response
+            
+        Returns:
+            Success message or error
+        """
+        if conversation_id not in self.conversations:
+            return {"error": f"Conversation '{conversation_id}' not found"}
+        
+        turn_index = len(self.conversations[conversation_id]["turns"])
+        turn = {
+            "turn_index": turn_index,
+            "user": user_message,
+            "assistant": assistant_message
+        }
+        self.conversations[conversation_id]["turns"].append(turn)
+        logger.info(f"Added turn {turn_index} to conversation {conversation_id}")
+        
+        return {
+            "conversation_id": conversation_id,
+            "turn_index": turn_index,
+            "message": "Turn added successfully"
+        }
+    
+    def get_conversation(self, conversation_id: str) -> Optional[Dict[str, Any]]:
+        """
+        Get a conversation by ID.
+        
+        Args:
+            conversation_id: The conversation ID
+            
+        Returns:
+            Conversation data or None if not found
+        """
+        return self.conversations.get(conversation_id)
+    
+    def list_conversations(self) -> List[Dict[str, Any]]:
+        """
+        List all conversations.
+        
+        Returns:
+            List of conversation metadata
+        """
+        return [
+            {
+                "conversation_id": conv_id,
+                "turn_count": len(conv_data["turns"]),
+                "has_summary": conv_data["summary"] is not None
+            }
+            for conv_id, conv_data in self.conversations.items()
+        ]
+    
+    def delete_conversation(self, conversation_id: str) -> bool:
+        """
+        Delete a conversation.
+        
+        Args:
+            conversation_id: The conversation ID
+            
+        Returns:
+            True if deleted, False if not found
+        """
+        if conversation_id in self.conversations:
+            del self.conversations[conversation_id]
+            logger.info(f"Deleted conversation: {conversation_id}")
+            return True
+        logger.warning(f"Conversation not found: {conversation_id}")
+        return False
+    
+    def summarize_conversation_by_id(
+        self,
+        conversation_id: str,
+        execution_mode: Optional[ExecutionMode] = None,
+        use_few_shots: bool = True,
+        custom_few_shots: Optional[str] = None
+    ) -> Dict[str, Any]:
+        """
+        Summarize a specific conversation by its ID.
+        
+        Args:
+            conversation_id: The conversation ID
+            execution_mode: Execution mode for summarization
+            use_few_shots: Whether to use few-shot examples
+            custom_few_shots: Optional custom few-shot examples
+            
+        Returns:
+            Summary result or error
+        """
+        if conversation_id not in self.conversations:
+            return {"error": f"Conversation '{conversation_id}' not found"}
+        
+        conversation = self.conversations[conversation_id]
+        turns = conversation["turns"]
+        
+        if not turns:
+            return {"error": "Conversation has no turns to summarize"}
+        
+        # Convert turns to conversation_records format
+        conversation_records = [
+            {
+                "user": turn["user"],
+                "assistant": turn["assistant"],
+                "turn": turn["turn_index"]
+            }
+            for turn in turns
+        ]
+        
+        # Generate summary using existing method
+        result = self.summarize_conversation(
+            conversation_records=conversation_records,
+            execution_mode=execution_mode,
+            use_few_shots=use_few_shots,
+            custom_few_shots=custom_few_shots
+        )
+        
+        if "error" not in result:
+            # Store summary in conversation
+            self.conversations[conversation_id]["summary"] = result["summary"]
+            logger.info(f"Stored summary for conversation {conversation_id}")
+        
+        return result
+    
     def reset(self) -> None:
         """Reset the agent to initial state."""
         logger.info("Resetting SummarizerAgent state")
         self.summary_history = []
+        self.conversations = {}
+        self._conversation_counter = 0
         logger.debug("Agent reset complete")

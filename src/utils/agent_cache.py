@@ -38,9 +38,10 @@ class CacheBackend(Protocol):
         args: tuple,
         kwargs: dict,
         result: Any,
-        class_name: Optional[str] = None
+        class_name: Optional[str] = None,
+        ttl: int = 86400
     ):
-        """Store result in cache."""
+        """Store result in cache with TTL."""
         ...
     
     def clear(self, function_name: Optional[str] = None, class_name: Optional[str] = None):
@@ -58,7 +59,7 @@ class LocalCache:
     
     Uses SQLite database to store results keyed by hash of function signature
     and all parameters. This saves tokens by avoiding reprocessing of the same
-    inputs with the same prompts/formats.
+    inputs with the same few_shots/formats.
     """
     
     def __init__(self, db_path: Optional[str] = None):
@@ -92,7 +93,8 @@ class LocalCache:
                 parameters_json TEXT NOT NULL,
                 result_json TEXT NOT NULL,
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                last_accessed TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                last_accessed TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                expires_at TIMESTAMP
             )
         """)
         
@@ -193,11 +195,11 @@ class LocalCache:
             
             cursor.execute("""
                 SELECT result_json, last_accessed FROM agent_cache
-                WHERE cache_key = ?
+                WHERE cache_key = ? AND (expires_at IS NULL OR expires_at > CURRENT_TIMESTAMP)
             """, (cache_key,))
-            
+
             row = cursor.fetchone()
-            
+
             if row:
                 result_json, _ = row
                 cursor.execute("""
@@ -226,9 +228,10 @@ class LocalCache:
         args: tuple,
         kwargs: dict,
         result: Any,
-        class_name: Optional[str] = None
+        class_name: Optional[str] = None,
+        ttl: int = 86400
     ):
-        """Store result in cache."""
+        """Store result in cache with TTL."""
         cache_key = self._generate_cache_key(func, args, kwargs, class_name)
         
         sig = inspect.signature(func)
@@ -242,16 +245,20 @@ class LocalCache:
         
         params_json = json.dumps(params_dict, sort_keys=True, default=str)
         result_json = json.dumps(result, default=str)
-        
+
+        # Calculate expiration time
+        from datetime import datetime, timedelta
+        expires_at = datetime.now() + timedelta(seconds=ttl)
+
         try:
             conn = sqlite3.connect(self.db_path)
             cursor = conn.cursor()
-            
+
             cursor.execute("""
                 INSERT OR REPLACE INTO agent_cache
-                (cache_key, function_name, class_name, parameters_json, result_json, created_at, last_accessed)
-                VALUES (?, ?, ?, ?, ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
-            """, (cache_key, func.__name__, class_name, params_json, result_json))
+                (cache_key, function_name, class_name, parameters_json, result_json, created_at, last_accessed, expires_at)
+                VALUES (?, ?, ?, ?, ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP, ?)
+            """, (cache_key, func.__name__, class_name, params_json, result_json, expires_at.isoformat()))
             
             conn.commit()
             conn.close()
@@ -471,16 +478,17 @@ class RedisCache:
         args: tuple,
         kwargs: dict,
         result: Any,
-        class_name: Optional[str] = None
+        class_name: Optional[str] = None,
+        ttl: int = 86400
     ):
-        """Store result in cache."""
+        """Store result in cache with TTL."""
         cache_key = self._generate_cache_key(func, args, kwargs, class_name)
         
         try:
             result_json = json.dumps(result, default=str)
             
-            # Store result
-            self.redis_client.set(cache_key, result_json)
+            # Store result with TTL
+            self.redis_client.setex(cache_key, ttl, result_json)
             
             # Store metadata
             metadata_key = f"{cache_key}:metadata"
@@ -644,9 +652,9 @@ def get_agent_cache() -> CacheBackend:
     return _cache_instance
 
 
-def cached(enabled: bool = True, exclude_class_name: bool = False):
+def cached(enabled: bool = True, exclude_class_name: bool = False, ttl: int = 86400):
     """
-    Decorator for caching agent method results.
+    Decorator for caching agent method results with TTL support.
 
     Uses function signature and all parameters to generate cache keys.
     Automatically detects if method is instance method (includes class name by default).
@@ -656,11 +664,16 @@ def cached(enabled: bool = True, exclude_class_name: bool = False):
         enabled: Whether caching is enabled (default: True). Can be disabled via settings.
         exclude_class_name: Whether to exclude class name from cache key (default: False).
                            Useful for one-time evaluations without memory state.
+        ttl: Time-to-live in seconds (default: 86400 = 24 hours).
 
     Example:
         @cached()
         def my_method(self, text: str, mode: str = "default"):
             # Method implementation
+            return result
+
+        @cached(ttl=3600)  # 1 hour TTL
+        def quick_expiring_method(self, data):
             return result
 
         @cached(exclude_class_name=True)
@@ -696,8 +709,8 @@ def cached(enabled: bool = True, exclude_class_name: bool = False):
             # Execute function
             result = func(*args, **kwargs)
 
-            # Cache result
-            cache.set(func, args, kwargs, result, class_name)
+            # Cache result with TTL
+            cache.set(func, args, kwargs, result, class_name, ttl)
 
             return result
         
@@ -720,8 +733,8 @@ def cached(enabled: bool = True, exclude_class_name: bool = False):
             # Execute async function
             result = await func(*args, **kwargs)
 
-            # Cache result
-            cache.set(func, args, kwargs, result, class_name)
+            # Cache result with TTL
+            cache.set(func, args, kwargs, result, class_name, ttl)
 
             return result
         
@@ -731,4 +744,110 @@ def cached(enabled: bool = True, exclude_class_name: bool = False):
         else:
             return wrapper
     
+    return decorator
+
+
+def llm_cached(enabled: bool = True, ttl: int = 86400, hash_content: bool = True):
+    """
+    Specialized decorator for caching LLM API calls to reduce token consumption.
+
+    This decorator is designed specifically for LLM calls where:
+    - System prompt and user message are the key parameters
+    - Results should be cached based on exact prompt content
+    - Hash-based caching for large prompts to avoid key size limits
+
+    Args:
+        enabled: Whether caching is enabled (default: True). Can be disabled via settings.
+        ttl: Time-to-live in seconds (default: 86400 = 24 hours).
+        hash_content: Whether to hash prompt content for cache keys (default: True).
+                     Set to False for exact string matching in cache keys.
+
+    Example:
+        @llm_cached(ttl=3600)  # Cache for 1 hour
+        async def call_llm(self, system_prompt: str, user_message: str) -> str:
+            # LLM API call implementation
+            return response
+
+        @llm_cached(hash_content=False)  # Exact string matching
+        async def call_llm_exact(self, system_prompt: str, user_message: str) -> str:
+            return response
+    """
+    def decorator(func: Callable) -> Callable:
+        # Check if caching is enabled globally
+        if not enabled or not getattr(settings, 'use_llm_cache', True):
+            return func
+
+        @functools.wraps(func)
+        async def async_wrapper(*args, **kwargs):
+            cache = get_agent_cache()
+
+            # Extract system_prompt and user_message from arguments
+            # Assume signature: (self, system_prompt, user_message, ...)
+            if len(args) >= 3:  # self, system_prompt, user_message
+                system_prompt = args[1]
+                user_message = args[2]
+            elif 'system_prompt' in kwargs and 'user_message' in kwargs:
+                system_prompt = kwargs['system_prompt']
+                user_message = kwargs['user_message']
+            else:
+                # Fallback to original behavior if signature doesn't match
+                return await func(*args, **kwargs)
+
+            # Create cache key based on prompts
+            if hash_content:
+                # Hash the content to avoid key size issues
+                content_str = f"{system_prompt}\n---\n{user_message}"
+                cache_key_data = {
+                    'function_name': func.__name__,
+                    'content_hash': hashlib.sha256(content_str.encode()).hexdigest(),
+                    'content_length': len(content_str)
+                }
+            else:
+                # Use exact content (be careful with size limits)
+                cache_key_data = {
+                    'function_name': func.__name__,
+                    'system_prompt': system_prompt,
+                    'user_message': user_message
+                }
+
+            # Generate cache key
+            cache_key_str = json.dumps(cache_key_data, sort_keys=True)
+            cache_key = f"llm:{hashlib.sha256(cache_key_str.encode()).hexdigest()}"
+
+            # Check cache first
+            try:
+                cached_result = cache.redis_client.get(cache_key) if hasattr(cache, 'redis_client') else None
+                if cached_result is None and hasattr(cache, '_generate_cache_key'):
+                    # Try the standard cache interface
+                    cached_result = cache.get(func, args, kwargs, "LLMService")
+
+                if cached_result is not None:
+                    logger.debug(f"LLM cache hit for {func.__name__}")
+                    return cached_result
+            except Exception as e:
+                logger.debug(f"LLM cache lookup failed: {e}")
+
+            # Execute LLM call
+            try:
+                result = await func(*args, **kwargs)
+            except Exception as e:
+                logger.warning(f"LLM call failed: {e}")
+                raise
+
+            # Cache the result
+            try:
+                if hasattr(cache, 'redis_client'):
+                    cache.redis_client.setex(cache_key, ttl, json.dumps(result, default=str))
+                elif hasattr(cache, 'set'):
+                    # Use standard cache interface
+                    cache.set(func, args, kwargs, result, "LLMService", ttl)
+                logger.debug(f"LLM result cached for {func.__name__}")
+            except Exception as e:
+                logger.debug(f"LLM cache storage failed: {e}")
+
+            return result
+
+        # Return wrapper (assuming all LLM calls are async)
+        return async_wrapper
+
     return decorator
