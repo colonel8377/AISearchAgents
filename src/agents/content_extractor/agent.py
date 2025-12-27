@@ -6,7 +6,7 @@ advertisements, and other non-content elements.
 """
 
 import re
-from typing import Optional, Dict, Any, Tuple
+from typing import Optional, Dict, Any, Tuple, Union
 from dataclasses import dataclass
 
 import httpx
@@ -16,6 +16,7 @@ from langchain_openai import ChatOpenAI
 
 from ..html_extractor import HTMLExtractor
 from ...config.settings import settings
+from ...agents.web_opinion_extractor import CoTMode
 from ...utils.llm_client import llm_manager
 from ...utils.logger import get_logger
 from ...utils.smart_memory import SmartMemory
@@ -105,7 +106,6 @@ OUTPUT FORMAT:
         api_key: Optional[str] = None,
         api_base: Optional[str] = None,
         temperature: float = 0.1,
-        proxy: Optional[str] = None,
         request_timeout: float = 30.0,
         execution_mode: Optional[str] = None
     ):
@@ -117,7 +117,6 @@ OUTPUT FORMAT:
             api_key: OpenAI API key or compatible API key
             api_base: Base URL for the API
             temperature: Temperature for LLM responses (lower for more consistent extraction)
-            proxy: Optional HTTP proxy for API requests
             request_timeout: Timeout for HTTP requests in seconds
             execution_mode: Execution mode (\'chain_online\' for CoT, \'no_chain\' for direct)
         """
@@ -128,7 +127,7 @@ OUTPUT FORMAT:
         logger.info(f"Initializing ContentExtractorAgent: model={model_name}, temperature={temperature}")
 
         # Use shared HTTP client for LLM
-        http_client = llm_manager.get_http_client(proxy=proxy)
+        http_client = llm_manager.get_http_client()
 
         self.llm = ChatOpenAI(
             model_name=model_name,
@@ -148,7 +147,7 @@ OUTPUT FORMAT:
         logger.debug(f"ContentExtractorAgent initialized successfully with execution_mode={self.execution_mode}")
 
     @cached()
-    def _extract_with_llm(self, text: str, use_cot: bool = False, custom_few_shots: Optional[str] = None) -> Tuple[str, str]:
+    def _extract_with_llm(self, text: str, use_cot: Union[CoTMode, bool] = CoTMode.NO_CHAIN, custom_few_shots: Optional[str] = None) -> Tuple[str, str]:
         """
         Use LLM to extract title and main body from cleaned text.
 
@@ -163,7 +162,13 @@ OUTPUT FORMAT:
         Returns:
             Tuple of (title, main_body)
         """
-        logger.warning(f"Using LLM for content extraction (consuming tokens): text_length={len(text)}, CoT={use_cot}")
+        # Determine effective CoT mode
+        if isinstance(use_cot, CoTMode):
+            effective_cot = use_cot.value in ("chain_local", "chain_online")
+        else:
+            effective_cot = bool(use_cot)
+
+        logger.warning(f"Using LLM for content extraction (consuming tokens): text_length={len(text)}, CoT={effective_cot}")
 
         # Truncate input if too long to save tokens
         if len(text) > 8000:  # Keep under ~2000 tokens for input
@@ -171,7 +176,7 @@ OUTPUT FORMAT:
             text = text[:8000] + "...[TRUNCATED]"
 
         # Select system prompt based on CoT mode
-        if use_cot:
+        if effective_cot:
             system_prompt = self.SYSTEM_PROMPT_COT
         else:
             system_prompt = self.SYSTEM_PROMPT
@@ -216,7 +221,7 @@ Return your extraction in the exact format specified:
             # Fallback: return None for title and use full text as body
             return None, text
 
-    def extract_from_url(self, url: str, use_llm: bool = False, use_cot: bool = False, custom_few_shots: Optional[str] = None) -> ContentExtractionResult:
+    def extract_from_url(self, url: str, use_llm: bool = False, use_cot: Union[CoTMode, bool] = CoTMode.NO_CHAIN, custom_few_shots: Optional[str] = None) -> ContentExtractionResult:
         """
         Extract content from a URL.
 
@@ -312,7 +317,7 @@ Return your extraction in the exact format specified:
 
         return result
 
-    def extract_from_html(self, html: str, url: Optional[str] = None, use_llm: bool = False, use_cot: bool = False, custom_few_shots: Optional[str] = None) -> ContentExtractionResult:
+    def extract_from_html(self, html: str, url: Optional[str] = None, use_llm: bool = False, use_cot: Union[CoTMode, bool] = CoTMode.NO_CHAIN, custom_few_shots: Optional[str] = None) -> ContentExtractionResult:
         """
         Extract content from raw HTML content.
 
@@ -372,7 +377,7 @@ Return your extraction in the exact format specified:
 
         return result
 
-    def extract_from_text(self, text: str, url: Optional[str] = None, title: Optional[str] = None, use_llm: bool = True, use_cot: bool = False, custom_few_shots: Optional[str] = None) -> ContentExtractionResult:
+    def extract_from_text(self, text: str, url: Optional[str] = None, title: Optional[str] = None, use_llm: bool = True, use_cot: Union[CoTMode, bool] = CoTMode.NO_CHAIN, custom_few_shots: Optional[str] = None) -> ContentExtractionResult:
         """
         Extract content from plain text (assumes text is already cleaned).
 

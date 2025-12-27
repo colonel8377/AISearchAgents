@@ -11,6 +11,7 @@ from .models import (
     AtomicUnit,
     BiasResult,
     LogicMode,
+    CoTMode,
     PipelineConfig
 )
 from .exceptions import WebExtractionError, NetworkError, ContentExtractionError
@@ -27,6 +28,7 @@ __all__ = [
     "AtomicUnit",
     "BiasResult",
     "LogicMode",
+    "CoTMode",
     "PipelineConfig",
     "WebExtractionError",
     "NetworkError",

@@ -152,7 +152,6 @@ class WebOpinionEngine:
         api_key: Optional[str] = None,
         api_base: Optional[str] = None,
         temperature: float = 0.3,
-        proxy: Optional[str] = None,
         request_timeout: float = 30.0,
         db_path: Optional[str] = None,
         max_chunk_tokens: int = 15000,
@@ -168,7 +167,6 @@ class WebOpinionEngine:
             api_key: OpenAI API key or compatible
             api_base: Base URL for the API
             temperature: Temperature for LLM responses
-            proxy: Optional HTTP proxy
             request_timeout: Timeout for HTTP requests in seconds
             db_path: Path to MBFC SQLite database (optional)
             max_chunk_tokens: Maximum tokens per chunk for text atomization
@@ -195,7 +193,7 @@ class WebOpinionEngine:
             logger.warning("trafilatura not installed. Will use BeautifulSoup fallback only.")
         
         # Initialize LLM client
-        http_client = llm_manager.get_http_client(proxy=proxy)
+        http_client = llm_manager.get_http_client()
         self.llm = ChatOpenAI(
             model_name=model_name,
             api_key=api_key or settings.openai_api_key,

@@ -5,7 +5,7 @@ if they are consistent, contradictory, or if evidence is missing.
 """
 
 import asyncio
-from typing import Dict, List, Optional, Any, Tuple
+from typing import Dict, List, Optional, Any, Tuple, Union
 from enum import Enum
 from dataclasses import dataclass
 from langchain_openai import ChatOpenAI
@@ -14,6 +14,7 @@ from tenacity import retry, stop_after_attempt, wait_exponential, retry_if_excep
 
 from ...utils.logger import get_logger
 from ...config.settings import settings
+from ...agents.web_opinion_extractor import CoTMode
 from ...utils.agent_cache import cached
 from ...memory.factory import VectorStoreFactory
 from ...few_shots.conflict_auditor.few_shots import CONFLICT_AUDITOR_FEW_SHOTS
@@ -169,7 +170,6 @@ REASON: [Detailed explanation with chain of thought, citing specific source quot
         api_key: Optional[str] = None,
         api_base: Optional[str] = None,
         temperature: float = 0.1,
-        proxy: Optional[str] = None,
         execution_mode: Optional[str] = None
     ):
         """
@@ -180,7 +180,6 @@ REASON: [Detailed explanation with chain of thought, citing specific source quot
             api_key: OpenAI API key
             api_base: Base URL for the API
             temperature: Temperature for LLM responses
-            proxy: Optional HTTP proxy
             execution_mode: Execution mode for CoT
         """
         model_name = model_name or settings.openai_model
@@ -188,7 +187,7 @@ REASON: [Detailed explanation with chain of thought, citing specific source quot
 
         # Use shared HTTP client for better connection pooling and performance
         from ...utils.llm_client import llm_manager
-        http_client = llm_manager.get_http_client(proxy=proxy)
+        http_client = llm_manager.get_http_client()
 
         self.llm = ChatOpenAI(
             model_name=model_name,
@@ -209,7 +208,7 @@ REASON: [Detailed explanation with chain of thought, citing specific source quot
         retry=retry_if_exception_type(Exception)
     )
     @cached()
-    def _audit_conflicts_with_llm(self, claim_evidences: List[Dict[str, Any]], use_cot: bool = False, custom_few_shots: Optional[str] = None) -> List[Dict[str, Any]]:
+    def _audit_conflicts_with_llm(self, claim_evidences: List[Dict[str, Any]], use_cot: Union[CoTMode, bool] = CoTMode.NO_CHAIN, custom_few_shots: Optional[str] = None) -> List[Dict[str, Any]]:
         """
         Use LLM to audit conflicts between claims and evidence.
 
@@ -221,10 +220,16 @@ REASON: [Detailed explanation with chain of thought, citing specific source quot
         Returns:
             List of conflict analysis results
         """
-        logger.debug(f"Auditing conflicts for {len(claim_evidences)} claim-evidence pairs with CoT={use_cot}")
+        # Determine effective CoT mode
+        if isinstance(use_cot, CoTMode):
+            effective_cot = use_cot.value in ("chain_local", "chain_online")
+        else:
+            effective_cot = bool(use_cot)
+
+        logger.debug(f"Auditing conflicts for {len(claim_evidences)} claim-evidence pairs with CoT={effective_cot}")
 
         # Select system prompt based on CoT mode
-        if use_cot:
+        if effective_cot:
             system_prompt = self.SYSTEM_PROMPT_COT
         else:
             system_prompt = self.SYSTEM_PROMPT
@@ -318,7 +323,7 @@ For each claim, provide analysis in the specified format."""
     def audit_conflicts(
         self,
         claim_evidences: List[Dict[str, Any]],
-        use_cot: bool = False,
+        use_cot: Union[CoTMode, bool] = CoTMode.NO_CHAIN,
         custom_few_shots: Optional[str] = None
     ) -> ConflictAuditResult:
         """

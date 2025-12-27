@@ -1,20 +1,20 @@
 """
-Test to verify the httpx.Client fix for the proxies parameter issue.
+Test to verify the httpx.Client configuration for proxy support.
 
 This test ensures that:
-1. httpx.Client is created without the 'proxies' parameter
+1. httpx.Client is created without deprecated proxy parameters
 2. trust_env=True is set to support HTTP_PROXY/HTTPS_PROXY environment variables
-3. The fix resolves the TypeError: Client.__init__() got an unexpected keyword argument 'proxies'
+3. Agents can be created without proxy parameters (proxy configured via environment)
 """
 
 import sys
 import os
 
 # Add repository root to path for imports
-sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 def test_httpx_client_creation():
-    """Test that httpx.Client is created correctly without proxies parameter."""
+    """Test that httpx.Client is created correctly with environment variable proxy support."""
     print("Testing httpx.Client creation...")
     try:
         from src.utils.llm_client import llm_manager
@@ -31,12 +31,12 @@ def test_httpx_client_creation():
         # Reset singleton for next test
         llm_manager._http_client = None
         
-        # Test 2: Create client with proxy parameter (should warn but not fail)
-        print("  Test 2: Creating client with deprecated proxy parameter...")
-        client = llm_manager.get_http_client(proxy='http://127.0.0.1:7890')
-        assert client is not None, "Client should not be None even with proxy param"
+        # Test 2: Create client without proxy parameter (proxy now via environment variables)
+        print("  Test 2: Creating client without proxy parameter (proxy via env vars)...")
+        client = llm_manager.get_http_client()
+        assert client is not None, "Client should not be None"
         client.close()
-        print("  ✓ Client created successfully (proxy parameter deprecated but handled gracefully)")
+        print("  ✓ Client created successfully (proxy configured via HTTP_PROXY/HTTPS_PROXY env vars)")
         
         # Reset singleton
         llm_manager._http_client = None
@@ -55,13 +55,12 @@ def test_summarizer_agent_creation():
         from src.agents.summarizer.agent import SummarizerAgent
         
         # This was the original failing scenario
-        print("  Creating SummarizerAgent with proxy parameter...")
+        print("  Creating SummarizerAgent without proxy parameter (proxy via env vars)...")
         agent = SummarizerAgent(
             model_name='gpt-3.5-turbo',
             api_key='test-key',
             api_base='https://api.openai.com/v1',
-            temperature=0.3,
-            proxy='http://127.0.0.1:7890'  # This caused the TypeError before
+            temperature=0.3
         )
         
         assert agent is not None, "Agent should not be None"
@@ -89,13 +88,12 @@ def test_nudge_collapse_agent_creation():
     try:
         from src.agents.nudge_collapse.agent import NudgeCollapseAgent
         
-        print("  Creating NudgeCollapseAgent with proxy parameter...")
+        print("  Creating NudgeCollapseAgent without proxy parameter (proxy via env vars)...")
         agent = NudgeCollapseAgent(
             model_name='gpt-3.5-turbo',
             api_key='test-key',
             api_base='https://api.openai.com/v1',
-            temperature=0.7,
-            proxy='http://127.0.0.1:7890'
+            temperature=0.7
         )
         
         assert agent is not None, "Agent should not be None"

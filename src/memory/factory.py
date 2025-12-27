@@ -55,7 +55,6 @@ class EmbeddingConfig:
     model: str = ""
     api_key: Optional[str] = None
     api_base: Optional[str] = None
-    proxy: Optional[str] = None
     custom_params: Dict[str, Any] = field(default_factory=dict)
 
     @classmethod
@@ -65,8 +64,7 @@ class EmbeddingConfig:
             provider=settings.embedding_provider.lower(),
             model=settings.embedding_model,
             api_key=settings.embedding_api_key or settings.openai_api_key,
-            api_base=settings.embedding_api_base or settings.openai_api_base,
-            proxy=settings.embedding_proxy or settings.openai_proxy
+            api_base=settings.embedding_api_base or settings.openai_api_base
         )
 
 
@@ -146,43 +144,17 @@ class OpenAICompatibleProvider(BaseEmbeddingProvider):
         """Create OpenAIEmbeddings instance."""
         self._check_dependencies("langchain_openai")
 
-        # Set proxy environment variables if proxy is configured
-        # This is the recommended way to configure proxies in LangChain
-        proxy_env_vars = {}
-        if config.proxy:
-            proxy_env_vars.update({
-                "HTTP_PROXY": config.proxy,
-                "HTTPS_PROXY": config.proxy,
-                "http_proxy": config.proxy,
-                "https_proxy": config.proxy,
-            })
+        # Prepare constructor arguments
+        kwargs = {
+            "model": config.model,
+            "api_key": config.api_key,
+            "base_url": config.api_base or self.default_base_url,
+        }
 
-        # Temporarily set environment variables for proxy
-        original_env = {}
-        try:
-            for key, value in proxy_env_vars.items():
-                original_env[key] = os.environ.get(key)
-                os.environ[key] = value
+        # Add filtered custom parameters
+        kwargs.update(_filter_embedding_params(config.custom_params))
 
-            # Prepare constructor arguments
-            kwargs = {
-                "model": config.model,
-                "api_key": config.api_key,
-                "base_url": config.api_base or self.default_base_url,
-            }
-
-            # Add filtered custom parameters
-            kwargs.update(_filter_embedding_params(config.custom_params))
-
-            return OpenAIEmbeddings(**kwargs)
-
-        finally:
-            # Restore original environment variables
-            for key, value in original_env.items():
-                if value is None:
-                    os.environ.pop(key, None)
-                else:
-                    os.environ[key] = value
+        return OpenAIEmbeddings(**kwargs)
 
 
 class GoogleGeminiProvider(BaseEmbeddingProvider):

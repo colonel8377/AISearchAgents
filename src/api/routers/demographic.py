@@ -51,8 +51,6 @@ async def evaluate_sentences(
 
             use_cot=request.use_cot,
 
-            execution_mode=request.execution_mode,
-
             use_few_shots=request.use_few_shots,
 
             custom_few_shots=request.custom_few_shots

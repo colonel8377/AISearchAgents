@@ -14,6 +14,7 @@ from ..schemas import (
 from ...agents.claim_atomizer.agent import ClaimAtomizerAgent
 from ...agents.conflict_auditor.agent import ConflictAuditorAgent
 from ...agents.content_extractor.agent import ContentExtractorAgent
+from ...agents.web_opinion_extractor import CoTMode
 from ...config.settings import settings
 from ...utils.logger import get_logger
 
@@ -225,7 +226,7 @@ async def compare_two_claims(
 
         # Create LLM instance
 
-        http_client = llm_manager.get_http_client(proxy=settings.openai_proxy)
+        http_client = llm_manager.get_http_client()
 
         llm = ChatOpenAI(
 
@@ -400,7 +401,8 @@ async def check_summary_url_consistency(
 
         result = await _check_summary_vs_url_consistency(
 
-            request.summary, request.url, enable_deep_analysis=request.enable_deep_analysis, similarity_threshold=request.similarity_threshold
+            request.summary, request.url, enable_deep_analysis=request.enable_deep_analysis, similarity_threshold=request.similarity_threshold,
+            use_cot_atomization=request.use_cot_atomization, use_cot_audit=request.use_cot_audit
 
         )
 
@@ -475,9 +477,7 @@ async def complete_academic_analysis(
 
                 api_base=settings.openai_api_base,
 
-                temperature=settings.agent_temperature,
-
-                proxy=settings.openai_proxy
+                temperature=settings.agent_temperature
 
             )
 
@@ -545,11 +545,7 @@ async def complete_academic_analysis(
 
                 api_base=settings.openai_api_base,
 
-                temperature=settings.agent_temperature,
-
-                proxy=settings.openai_proxy,
-
-                execution_mode=settings.default_execution_mode
+                temperature=settings.agent_temperature
 
             )
 
@@ -573,9 +569,7 @@ async def complete_academic_analysis(
 
                 data={
 
-                    "atomic_claims_count": len(atomization_result.atomic_claims),
-
-                    "execution_mode": atomization_result.execution_mode
+                    "atomic_claims_count": len(atomization_result.atomic_claims)
 
                 },
 
@@ -665,11 +659,7 @@ async def complete_academic_analysis(
 
                 api_base=settings.openai_api_base,
 
-                temperature=settings.agent_temperature,
-
-                proxy=settings.openai_proxy,
-
-                execution_mode=settings.default_execution_mode
+                temperature=settings.agent_temperature
 
             )
 
@@ -695,9 +685,7 @@ async def complete_academic_analysis(
 
                     "supported_claims": audit_result.summary_stats.get("supported", 0),
 
-                    "contradicted_claims": audit_result.summary_stats.get("contradicted", 0),
-
-                    "execution_mode": audit_result.execution_mode
+                    "contradicted_claims": audit_result.summary_stats.get("contradicted", 0)
 
                 },
 
@@ -753,7 +741,8 @@ async def complete_academic_analysis(
 
     )
 
-async def _check_summary_vs_url_consistency(summary: str, url: str, enable_deep_analysis: bool = True, similarity_threshold: float = 0.2) -> Dict[str, Any]:
+async def _check_summary_vs_url_consistency(summary: str, url: str, enable_deep_analysis: bool = True, similarity_threshold: float = 0.2,
+                                        use_cot_atomization: CoTMode = CoTMode.NO_CHAIN, use_cot_audit: CoTMode = CoTMode.NO_CHAIN) -> Dict[str, Any]:
     """Check consistency between website summary and full content.
     Atomize both summary and URL content into claims, then compare each summary claim
 
@@ -795,9 +784,7 @@ async def _check_summary_vs_url_consistency(summary: str, url: str, enable_deep_
 
             api_base=settings.openai_api_base,
 
-            temperature=settings.agent_temperature,
-
-            proxy=settings.openai_proxy
+            temperature=settings.agent_temperature
 
         )
 
@@ -817,13 +804,11 @@ async def _check_summary_vs_url_consistency(summary: str, url: str, enable_deep_
 
             api_base=settings.openai_api_base,
 
-            temperature=settings.agent_temperature,
-
-            proxy=settings.openai_proxy
+            temperature=settings.agent_temperature
 
         )
 
-        summary_atomization = summary_atomizer.atomize_text(summary, use_cot=True)
+        summary_atomization = summary_atomizer.atomize_text(summary, use_cot=use_cot_atomization)
 
         # Step 3: Atomize URL content into claims
 
@@ -835,13 +820,11 @@ async def _check_summary_vs_url_consistency(summary: str, url: str, enable_deep_
 
                 api_base=settings.openai_api_base,
 
-                temperature=settings.agent_temperature,
-
-                proxy=settings.openai_proxy
+                temperature=settings.agent_temperature
 
             )
 
-        url_atomization = url_atomizer.atomize_text(content_result.main_body, use_cot=True, split_into_paragraphs=True)
+        url_atomization = url_atomizer.atomize_text(content_result.main_body, use_cot=use_cot_atomization, split_into_paragraphs=True)
 
         # Store claims info with full details
 
@@ -871,7 +854,7 @@ async def _check_summary_vs_url_consistency(summary: str, url: str, enable_deep_
 
         # Create LLM instance for comparisons
 
-        http_client = llm_manager.get_http_client(proxy=settings.openai_proxy)
+        http_client = llm_manager.get_http_client()
 
         llm = ChatOpenAI(
 

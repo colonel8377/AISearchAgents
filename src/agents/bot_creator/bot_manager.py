@@ -22,7 +22,6 @@ class BotManager:
             api_key=settings.openai_api_key,
             api_base=settings.openai_api_base,
             temperature=settings.agent_temperature,
-            proxy=settings.openai_proxy,
             persona_mode="system_prompt"
         )
 

@@ -139,7 +139,6 @@ Based on this persona, create a structured bot configuration with:
         api_base: Optional[str] = None,
         temperature: float = 0.5,
         vector_store: Optional[Any] = None,
-        proxy: Optional[str] = None,
         persona_mode: PersonaMode = "system_prompt"
     ):
         """
@@ -151,7 +150,6 @@ Based on this persona, create a structured bot configuration with:
             api_base: Base URL for the API
             temperature: Temperature for LLM responses
             vector_store: Optional vector store for memory
-            proxy: Optional HTTP proxy for API requests
             persona_mode: Mode for handling persona - 'system_prompt' or 'user_instruction'
         """
         model_name = model_name or settings.openai_model
@@ -159,7 +157,7 @@ Based on this persona, create a structured bot configuration with:
         
         # Use shared HTTP client for better connection pooling and performance
         # Configure proxy on the http_client itself, not via openai_proxy parameter
-        http_client = llm_manager.get_http_client(proxy=proxy)
+        http_client = llm_manager.get_http_client()
         
         self.llm = ChatOpenAI(
             model_name=model_name,

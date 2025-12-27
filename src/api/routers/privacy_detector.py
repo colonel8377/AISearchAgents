@@ -6,7 +6,8 @@ from fastapi import APIRouter, Depends, HTTPException, Query
 
 from ..common import get_api_key
 from ..schemas import (
-    DetectPrivacyRequest, PrivacyDetectionResponse
+    DetectPrivacyRequest, PrivacyDetectionResponse, PrivacyLeakItem, EnumResponse,
+    _convert_privacy_type_enum, _convert_privacy_severity_enum, CoTMode
 )
 from ...agents.privacy_detector.agent import PrivacyDetectorAgent
 from ...utils.logger import get_logger
@@ -24,15 +25,15 @@ async def detect_privacy_leaks(
 
     """
 
-    Detect privacy leaks in conversation records.
+    Detect privacy leaks in user messages.
 
-    This is a stateless operation that analyzes conversation records for privacy violations
+    This is a stateless operation that analyzes user messages for privacy violations
 
     without requiring an agent instance.
 
     Args:
 
-        request: Privacy detection request with conversation records
+        request: Privacy detection request with user messages
 
         _api_key: Authentication dependency (value not used, required for auth check)
 
@@ -43,23 +44,42 @@ async def detect_privacy_leaks(
     """
 
     try:
+        # Process conversation records to include account_id if provided
+        processed_records = []
+        for record in request.conversation_records:
+            processed_record = dict(record)  # Copy the record
+            if request.account_id and 'account_id' not in processed_record:
+                processed_record['account_id'] = request.account_id
+            processed_records.append(processed_record)
 
         # Create a temporary agent instance for stateless detection
-
         agent = PrivacyDetectorAgent()
 
         result = await agent.detect_privacy_leaks(
-
-            conversation_records=request.conversation_records,
-
-            execution_mode=request.execution_mode,
-
+            conversation_records=processed_records,
+            use_cot=request.use_cot,
             use_few_shots=request.use_few_shots
-
         )
 
-        # Convert to response model
+        # Convert enum strings to EnumResponse objects
+        if result.get("privacy_leaks"):
+            converted_leaks = []
+            for leak in result["privacy_leaks"]:
+                converted_leak = {
+                    "privacy_type": _convert_privacy_type_enum(leak["privacy_type"]),
+                    "severity": _convert_privacy_severity_enum(leak["severity"]),
+                    "reasoning": leak["reasoning"],
+                    "detected_items": leak["detected_items"],
+                    "confidence": leak.get("confidence", 0.5)
+                }
+                converted_leaks.append(PrivacyLeakItem(**converted_leak))
+            result["privacy_leaks"] = converted_leaks
 
+        # Convert overall severity
+        if "overall_severity" in result:
+            result["overall_severity"] = _convert_privacy_severity_enum(result["overall_severity"])
+
+        # Convert to response model
         return PrivacyDetectionResponse(**result)
 
     except ValueError as e:
@@ -104,6 +124,24 @@ async def get_privacy_detection_result(
         detection_result = result["detection_result"]
         detection_result["detection_id"] = result["detection_id"]
 
+        # Convert enum strings to EnumResponse objects
+        if detection_result.get("privacy_leaks"):
+            converted_leaks = []
+            for leak in detection_result["privacy_leaks"]:
+                converted_leak = {
+                    "privacy_type": _convert_privacy_type_enum(leak["privacy_type"]),
+                    "severity": _convert_privacy_severity_enum(leak["severity"]),
+                    "reasoning": leak["reasoning"],
+                    "detected_items": leak["detected_items"],
+                    "confidence": leak.get("confidence", 0.5)
+                }
+                converted_leaks.append(PrivacyLeakItem(**converted_leak))
+            detection_result["privacy_leaks"] = converted_leaks
+
+            # Convert overall severity
+            if "overall_severity" in detection_result:
+                detection_result["overall_severity"] = _convert_privacy_severity_enum(detection_result["overall_severity"])
+
         return PrivacyDetectionResponse(**detection_result)
 
     except HTTPException:
@@ -138,6 +176,25 @@ async def get_privacy_detection_results(
             # Merge detection_result with metadata
             detection_result = result["detection_result"]
             detection_result["detection_id"] = result["detection_id"]
+
+            # Convert enum strings to EnumResponse objects
+            if detection_result.get("privacy_leaks"):
+                converted_leaks = []
+                for leak in detection_result["privacy_leaks"]:
+                    converted_leak = {
+                        "privacy_type": _convert_privacy_type_enum(leak["privacy_type"]),
+                        "severity": _convert_privacy_severity_enum(leak["severity"]),
+                        "reasoning": leak["reasoning"],
+                        "detected_items": leak["detected_items"],
+                        "confidence": leak.get("confidence", 0.5)
+                    }
+                    converted_leaks.append(PrivacyLeakItem(**converted_leak))
+                detection_result["privacy_leaks"] = converted_leaks
+
+            # Convert overall severity
+            if "overall_severity" in detection_result:
+                detection_result["overall_severity"] = _convert_privacy_severity_enum(detection_result["overall_severity"])
+
             response_results.append(PrivacyDetectionResponse(**detection_result))
 
         return response_results
@@ -149,17 +206,21 @@ async def get_privacy_detection_results(
 
 @router.get("/stats")
 async def get_privacy_detection_stats(
+    account_id: Optional[str] = Query(None, description="Optional account ID to filter statistics by"),
     _api_key: str = Depends(get_api_key)
 ):
     """
-    Get statistics about privacy detection results.
+    Get comprehensive statistics about privacy detection results.
+
+    Args:
+        account_id: Optional account ID to filter results by
 
     Returns:
-        Statistics about privacy detections
+        Comprehensive statistics about privacy detections
     """
     try:
         database = get_database()
-        stats = database.get_privacy_detection_stats()
+        stats = database.get_privacy_detection_stats(account_id=account_id)
 
         return stats
 

@@ -71,9 +71,7 @@ async def extract_content(
 
             api_base=settings.openai_api_base,
 
-            temperature=settings.agent_temperature,
-
-            proxy=settings.openai_proxy
+            temperature=settings.agent_temperature
 
         )
 
@@ -109,9 +107,7 @@ async def extract_content(
 
                 api_base=settings.openai_api_base,
 
-                temperature=settings.agent_temperature,
-
-                proxy=settings.openai_proxy
+                temperature=settings.agent_temperature
 
             )
 
@@ -216,9 +212,7 @@ async def atomize_claims(
 
             api_base=settings.openai_api_base,
 
-            temperature=settings.agent_temperature,
-
-            proxy=settings.openai_proxy
+            temperature=settings.agent_temperature
 
         )
 
@@ -271,8 +265,6 @@ async def atomize_claims(
             paragraphs=paragraphs,        # New: claims grouped by paragraphs
 
             original_text=result.original_text,
-
-            execution_mode=result.execution_mode,
 
             metadata=result.metadata
 

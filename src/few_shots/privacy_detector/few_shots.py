@@ -1,11 +1,10 @@
 """Optimized few-shot examples for Privacy Detector Agent."""
 
-PRIVACY_DETECTOR_FEW_SHOTS = """Here are examples of privacy leak detection in conversation records:
+PRIVACY_DETECTOR_FEW_SHOTS = """Here are examples of systematic privacy leak detection in user messages:
 
-EXAMPLE 1 - Personal Identifiers Leak:
-Conversation Records:
-[1] USER: Hi, I'm John Smith, born on March 15, 1985. My SSN is 123-45-6789.
-[2] ASSISTANT: Hello John! I'll help you with your request.
+EXAMPLE 1 - Comprehensive Identity Leak:
+User Messages:
+[1] User: Hi, I'm John Smith, born on March 15, 1985. My SSN is 123-45-6789 and I live at 123 Main Street, Springfield, IL 62701. You can reach me at (555)123-4567 or john.smith@email.com.
 
 Analysis Result:
 {
@@ -13,41 +12,89 @@ Analysis Result:
   "privacy_leaks": [
     {
       "privacy_type": "personal_identifiers",
-      "severity": "high",
-      "reasoning": "The conversation contains full name (John Smith), date of birth (March 15, 1985), and Social Security Number (123-45-6789). This combination enables identity theft and fraud.",
-      "detected_items": ["Full name: John Smith", "Date of birth: March 15, 1985", "SSN: 123-45-6789"]
+      "severity": "critical",
+      "reasoning": "Complete identity package: full name, date of birth, SSN, full address, phone, and email. This enables comprehensive identity theft, fraud, and stalking.",
+      "detected_items": ["Full name: John Smith", "DOB: March 15, 1985", "SSN: 123-45-6789", "Address: 123 Main Street, Springfield, IL 62701", "Phone: (555)123-4567", "Email: john.smith@email.com"]
     }
   ],
-  "overall_severity": "high",
-  "reasoning": "Multiple personal identifiers were exposed that could enable identity theft"
+  "overall_severity": "critical",
+  "reasoning": "Complete identity compromise with all major identifier categories exposed"
 }
 
-EXAMPLE 2 - Contact Information Leak:
-Conversation Records:
-[1] USER: You can reach me at 123 Main Street, Springfield, IL 62701. My phone is (555) 123-4567 and email is john.smith@email.com.
-[2] ASSISTANT: Got your contact details. I'll send the information there.
+EXAMPLE 2 - Technical Credentials Leak:
+User Messages:
+[1] User: My API key is sk-1234567890abcdef and the database password is 'Admin2024!'. The JWT token is eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9...
 
 Analysis Result:
 {
   "privacy_detected": true,
   "privacy_leaks": [
     {
-      "privacy_type": "contact_info",
+      "privacy_type": "api_keys_tokens",
+      "severity": "critical",
+      "reasoning": "Active API key and database credentials exposed. This enables unauthorized system access, data breaches, and potential ransomware attacks.",
+      "detected_items": ["API Key: sk-1234567890abcdef", "Database Password: Admin2024!", "JWT Token: eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9..."]
+    }
+  ],
+  "overall_severity": "critical",
+  "reasoning": "System access credentials exposed enabling unauthorized infrastructure access"
+}
+
+EXAMPLE 3 - Pattern-Based Detection:
+User Messages:
+[1] User: I just got a new credit card ending in 4567 and my bank account is 123456789012 with routing 021000021. Also, my phone is 555.123.4567.
+
+Analysis Result:
+{
+  "privacy_detected": true,
+  "privacy_leaks": [
+    {
+      "privacy_type": "financial_accounts",
       "severity": "high",
-      "reasoning": "Complete physical address, phone number, and email address provided. This enables unwanted contact, spam, or physical stalking.",
-      "detected_items": ["Address: 123 Main Street, Springfield, IL 62701", "Phone: (555) 123-4567", "Email: john.smith@email.com"]
+      "reasoning": "Bank account number, routing number, and partial credit card information exposed. Enables financial fraud and unauthorized transactions.",
+      "detected_items": ["Bank Account: 123456789012", "Routing Number: 021000021", "Credit Card (partial): *4567"]
+    },
+    {
+      "privacy_type": "contact_info",
+      "severity": "medium",
+      "reasoning": "Phone number exposed in financial context, potentially enabling fraud verification or contact.",
+      "detected_items": ["Phone: 555.123.4567"]
     }
   ],
   "overall_severity": "high",
-  "reasoning": "Complete contact information was exposed enabling unwanted communication"
+  "reasoning": "Financial account details exposed enabling direct monetary loss"
 }
 
-EXAMPLE 3 - Financial Accounts Leak:
-Conversation Records:
-[1] USER: My bank account number is 123456789012 and routing number is 021000021. Credit card ends with 4567.
-[2] ASSISTANT: I'll process your banking information securely.
+EXAMPLE 4 - Contextual Risk Assessment:
+User Messages:
+[1] User: As a patient, my medical record number is MRN-12345 and I've been diagnosed with diabetes. My doctor's name is Dr. Johnson at City Hospital.
 
 Analysis Result:
+{
+  "privacy_detected": true,
+  "privacy_leaks": [
+    {
+      "privacy_type": "health_records",
+      "severity": "high",
+      "reasoning": "Medical diagnosis and doctor information exposed in healthcare context. While some sharing may be necessary, this creates privacy risks for medical identity theft.",
+      "detected_items": ["Diagnosis: diabetes", "Doctor: Dr. Johnson", "Hospital: City Hospital", "MRN: MRN-12345"]
+    }
+  ],
+  "overall_severity": "high",
+  "reasoning": "Medical information exposed in healthcare communication context"
+}
+
+EXAMPLE 5 - No Privacy Risk:
+User Messages:
+[1] User: I like sunny weather and prefer coffee over tea. What's the weather like today?
+
+Analysis Result:
+{
+  "privacy_detected": false,
+  "privacy_leaks": [],
+  "overall_severity": "none",
+  "reasoning": "Message contains only general preferences and weather inquiry. No sensitive personal information detected."
+}
 {
   "privacy_detected": true,
   "privacy_leaks": [
@@ -63,9 +110,8 @@ Analysis Result:
 }
 
 EXAMPLE 4 - Authentication Credentials Leak:
-Conversation Records:
-[1] USER: My password is 'Summer2024!' and the API key is sk-1234567890abcdef. The 2FA code is 123456.
-[2] ASSISTANT: Your credentials are now configured.
+User Messages:
+[1] User: My password is 'Summer2024!' and the API key is sk-1234567890abcdef. The 2FA code is 123456.
 
 Analysis Result:
 {
@@ -83,9 +129,9 @@ Analysis Result:
 }
 
 EXAMPLE 5 - Medical History Leak:
-Conversation Records:
-[1] USER: I've had diabetes since 2015, had bypass surgery in 2018, and I'm allergic to penicillin.
-[2] ASSISTANT: I understand your medical background. Here's some relevant information.
+User Messages:
+[1] User: I've had diabetes since 2015, had bypass surgery in 2018, and I'm allergic to penicillin.
+[2] User: I understand your medical background. Here's some relevant information.
 
 Analysis Result:
 {
@@ -103,9 +149,9 @@ Analysis Result:
 }
 
 EXAMPLE 6 - Precise Location Leak:
-Conversation Records:
-[1] USER: I'm currently at coordinates 40.7128° N, 74.0060° W, which is exactly Times Square in Manhattan.
-[2] ASSISTANT: That's a very specific location! What can I help you with?
+User Messages:
+[1] User: I'm currently at coordinates 40.7128° N, 74.0060° W, which is exactly Times Square in Manhattan.
+[2] User: That's a very specific location! What can I help you with?
 
 Analysis Result:
 {
@@ -123,9 +169,9 @@ Analysis Result:
 }
 
 EXAMPLE 7 - Email Content Leak:
-Conversation Records:
-[1] USER: I just received an email from my boss about the company layoffs next month. It says 20 positions will be cut.
-[2] ASSISTANT: That sounds like sensitive company information. You should be careful sharing that.
+User Messages:
+[1] User: I just received an email from my boss about the company layoffs next month. It says 20 positions will be cut.
+[2] User: That sounds like sensitive company information. You should be careful sharing that.
 
 Analysis Result:
 {
@@ -143,9 +189,9 @@ Analysis Result:
 }
 
 EXAMPLE 8 - No Privacy Leak:
-Conversation Records:
-[1] USER: What's the weather like today?
-[2] ASSISTANT: It's sunny and 75 degrees. Would you like me to check another location?
+User Messages:
+[1] User: What's the weather like today?
+[2] User: It's sunny and 75 degrees. Would you like me to check another location?
 
 Analysis Result:
 {
@@ -156,9 +202,9 @@ Analysis Result:
 }
 
 EXAMPLE 9 - Biometric Data Leak:
-Conversation Records:
-[1] USER: My fingerprint scan registered successfully. The system captured all ten fingerprints and facial recognition data.
-[2] ASSISTANT: Your biometric registration is complete.
+User Messages:
+[1] User: My fingerprint scan registered successfully. The system captured all ten fingerprints and facial recognition data.
+[2] User: Your biometric registration is complete.
 
 Analysis Result:
 {
@@ -176,9 +222,9 @@ Analysis Result:
 }
 
 EXAMPLE 10 - System Access Leak:
-Conversation Records:
-[1] USER: I have admin access to the database with username 'db_admin' and the connection string is mongodb://admin:secret123@localhost:27017/company_db
-[2] ASSISTANT: I'll help you troubleshoot the database connection.
+User Messages:
+[1] User: I have admin access to the database with username 'db_admin' and the connection string is mongodb://admin:secret123@localhost:27017/company_db
+[2] User: I'll help you troubleshoot the database connection.
 
 Analysis Result:
 {
@@ -196,9 +242,9 @@ Analysis Result:
 }
 
 EXAMPLE 11 - Government IDs Leak:
-Conversation Records:
-[1] USER: My passport number is P123456789 and driver's license is D987654321. ID card expires in 2026.
-[2] ASSISTANT: Your identification documents are verified.
+User Messages:
+[1] User: My passport number is P123456789 and driver's license is D987654321. ID card expires in 2026.
+[2] User: Your identification documents are verified.
 
 Analysis Result:
 {
@@ -216,9 +262,9 @@ Analysis Result:
 }
 
 EXAMPLE 12 - API Keys and Tokens Leak:
-Conversation Records:
-[1] USER: The JWT token is eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9... and the refresh token is abc123def456.
-[2] ASSISTANT: Your authentication tokens are set up.
+User Messages:
+[1] User: The JWT token is eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9... and the refresh token is abc123def456.
+[2] User: Your authentication tokens are set up.
 
 Analysis Result:
 {

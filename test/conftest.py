@@ -12,3 +12,5 @@ from src.api.main import app
 def client():
     """FastAPI test client fixture."""
     return TestClient(app)
+
+

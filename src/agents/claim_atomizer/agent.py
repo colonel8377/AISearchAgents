@@ -6,13 +6,14 @@ atomic claims, each containing only one factual point.
 
 import json
 import re
-from typing import Optional, List, Dict, Any
+from typing import Optional, List, Dict, Any, Union
 from dataclasses import dataclass
 
 from langchain_core.messages import SystemMessage, HumanMessage
 from langchain_openai import ChatOpenAI
 
 from ...config.settings import settings, ExecutionMode
+from ...agents.web_opinion_extractor import CoTMode
 from ...utils.llm_client import llm_manager
 from ...utils.logger import get_logger
 from ...utils.smart_memory import SmartMemory
@@ -127,7 +128,6 @@ Then list claims:
         api_key: Optional[str] = None,
         api_base: Optional[str] = None,
         temperature: float = 0.1,
-        proxy: Optional[str] = None,
         execution_mode: Optional[ExecutionMode] = None
     ):
         """
@@ -138,14 +138,13 @@ Then list claims:
             api_key: OpenAI API key or compatible API key
             api_base: Base URL for the API
             temperature: Temperature for LLM responses
-            proxy: Optional HTTP proxy for API requests
             execution_mode: Execution mode for CoT ('chain_online', 'chain_local', 'no_chain')
         """
         model_name = model_name or settings.openai_model
         logger.info(f"Initializing ClaimAtomizerAgent: model={model_name}, temperature={temperature}, execution_mode={execution_mode}")
 
         # Use shared HTTP client for LLM
-        http_client = llm_manager.get_http_client(proxy=proxy)
+        http_client = llm_manager.get_http_client()
 
         self.llm = ChatOpenAI(
             model_name=model_name,
@@ -165,7 +164,7 @@ Then list claims:
         logger.debug(f"ClaimAtomizerAgent initialized successfully with execution_mode={self.execution_mode}")
 
     @cached()
-    def _atomize_claims_with_llm(self, text: str, use_cot: bool = False, custom_few_shots: Optional[str] = None) -> List[Dict[str, Any]]:
+    def _atomize_claims_with_llm(self, text: str, use_cot: Union[CoTMode, bool] = CoTMode.NO_CHAIN, custom_few_shots: Optional[str] = None) -> List[Dict[str, Any]]:
         """
         Use LLM to decompose text into atomic claims.
 
@@ -177,10 +176,16 @@ Then list claims:
         Returns:
             List of claim dictionaries
         """
-        logger.debug(f"Atomizing claims from text ({len(text)} chars) with CoT={use_cot}")
+        # Determine effective CoT mode
+        if isinstance(use_cot, CoTMode):
+            effective_cot = use_cot.value in ("chain_local", "chain_online")
+        else:
+            effective_cot = bool(use_cot)
+
+        logger.debug(f"Atomizing claims from text ({len(text)} chars) with CoT={effective_cot}")
 
         # Select system prompt based on CoT mode
-        if use_cot:
+        if effective_cot:
             system_prompt = self.SYSTEM_PROMPT_COT
         else:
             system_prompt = self.SYSTEM_PROMPT
@@ -378,7 +383,7 @@ Return each atomic claim in the format:
     def atomize_text(
         self,
         text: str,
-        use_cot: bool = False,
+        use_cot: Union[CoTMode, bool] = CoTMode.NO_CHAIN,
         custom_few_shots: Optional[str] = None,
         split_into_paragraphs: bool = False
     ) -> ClaimAtomizationResult:

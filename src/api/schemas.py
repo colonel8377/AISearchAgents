@@ -1,11 +1,17 @@
 """API request and response schemas."""
 
 from typing import List, Optional, Dict, Any, Union
-from pydantic import BaseModel, Field, model_validator
+from pydantic import BaseModel, Field, model_validator, field_validator
 
-from ..agents.web_opinion_extractor import BiasDistribution, AtomicOpinion
+from ..agents.web_opinion_extractor import BiasDistribution, AtomicOpinion, CoTMode
 from ..config.settings import ExecutionMode
 from ..debate.schemas import PersonaConfig, AgentMetadata, RoundReasoningResponse, RoundVotingResponse
+
+
+class EnumResponse(BaseModel):
+    """Base model for enum responses that include both string and numeric values."""
+    value: str = Field(..., description="The enum string value")
+    code: int = Field(..., description="The enum numeric code")
 
 class CreateAgentRequest(BaseModel):
     """Request model for creating a new agent instance."""
@@ -29,7 +35,7 @@ class CreateAgentRequest(BaseModel):
 class AgentIdResponse(BaseModel):
     """Response model for agent creation."""
     agent_id: str
-    agent_type: str
+    agent_type: EnumResponse
     status: str
     message: str
     persona_mode: Optional[str] = None
@@ -90,10 +96,9 @@ class EvaluateSentencesRequest(BaseModel):
     """Request model for evaluating sentences."""
     demography_json: Dict[str, Any] = Field(..., description="Demographic profile as JSON object")
     sentences: List[str] = Field(..., description="List of sentences to evaluate")
-    use_cot: bool = Field(default=False, description="Whether to use Chain of Thought reasoning (default: False)")
-    execution_mode: Optional[ExecutionMode] = Field(
-        default=None,
-        description="Execution mode for CoT: 'chain_online', 'chain_local', or 'no_chain'. If provided, overrides use_cot parameter."
+    use_cot: Union[CoTMode, str, int] = Field(
+        default=CoTMode.NO_CHAIN,
+        description="Chain of Thought mode: 'chain_online' (0), 'chain_local' (1), 'no_chain' (2), or CoTMode enum. Default: no_chain"
     )
     use_few_shots: bool = Field(
         default=True,
@@ -103,6 +108,17 @@ class EvaluateSentencesRequest(BaseModel):
         default=None,
         description="Optional custom few-shot examples to use instead of defaults. If provided, use_few_shots must be True."
     )
+
+    @field_validator('use_cot', mode='before')
+    @classmethod
+    def validate_use_cot(cls, v):
+        """Convert various input formats to CoTMode enum."""
+        if isinstance(v, CoTMode):
+            return v
+        try:
+            return CoTMode.from_code_or_value(v)
+        except ValueError as e:
+            raise ValueError(f"Invalid use_cot value: {e}")
     
     @model_validator(mode='after')
     def validate_custom_few_shots(self):
@@ -128,7 +144,7 @@ class EvaluateSentencesResponse(BaseModel):
 class AgentStatusResponse(BaseModel):
     """Response model for agent status."""
     agent_id: str
-    agent_type: str
+    agent_type: EnumResponse
     status: str
     current_turn: Optional[int] = None
     additional_info: Optional[Dict[str, Any]] = None
@@ -137,14 +153,25 @@ class AgentStatusResponse(BaseModel):
 class SummarizeRequest(BaseModel):
     """Request model for summarizing conversations."""
     conversation_records: List[Dict[str, str]] = Field(..., description="List of conversation records to summarize")
-    execution_mode: Optional[ExecutionMode] = Field(
-        default=None,
-        description="Execution mode: 'chain_online' (LLM chains), 'chain_local' (local decomposition), 'no_chain' (pure prompt). Defaults to system setting."
+    use_cot: Union[CoTMode, str, int] = Field(
+        default=CoTMode.CHAIN_LOCAL,
+        description="Chain of Thought mode: 'chain_online' (0), 'chain_local' (1), 'no_chain' (2), or CoTMode enum. Default: chain_local"
     )
     use_few_shots: bool = Field(
         default=True,
         description="Whether to use few-shot examples in the prompt (default: True)"
     )
+
+    @field_validator('use_cot', mode='before')
+    @classmethod
+    def validate_use_cot(cls, v):
+        """Convert various input formats to CoTMode enum."""
+        if isinstance(v, CoTMode):
+            return v
+        try:
+            return CoTMode.from_code_or_value(v)
+        except ValueError as e:
+            raise ValueError(f"Invalid use_cot value: {e}")
 
 
 class SummaryResponse(BaseModel):
@@ -153,17 +180,12 @@ class SummaryResponse(BaseModel):
     conversation_length: int
     original_length: int
     truncated: bool
-    execution_mode: str
     metadata: Dict[str, Any]
 
 
 class CreateBotRequest(BaseModel):
     """Request model for creating a bot."""
     bot_name: Optional[str] = Field(default=None, description="Optional name for the bot")
-    execution_mode: Optional[ExecutionMode] = Field(
-        default=None,
-        description="Execution mode: 'chain_online' (LLM chains), 'chain_local' (local decomposition), 'no_chain' (pure prompt). Defaults to system setting."
-    )
     use_few_shots: bool = Field(
         default=True,
         description="Whether to use few-shot examples in the prompt (default: True)"
@@ -176,7 +198,6 @@ class BotCreationResponse(BaseModel):
     bot_name: str
     status: str
     persona_mode: Optional[str] = None
-    execution_mode: Optional[str] = None
     bot_configuration: str
     message: str
 
@@ -195,10 +216,24 @@ class ExtractContentRequest(BaseModel):
     title: Optional[str] = Field(default=None, description="Optional title (used when text is provided)")
     summary: Optional[str] = Field(default=None, description="Optional summary text for claim-level comparison with URL content")
     use_llm: bool = Field(default=False, description="Whether to use LLM for content refinement")
-    use_cot: bool = Field(default=False, description="Whether to use Chain of Thought reasoning (only when use_llm=True)")
+    use_cot: Union[CoTMode, str, int] = Field(
+        default=CoTMode.NO_CHAIN,
+        description="Chain of Thought mode: 'chain_online' (0), 'chain_local' (1), 'no_chain' (2), or CoTMode enum. Default: no_chain (only when use_llm=True)"
+    )
     use_few_shots: bool = Field(default=True, description="Whether to use few-shot examples for claim comparison (only when compare_claims=True)")
     custom_few_shots: Optional[str] = Field(default=None, description="Optional custom few-shot examples (only when use_llm=True)")
     compare_claims: bool = Field(default=False, description="Whether to perform claim-level comparison (requires summary to be provided)")
+
+    @field_validator('use_cot', mode='before')
+    @classmethod
+    def validate_use_cot(cls, v):
+        """Convert various input formats to CoTMode enum."""
+        if isinstance(v, CoTMode):
+            return v
+        try:
+            return CoTMode.from_code_or_value(v)
+        except ValueError as e:
+            raise ValueError(f"Invalid use_cot value: {e}")
 
     @model_validator(mode='after')
     def validate_input_source(self):
@@ -232,7 +267,7 @@ class ClaimComparisonResult(BaseModel):
     summary_claim_text: str
     url_claim_id: Optional[str] = Field(default=None, description="ID of the best matching URL claim (if found)")
     url_claim_text: Optional[str] = Field(default=None, description="Text of the best matching URL claim (if found)")
-    relationship: str = Field(..., description="Overall relationship: 'agree' (URL agrees/supports), 'disagree' (URL disagrees/contradicts), 'missing' (no relevant claim)")
+    relationship: EnumResponse = Field(..., description="Overall relationship with both string value and numeric code: 'agree' (0), 'disagree' (1), 'missing' (2)")
     similarity_score: Optional[float] = Field(default=None, ge=0.0, le=1.0, description="Semantic similarity score (0.0 to 1.0), only for agree/disagree")
     reasoning: str = Field(..., description="Detailed explanation: specific aspects of agreement/disagreement, why this relationship was determined, what evidence supports this conclusion")
 
@@ -271,9 +306,23 @@ class ContentExtractionResponse(BaseModel):
 class AtomizeClaimsRequest(BaseModel):
     """Request model for claim atomization."""
     text: str = Field(..., description="Text snippet to decompose into atomic claims")
-    use_cot: bool = Field(default=False, description="Whether to use Chain of Thought reasoning")
+    use_cot: Union[CoTMode, str, int] = Field(
+        default=CoTMode.NO_CHAIN,
+        description="Chain of Thought mode: 'chain_online' (0), 'chain_local' (1), 'no_chain' (2), or CoTMode enum. Default: no_chain"
+    )
     custom_few_shots: Optional[str] = Field(default=None, description="Optional custom few-shot examples")
     split_into_paragraphs: bool = Field(default=False, description="Whether to split text into paragraphs before atomization")
+
+    @field_validator('use_cot', mode='before')
+    @classmethod
+    def validate_use_cot(cls, v):
+        """Convert various input formats to CoTMode enum."""
+        if isinstance(v, CoTMode):
+            return v
+        try:
+            return CoTMode.from_code_or_value(v)
+        except ValueError as e:
+            raise ValueError(f"Invalid use_cot value: {e}")
 
 
 class ParagraphClaimsResponse(BaseModel):
@@ -288,7 +337,6 @@ class ClaimAtomizationResponse(BaseModel):
     atomic_claims: List[AtomicClaimResponse]  # Flat list for backward compatibility
     paragraphs: List[ParagraphClaimsResponse]  # New: claims grouped by paragraphs
     original_text: str
-    execution_mode: str
     metadata: Optional[Dict[str, Any]] = None
 
 
@@ -326,8 +374,22 @@ class EvidenceLocationResponse(BaseModel):
 class AuditConflictsRequest(BaseModel):
     """Request model for conflict auditing."""
     claim_evidences: List[Dict[str, Any]] = Field(..., description="List of claim-evidence pairs")
-    use_cot: bool = Field(default=False, description="Whether to use Chain of Thought reasoning")
+    use_cot: Union[CoTMode, str, int] = Field(
+        default=CoTMode.NO_CHAIN,
+        description="Chain of Thought mode: 'chain_online' (0), 'chain_local' (1), 'no_chain' (2), or CoTMode enum. Default: no_chain"
+    )
     custom_few_shots: Optional[str] = Field(default=None, description="Optional custom few-shot examples")
+
+    @field_validator('use_cot', mode='before')
+    @classmethod
+    def validate_use_cot(cls, v):
+        """Convert various input formats to CoTMode enum."""
+        if isinstance(v, CoTMode):
+            return v
+        try:
+            return CoTMode.from_code_or_value(v)
+        except ValueError as e:
+            raise ValueError(f"Invalid use_cot value: {e}")
 
 
 class ConflictAnalysisResponse(BaseModel):
@@ -335,7 +397,7 @@ class ConflictAnalysisResponse(BaseModel):
     claim_id: str
     claim_text: str
     evidence_quotes: List[str]
-    verdict: str
+    verdict: EnumResponse
     conflict_type: str
     analysis: str
     confidence: float
@@ -345,7 +407,6 @@ class ConflictAuditResponse(BaseModel):
     """Response model for conflict auditing."""
     conflict_analyses: List[ConflictAnalysisResponse]
     summary_stats: Dict[str, Any]
-    execution_mode: str
     metadata: Optional[Dict[str, Any]] = None
 
 
@@ -468,7 +529,6 @@ class InitDebateResponse(BaseModel):
     agents: List[AgentMetadata]
     topic: str
     max_rounds: int = Field(default=10, description="Maximum number of debate rounds")
-    execution_mode: Optional[str] = Field(default=None, description="Persona generation mode used")
 
 
 class StabilityCheckRequest(BaseModel):
@@ -524,10 +584,6 @@ class GeneratePersonasRequest(BaseModel):
     context: str = Field(default="", description="Additional context for persona generation")
     num_agents: int = Field(default=3, ge=2, le=10, description="Number of agents to generate")
     corpus: Optional[List[str]] = Field(default=None, description="Optional user history statements for style detection and few-shot examples")
-    execution_mode: Optional[ExecutionMode] = Field(
-        default=None,
-        description="Persona generation mode: 'chain_online', 'chain_local', or 'no_chain'"
-    )
 
 
 class GeneratePersonasResponse(BaseModel):
@@ -577,14 +633,24 @@ class ExtractOpinionsRequest(BaseModel):
     url: Optional[str] = Field(default=None, description="URL to fetch and analyze (alternative to text)")
     text: Optional[str] = Field(default=None, description="Text content to analyze (alternative to URL)")
     title: Optional[str] = Field(default=None, description="Optional title (used when text is provided)")
-    execution_mode: Optional[ExecutionMode] = Field(
-        default=None,
-        description="Execution mode: 'chain_online', 'chain_local', or 'no_chain'"
-    )
     use_llm: bool = Field(default=True, description="Whether to use LLM for opinion extraction and analysis")
-    use_cot: bool = Field(default=False, description="Whether to use Chain of Thought reasoning (only when use_llm=True)")
+    use_cot: Union[CoTMode, str, int] = Field(
+        default=CoTMode.NO_CHAIN,
+        description="Chain of Thought mode: 'chain_online' (0), 'chain_local' (1), 'no_chain' (2), or CoTMode enum. Default: no_chain (only when use_llm=True)"
+    )
     custom_few_shots: Optional[str] = Field(default=None, description="Optional custom few-shot examples (only when use_llm=True)")
-    
+
+    @field_validator('use_cot', mode='before')
+    @classmethod
+    def validate_use_cot(cls, v):
+        """Convert various input formats to CoTMode enum."""
+        if isinstance(v, CoTMode):
+            return v
+        try:
+            return CoTMode.from_code_or_value(v)
+        except ValueError as e:
+            raise ValueError(f"Invalid use_cot value: {e}")
+
     @model_validator(mode='after')
     def validate_url_or_text(self):
         """Ensure either URL or text is provided."""
@@ -607,7 +673,7 @@ class BiasDistributionResponse(BaseModel):
 class AtomicOpinionResponse(BaseModel):
     """Response model for a single atomic opinion."""
     text: str
-    opinion_type: str
+    opinion_type: EnumResponse
     bias_probabilities: BiasDistributionResponse
     original_sentence: Optional[str] = None
     confidence: Optional[float] = None
@@ -718,14 +784,98 @@ def _convert_bias_distribution(bias: BiasDistribution) -> BiasDistributionRespon
 
 def _convert_atomic_opinion(opinion: AtomicOpinion) -> AtomicOpinionResponse:
     """Convert AtomicOpinion to response model."""
+    # Convert opinion_type to EnumResponse (fact=0, opinion=1)
+    opinion_type_enum = EnumResponse(
+        value=opinion.opinion_type,
+        code=0 if opinion.opinion_type == "fact" else 1
+    )
+
     return AtomicOpinionResponse(
         text=opinion.text,
-        opinion_type=opinion.opinion_type,
+        opinion_type=opinion_type_enum,
         bias_probabilities=_convert_bias_distribution(opinion.bias_probabilities),
         original_sentence=opinion.original_sentence,
         confidence=opinion.confidence,
         reasoning=opinion.reasoning
     )
+
+
+def _convert_enum_to_response(enum_value: Any, enum_class: Any) -> EnumResponse:
+    """Convert an enum value to EnumResponse with both string and numeric values."""
+    if hasattr(enum_value, 'value'):
+        # Handle str(Enum) cases where value is the string
+        string_value = enum_value.value if isinstance(enum_value.value, str) else str(enum_value.value)
+    else:
+        # Handle raw string values that should be enums
+        string_value = str(enum_value)
+
+    # Get the numeric code from the enum class (definition order index)
+    numeric_code = 0  # Default fallback
+    try:
+        if hasattr(enum_class, '__members__'):
+            # Find the enum member that matches the value and get its definition order
+            enum_members = list(enum_class)
+            for i, member in enumerate(enum_members):
+                if member.value == string_value:
+                    numeric_code = i
+                    break
+    except Exception:
+        # Fallback for any issues
+        pass
+
+    return EnumResponse(value=string_value, code=numeric_code)
+
+
+def _convert_privacy_type_enum(privacy_type: str) -> EnumResponse:
+    """Convert privacy type string to EnumResponse."""
+    from ..agents.privacy_detector.agent import PrivacyType
+    try:
+        enum_value = PrivacyType(privacy_type)
+        return _convert_enum_to_response(enum_value, PrivacyType)
+    except ValueError:
+        # Fallback for unknown values
+        return EnumResponse(value=privacy_type, code=0)
+
+
+def _convert_privacy_severity_enum(severity: str) -> EnumResponse:
+    """Convert privacy severity string to EnumResponse."""
+    from ..agents.privacy_detector.agent import PrivacySeverity
+    try:
+        enum_value = PrivacySeverity(severity)
+        return _convert_enum_to_response(enum_value, PrivacySeverity)
+    except ValueError:
+        # Fallback for unknown values
+        return EnumResponse(value=severity, code=0)
+
+
+def _convert_claim_relationship_enum(relationship: str) -> EnumResponse:
+    """Convert claim relationship string to EnumResponse."""
+    # Mapping: agree=0, disagree=1, missing=2
+    relationship_map = {"agree": 0, "disagree": 1, "missing": 2}
+    code = relationship_map.get(relationship, 2)  # Default to missing (2)
+    return EnumResponse(value=relationship, code=code)
+
+
+def _convert_conflict_verdict_enum(verdict: str) -> EnumResponse:
+    """Convert conflict verdict string to EnumResponse."""
+    from ..agents.conflict_auditor.agent import ConflictType
+    try:
+        enum_value = ConflictType(verdict)
+        return _convert_enum_to_response(enum_value, ConflictType)
+    except ValueError:
+        # Fallback for unknown values
+        return EnumResponse(value=verdict, code=0)
+
+
+def _convert_agent_type_enum(agent_type: str) -> EnumResponse:
+    """Convert agent type string to EnumResponse."""
+    from ..agents.manager import AgentType
+    try:
+        enum_value = AgentType(agent_type)
+        return _convert_enum_to_response(enum_value, AgentType)
+    except ValueError:
+        # Fallback for unknown values
+        return EnumResponse(value=agent_type, code=0)
 
 
 class CheckConsistencyRequest(BaseModel):
@@ -734,6 +884,36 @@ class CheckConsistencyRequest(BaseModel):
     url: str = Field(..., description="Source URL containing the full content to check against")
     enable_deep_analysis: bool = Field(default=True, description="Whether to enable deep analysis using LLM")
     similarity_threshold: float = Field(default=0.2, description="Minimum similarity score (0.0-1.0) required for LLM analysis. Lower values increase accuracy but use more tokens.")
+    use_cot_atomization: Union[CoTMode, str, int] = Field(
+        default=CoTMode.NO_CHAIN,
+        description="Chain of Thought mode for atomization: 'chain_online' (0), 'chain_local' (1), 'no_chain' (2), or CoTMode enum. Default: no_chain"
+    )
+    use_cot_audit: Union[CoTMode, str, int] = Field(
+        default=CoTMode.NO_CHAIN,
+        description="Chain of Thought mode for auditing: 'chain_online' (0), 'chain_local' (1), 'no_chain' (2), or CoTMode enum. Default: no_chain"
+    )
+
+    @field_validator('use_cot_atomization', mode='before')
+    @classmethod
+    def validate_use_cot_atomization(cls, v):
+        """Convert various input formats to CoTMode enum."""
+        if isinstance(v, CoTMode):
+            return v
+        try:
+            return CoTMode.from_code_or_value(v)
+        except ValueError as e:
+            raise ValueError(f"Invalid use_cot_atomization value: {e}")
+
+    @field_validator('use_cot_audit', mode='before')
+    @classmethod
+    def validate_use_cot_audit(cls, v):
+        """Convert various input formats to CoTMode enum."""
+        if isinstance(v, CoTMode):
+            return v
+        try:
+            return CoTMode.from_code_or_value(v)
+        except ValueError as e:
+            raise ValueError(f"Invalid use_cot_audit value: {e}")
 
     model_config = {
         "json_schema_extra": {
@@ -741,7 +921,9 @@ class CheckConsistencyRequest(BaseModel):
                 {
                     "summary": "This article discusses how plastic pollution affects marine ecosystems worldwide.",
                     "url": "https://example.com/plastic-pollution-impact",
-                    "enable_deep_analysis": True
+                    "enable_deep_analysis": True,
+                    "use_cot_atomization": "no_chain",
+                    "use_cot_audit": "no_chain"
                 }
             ]
         }
@@ -825,10 +1007,38 @@ class CompleteAnalysisRequest(BaseModel):
     """Request model for complete academic analysis pipeline."""
     url: str = Field(..., description="URL to analyze completely")
     use_llm_content_extraction: bool = Field(default=False, description="Use LLM for content extraction refinement")
-    use_cot_atomization: bool = Field(default=False, description="Use CoT for claim atomization")
-    use_cot_audit: bool = Field(default=False, description="Use CoT for conflict auditing")
+    use_cot_atomization: Union[CoTMode, str, int] = Field(
+        default=CoTMode.NO_CHAIN,
+        description="Chain of Thought mode for atomization: 'chain_online' (0), 'chain_local' (1), 'no_chain' (2), or CoTMode enum. Default: no_chain"
+    )
+    use_cot_audit: Union[CoTMode, str, int] = Field(
+        default=CoTMode.NO_CHAIN,
+        description="Chain of Thought mode for auditing: 'chain_online' (0), 'chain_local' (1), 'no_chain' (2), or CoTMode enum. Default: no_chain"
+    )
     custom_few_shots_atomizer: Optional[str] = Field(default=None, description="Custom few-shots for atomizer")
     custom_few_shots_auditor: Optional[str] = Field(default=None, description="Custom few-shots for auditor")
+
+    @field_validator('use_cot_atomization', mode='before')
+    @classmethod
+    def validate_use_cot_atomization(cls, v):
+        """Convert various input formats to CoTMode enum."""
+        if isinstance(v, CoTMode):
+            return v
+        try:
+            return CoTMode.from_code_or_value(v)
+        except ValueError as e:
+            raise ValueError(f"Invalid use_cot_atomization value: {e}")
+
+    @field_validator('use_cot_audit', mode='before')
+    @classmethod
+    def validate_use_cot_audit(cls, v):
+        """Convert various input formats to CoTMode enum."""
+        if isinstance(v, CoTMode):
+            return v
+        try:
+            return CoTMode.from_code_or_value(v)
+        except ValueError as e:
+            raise ValueError(f"Invalid use_cot_audit value: {e}")
 
     model_config = {
         "json_schema_extra": {
@@ -864,25 +1074,56 @@ class CompleteAnalysisResponse(BaseModel):
 
 class DetectPrivacyRequest(BaseModel):
     """Request model for privacy leak detection."""
-    conversation_records: List[Dict[str, str]] = Field(..., description="List of conversation records with 'role' and 'content' keys")
-    execution_mode: Optional[ExecutionMode] = Field(
+    conversation_records: List[Dict[str, Any]] = Field(..., description="List of user messages with 'user' key containing the message content, and optionally 'account_id'")
+
+    @field_validator('conversation_records')
+    @classmethod
+    def validate_conversation_records(cls, v):
+        """Validate that each record contains 'user' key and optionally 'account_id'."""
+        for i, record in enumerate(v):
+            if not isinstance(record, dict):
+                raise ValueError(f"Record {i} must be a dictionary")
+            if 'user' not in record:
+                raise ValueError(f"Record {i} must contain 'user' key")
+            # Allow additional fields like account_id
+        return v
+
+    account_id: Optional[str] = Field(
         default=None,
-        description="Execution mode: 'chain_online' (LLM chains), 'chain_local' (local decomposition), 'no_chain' (pure prompt). Defaults to system setting."
+        description="Unique account identifier for grouping conversations"
     )
+
+    use_cot: Union[CoTMode, str, int] = Field(
+        default=CoTMode.NO_CHAIN,
+        description="Chain of Thought mode: 'chain_online' (0), 'chain_local' (1), 'no_chain' (2), or CoTMode enum. Default: no_chain"
+    )
+
     use_few_shots: bool = Field(
         default=True,
         description="Whether to use few-shot examples in the prompt (default: True)"
     )
+
+    @field_validator('use_cot', mode='before')
+    @classmethod
+    def validate_use_cot(cls, v):
+        """Convert various input formats to CoTMode enum."""
+        if isinstance(v, CoTMode):
+            return v
+        try:
+            return CoTMode.from_code_or_value(v)
+        except ValueError as e:
+            raise ValueError(f"Invalid use_cot value: {e}")
 
     model_config = {
         "json_schema_extra": {
             "examples": [
                 {
                     "conversation_records": [
-                        {"role": "user", "content": "Hi, I'm John Smith from 123 Main Street, Springfield. My phone is 555-0123."},
-                        {"role": "assistant", "content": "Hello John! I'll help you with your request."}
+                        {"user": "Hi, I'm John Smith from 123 Main Street, Springfield. My phone is 555-0123."},
+                        {"user": "My email is john.smith@example.com and I work at ABC Corp."}
                     ],
-                    "use_few_shots": True
+                    "use_few_shots": True,
+                    "use_cot": "no_chain"
                 }
             ]
         }
@@ -891,10 +1132,11 @@ class DetectPrivacyRequest(BaseModel):
 
 class PrivacyLeakItem(BaseModel):
     """Individual privacy leak item."""
-    privacy_type: str = Field(..., description="Type of privacy information detected: personal_identifiers, contact_info, government_ids, biometric_data, financial_accounts, financial_transactions, financial_documents, health_records, medical_history, prescriptions_medications, authentication_credentials, api_keys_tokens, system_access, encryption_keys, precise_location, location_history, email_content, messaging_content, call_logs, social_security, relationship_data, behavioral_data, none")
-    severity: str = Field(..., description="Severity level of this privacy leak: low, medium, high, critical, none")
+    privacy_type: EnumResponse = Field(..., description="Type of privacy information detected with both string value and numeric code")
+    severity: EnumResponse = Field(..., description="Severity level of this privacy leak with both string value and numeric code")
     reasoning: str = Field(..., description="Explanation specific to this privacy leak")
     detected_items: List[str] = Field(..., description="List of specific privacy items detected for this leak")
+    confidence: float = Field(default=0.5, description="Confidence score for this privacy leak detection (0.0 to 1.0)")
 
 
 class PrivacyDetectionResponse(BaseModel):
@@ -902,10 +1144,10 @@ class PrivacyDetectionResponse(BaseModel):
     detection_id: str = Field(..., description="Unique identifier for this privacy detection result")
     privacy_detected: bool = Field(..., description="Whether any privacy-sensitive information was detected")
     privacy_leaks: List[PrivacyLeakItem] = Field(default_factory=list, description="List of detected privacy leaks")
-    overall_severity: str = Field(..., description="Overall severity level across all detected leaks: low, medium, high, critical, none")
-    reasoning: str = Field(..., description="Overall explanation of the privacy analysis")
-    execution_mode: str = Field(..., description="Execution mode used for analysis")
+    overall_severity: EnumResponse = Field(..., description="Overall severity level across all detected leaks with both string value and numeric code")
+    overall_score: float = Field(..., description="Overall confidence score (0.0-1.0) as average of all leak confidences")
     conversation_length: int = Field(..., description="Number of conversation records analyzed")
+    messages_analyzed: int = Field(..., description="Number of messages that were analyzed (should equal conversation_length)")
     analyzed_at: str = Field(..., description="Timestamp of analysis")
     agent_version: str = Field(..., description="Version of the privacy detection agent")
     error: Optional[str] = Field(default=None, description="Error message if analysis failed")

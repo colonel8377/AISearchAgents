@@ -27,3 +27,5 @@ def get_storage() -> StorageManager:
 def get_database() -> StorageDatabase:
     """Get the database instance from the storage manager"""
     return get_storage().get_database()
+
+

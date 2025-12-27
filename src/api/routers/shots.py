@@ -1236,9 +1236,7 @@ async def get_web_opinion_extractor_shots(
     """
     logger.info("Getting few-shot examples")
     try:
-        engine = WebOpinionEngine(
-            proxy=settings.openai_proxy if settings.openai_proxy else None
-        )
+        engine = WebOpinionEngine()
 
         atomizer_shots = engine.get_effective_atomizer_shots()
         scorer_shots = engine.get_effective_scorer_shots()

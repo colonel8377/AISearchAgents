@@ -6,7 +6,7 @@ from langchain_openai import OpenAIEmbeddings
 from ..common import get_api_key, agent_manager
 from ..schemas import (
     CreateAgentRequest, AgentIdResponse, ListAgentsResponse,
-    AgentStatusResponse, ResetAgentRequest
+    AgentStatusResponse, ResetAgentRequest, _convert_agent_type_enum
 )
 from ...agents.bot_creator.agent import BotCreatorAgent
 from ...agents.claim_atomizer.agent import ClaimAtomizerAgent
@@ -89,15 +89,13 @@ async def create_agent(
             logger.info(f"Vector store created successfully for agent type: {request.agent_type}")
         
         logger.debug(f"Instantiating agent: type={request.agent_type}, model={settings.openai_model}")
-        proxy = settings.openai_proxy if settings.openai_proxy else None
         if request.agent_type == AgentType.NUDGE_COLLAPSE:
             agent_instance = NudgeCollapseAgent(
                 model_name=settings.openai_model,
                 api_key=settings.openai_api_key,
                 api_base=settings.openai_api_base,
                 temperature=settings.agent_temperature,
-                vector_store=vector_store,
-                proxy=proxy
+                vector_store=vector_store
             )
         elif request.agent_type == AgentType.SUMMARIZER:
             agent_instance = SummarizerAgent(
@@ -105,21 +103,19 @@ async def create_agent(
                 api_key=settings.openai_api_key,
                 api_base=settings.openai_api_base,
                 temperature=settings.agent_temperature,
-                vector_store=vector_store,
-                proxy=proxy
+                vector_store=vector_store
             )
         elif request.agent_type == AgentType.BOT_CREATOR:
             persona_mode = request.persona_mode or "system_prompt"
             if persona_mode not in ["system_prompt", "user_instruction"]:
                 raise ValueError(f"Invalid persona_mode. Must be 'system_prompt' or 'user_instruction'")
-            
+
             agent_instance = BotCreatorAgent(
                 model_name=settings.openai_model,
                 api_key=settings.openai_api_key,
                 api_base=settings.openai_api_base,
                 temperature=settings.agent_temperature,
                 vector_store=vector_store,
-                proxy=proxy,
                 persona_mode=persona_mode
             )
         elif request.agent_type == AgentType.DEMOGRAPHIC_EVALUATOR:
@@ -127,34 +123,28 @@ async def create_agent(
                 model_name=settings.openai_model,
                 api_key=settings.openai_api_key,
                 api_base=settings.openai_api_base,
-                temperature=settings.agent_temperature,
-                proxy=proxy
+                temperature=settings.agent_temperature
             )
         elif request.agent_type == AgentType.CONTENT_EXTRACTOR:
             agent_instance = ContentExtractorAgent(
                 model_name=settings.openai_model,
                 api_key=settings.openai_api_key,
                 api_base=settings.openai_api_base,
-                temperature=settings.agent_temperature,
-                proxy=proxy
+                temperature=settings.agent_temperature
             )
         elif request.agent_type == AgentType.CLAIM_ATOMIZER:
             agent_instance = ClaimAtomizerAgent(
                 model_name=settings.openai_model,
                 api_key=settings.openai_api_key,
                 api_base=settings.openai_api_base,
-                temperature=settings.agent_temperature,
-                proxy=proxy,
-                execution_mode=settings.default_execution_mode
+                temperature=settings.agent_temperature
             )
         elif request.agent_type == AgentType.CONFLICT_AUDITOR:
             agent_instance = ConflictAuditorAgent(
                 model_name=settings.openai_model,
                 api_key=settings.openai_api_key,
                 api_base=settings.openai_api_base,
-                temperature=settings.agent_temperature,
-                proxy=proxy,
-                execution_mode=settings.default_execution_mode
+                temperature=settings.agent_temperature
             )
         else:
             raise ValueError(f"Unsupported agent type: {request.agent_type}")
@@ -173,7 +163,7 @@ async def create_agent(
         
         return AgentIdResponse(
             agent_id=agent_id,
-            agent_type=request.agent_type,
+            agent_type=_convert_agent_type_enum(request.agent_type),
             status="created",
             message=f"Agent '{agent_id}' of type '{request.agent_type}' created successfully",
             persona_mode=response_persona_mode
@@ -237,7 +227,7 @@ async def get_agent_status(
     
     return AgentStatusResponse(
         agent_id=agent_id,
-        agent_type=agent_type,
+        agent_type=_convert_agent_type_enum(agent_type.value),
         status="active",
         current_turn=current_turn,
         additional_info=additional_info

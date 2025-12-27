@@ -35,10 +35,6 @@ class InitRequest(BaseModel):
     max_rounds: Optional[int] = Field(default=10, ge=1, le=50, description="Maximum number of debate rounds")
     context: str = Field(default="", description="Additional context for persona generation")
     corpus: Optional[List[str]] = Field(default=None, description="Optional user history statements for style detection and few-shot examples")
-    execution_mode: Optional[Literal["chain_online", "chain_local", "no_chain"]] = Field(
-        default=None,
-        description="Persona generation mode when using auto_agent_count"
-    )
 
 
 class InteractRequest(BaseModel):

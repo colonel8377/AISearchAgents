@@ -112,7 +112,7 @@ class TestWebOpinionExtractApi:
         assert data["url"] == "https://example.com"
         assert data["text"] == "Clean text content"
         assert data["error"] is None
-        # Proxy is configured via settings.openai_proxy or environment variables
+        # Proxy is configured via HTTP_PROXY and HTTPS_PROXY environment variables
     
     def test_extractandclean_fetch_failure(self, mock_analyzer):
         """Test combined extract and clean with fetch failure."""
@@ -426,6 +426,11 @@ class TestWebOpinionExtractApi:
         opinion = data["opinions"][0]
         assert "text" in opinion
         assert "opinion_type" in opinion
+        assert isinstance(opinion["opinion_type"], dict)
+        assert "value" in opinion["opinion_type"]
+        assert "code" in opinion["opinion_type"]
+        assert opinion["opinion_type"]["value"] in ["fact", "opinion"]
+        assert opinion["opinion_type"]["code"] in [0, 1]
         assert "bias_probabilities" in opinion
         assert "confidence" in opinion
         

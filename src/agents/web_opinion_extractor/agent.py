@@ -6,14 +6,14 @@ facts from opinions, and calculate political bias scores.
 
 import json
 import re
-from typing import Optional, List, Dict, Any, Tuple
+from typing import Optional, List, Dict, Any, Tuple, Union
 
 from langchain_core.messages import HumanMessage, SystemMessage
 from langchain_openai import ChatOpenAI
 
 from ..html_extractor import HTMLExtractor
 from .exceptions import NetworkError, ContentExtractionError
-from .models import AtomicOpinion, OpinionExtractionResult, BiasDistribution
+from .models import AtomicOpinion, OpinionExtractionResult, BiasDistribution, CoTMode
 from ...config.settings import settings, ExecutionMode
 from ...utils.llm_client import llm_manager
 from ...utils.logger import get_logger
@@ -144,7 +144,6 @@ Extract ALL viewpoints, even subtle ones. Be thorough but precise."""
         api_key: Optional[str] = None,
         api_base: Optional[str] = None,
         temperature: float = 0.3,
-        proxy: Optional[str] = None,
         request_timeout: float = 30.0,
         execution_mode: Optional[ExecutionMode] = None
     ):
@@ -156,7 +155,6 @@ Extract ALL viewpoints, even subtle ones. Be thorough but precise."""
             api_key: OpenAI API key or compatible API key
             api_base: Base URL for the API
             temperature: Temperature for LLM responses (lower for more consistent extraction)
-            proxy: Optional HTTP proxy for API requests
             request_timeout: Timeout for HTTP requests in seconds
             execution_mode: Execution mode for CoT ('chain_online', 'chain_local', 'no_chain')
         """
@@ -167,7 +165,7 @@ Extract ALL viewpoints, even subtle ones. Be thorough but precise."""
         logger.info(f"Initializing WebOpinionExtractor: model={model_name}, temperature={temperature}, execution_mode={execution_mode}")
 
         # Use shared HTTP client for LLM
-        http_client = llm_manager.get_http_client(proxy=proxy)
+        http_client = llm_manager.get_http_client()
         
         self.llm = ChatOpenAI(
             model_name=model_name,
@@ -186,7 +184,7 @@ Extract ALL viewpoints, even subtle ones. Be thorough but precise."""
         logger.debug(f"WebOpinionExtractor initialized successfully with execution_mode={self.execution_mode}")
     
     @cached()
-    def _extract_opinions_with_llm(self, text: str, use_cot: bool = False, custom_few_shots: Optional[str] = None) -> List[Dict[str, Any]]:
+    def _extract_opinions_with_llm(self, text: str, use_cot: Union[CoTMode, bool] = CoTMode.NO_CHAIN, custom_few_shots: Optional[str] = None) -> List[Dict[str, Any]]:
         """
         Use LLM to extract atomic opinions from text.
 
@@ -198,10 +196,16 @@ Extract ALL viewpoints, even subtle ones. Be thorough but precise."""
         Returns:
             List of opinion dictionaries
         """
-        logger.debug(f"Extracting opinions from text ({len(text)} chars) with CoT={use_cot}")
+        # Determine effective CoT mode
+        if isinstance(use_cot, CoTMode):
+            effective_cot = use_cot.value in ("chain_local", "chain_online")
+        else:
+            effective_cot = bool(use_cot)
+
+        logger.debug(f"Extracting opinions from text ({len(text)} chars) with CoT={effective_cot}")
 
         # Select system prompt based on CoT mode
-        system_prompt = self.SYSTEM_PROMPT if use_cot else self.SYSTEM_PROMPT_NO_COT
+        system_prompt = self.SYSTEM_PROMPT if effective_cot else self.SYSTEM_PROMPT_NO_COT
 
         # Add custom few-shot examples if provided
         if custom_few_shots:
@@ -650,14 +654,14 @@ Return your analysis as a JSON object."""
         text, title = self.clean_html(html)
         logger.info(f"[clean_html] Extracted {len(text)} chars, title: {title}")
         return text, title
-    
+
     def analyze_text(
         self,
         text: str,
         url: Optional[str] = None,
         title: Optional[str] = None,
         use_llm: bool = True,
-        use_cot: bool = False,
+        use_cot: Union[CoTMode, bool] = CoTMode.NO_CHAIN,
         custom_few_shots: Optional[str] = None
     ) -> OpinionExtractionResult:
         """
@@ -808,7 +812,6 @@ Analysis:
         api_key: Optional[str] = None,
         api_base: Optional[str] = None,
         temperature: float = 0.3,
-        proxy: Optional[str] = None,
         request_timeout: float = 30.0,
         execution_mode: Optional[ExecutionMode] = None
     ):
@@ -820,7 +823,6 @@ Analysis:
             api_key: OpenAI API key or compatible API key
             api_base: Base URL for the API
             temperature: Temperature for LLM responses
-            proxy: Optional HTTP proxy for API requests
             request_timeout: Timeout for HTTP requests in seconds
             execution_mode: Execution mode for CoT:
                 - 'chain_online': LLM handles full CoT reasoning
@@ -953,7 +955,7 @@ Analysis:
         url: Optional[str] = None,
         title: Optional[str] = None,
         use_llm: bool = True,
-        use_cot: bool = False,
+        use_cot: Union[CoTMode, bool] = CoTMode.NO_CHAIN,
         custom_few_shots: Optional[str] = None
     ) -> OpinionExtractionResult:
         """

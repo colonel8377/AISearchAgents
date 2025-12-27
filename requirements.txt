@@ -11,7 +11,7 @@ langchain>=0.3.0
 langchain-core>=0.3.0  # 核心功能（messages, prompts, runnables, embeddings）
 langchain-community>=0.3.0  # Vector stores (Redis, PGVector, Chroma)
 langchain-openai>=0.2.0  # OpenAI 集成（必需，代码中大量使用）
-langchain-google-genai>=2.0.0  # Google embeddings（可选，但代码中有使用）
+langchain-google-genai>=2.0.0  # Google Gemini chat and embeddings
 
 # --- Shared Utilities ---
 # 2025年最新版本

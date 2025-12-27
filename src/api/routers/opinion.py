@@ -9,7 +9,7 @@ from ..schemas import (
     ExtractAndCleanRequest, ExtractAndCleanResponse, ExtractOpinionsRequest,
     ExtractOpinionsResponse, AnalyzeUrlRequest, BiasScoreRequest, BiasScoreResponse,
     BiasDistributionResponse, AtomicOpinionResponse, MBFCMetadataResponse,
-    ClaimComparisonResponse, AtomicClaimResponse
+    ClaimComparisonResponse, AtomicClaimResponse, _convert_claim_relationship_enum
 )
 from ...agents.web_opinion_extractor import WebOpinionAnalyzer, LogicMode
 from ...agents.claim_atomizer.agent import AtomicClaim
@@ -56,17 +56,7 @@ async def extract_and_clean_from_url(
 
     try:
 
-        # Reuse OpenAI proxy settings if configured
-
-        proxy = settings.openai_proxy or None
-
-        analyzer = WebOpinionAnalyzer(
-
-            execution_mode=settings.default_execution_mode,
-
-            proxy=proxy
-
-        )
+        analyzer = WebOpinionAnalyzer()
 
         # Step 1: Extract HTML from URL
 
@@ -173,15 +163,7 @@ async def extract_atomic_opinions(
 
     try:
 
-        execution_mode = request.execution_mode or settings.default_execution_mode
-
-        analyzer = WebOpinionAnalyzer(
-
-            execution_mode=execution_mode,
-
-            proxy=settings.openai_proxy if settings.openai_proxy else None
-
-        )
+        analyzer = WebOpinionAnalyzer()
 
         # Handle URL input: fetch and extract content
 
@@ -452,11 +434,7 @@ async def analyze_url_complete(
 
             # Initialize engine (db_path comes from settings)
 
-            engine = WebOpinionEngine(
-
-                proxy=settings.openai_proxy if settings.openai_proxy else None
-
-            )
+            engine = WebOpinionEngine()
 
             # Run pipeline
 
@@ -744,11 +722,7 @@ async def get_overall_bias_score(
 
             # Initialize engine (db_path comes from settings)
 
-            engine = WebOpinionEngine(
-
-                proxy=settings.openai_proxy if settings.openai_proxy else None
-
-            )
+            engine = WebOpinionEngine()
 
             # Run pipeline
 
@@ -946,7 +920,7 @@ async def compare_claims(
 
     # Create LLM client for claim matching
 
-    http_client = llm_manager.get_http_client(proxy=settings.openai_proxy)
+    http_client = llm_manager.get_http_client()
 
     llm = ChatOpenAI(
 
@@ -1148,7 +1122,7 @@ For each summary claim, determine if it is supported by the URL content. Return 
 
                 url_claim_text=comp_data.get("url_claim_text"),
 
-                relationship=rel,
+                relationship=_convert_claim_relationship_enum(rel),
 
                 similarity_score=comp_data.get("similarity_score"),
 
@@ -1176,7 +1150,7 @@ For each summary claim, determine if it is supported by the URL content. Return 
 
                         summary_claim_text=claim.text,
 
-                        relationship="missing",
+                        relationship=_convert_claim_relationship_enum("missing"),
 
                         reasoning="Comparison result was not returned by LLM"
 
@@ -1334,7 +1308,7 @@ For each summary claim, determine if it is supported by the URL content. Return 
 
                 summary_claim_text=claim.text,
 
-                relationship="missing",
+                relationship=_convert_claim_relationship_enum("missing"),
 
                 reasoning=f"Error during comparison: {str(e)}"
 

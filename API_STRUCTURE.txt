@@ -28,7 +28,7 @@
 │ 3. Extract Opinions API ⭐                                                  │
 ├─────────────────────────────────────────────────────────────────────────────┤
 │ Endpoint:  POST /extract-opinions                                           │
-│ Input:     {"text": "...", "execution_mode": "chain_local"}                 │
+│ Input:     {"text": "..."}                 │
 │ Output:    {                                                                │
 │              "atomic_opinions": [                                           │
 │                {                                                            │
@@ -47,7 +47,7 @@
 │ 4. Complete Analysis API ⭐⭐                                                │
 ├─────────────────────────────────────────────────────────────────────────────┤
 │ Endpoint:  POST /analyze                                                    │
-│ Input:     {"url": "https://example.com", "execution_mode": "chain_local"} │
+│ Input:     {"url": "https://example.com"} │
 │ Output:    Same as Extract Opinions API                                     │
 │ Pipeline:  URL → HTML → Clean Text → Atomic Opinions → Bias Scores         │
 │ Use:       One-step complete analysis (RECOMMENDED)                         │
@@ -126,7 +126,7 @@ Bias Probability Distribution (per opinion & overall):
 Atomic Opinion Structure:
 {
   "text": "Support for universal healthcare",
-  "opinion_type": "opinion",  // "fact" or "opinion"
+  "opinion_type": {"value": "opinion", "code": 1},  // fact=0, opinion=1
   "bias_probabilities": {...},
   "original_sentence": "I strongly support universal healthcare",
   "confidence": 0.9,
@@ -162,7 +162,7 @@ Atomic Opinion Structure:
 2. Complete Analysis:
    curl -X POST http://localhost:8000/api/v1/web-opinion/analyze \
      -H "Content-Type: application/json" \
-     -d '{"url": "https://example.com/article", "execution_mode": "chain_local"}'
+     -d '{"url": "https://example.com/article"}'
 
 3. Python Example (URL):
    import requests
@@ -202,7 +202,6 @@ Atomic Opinion Structure:
 │ Endpoint:  POST /bot/create                                                 │
 │ Input:     {                                                                │
 │              "bot_name": "MyBot",                                           │
-│              "execution_mode": "chain_local",                               │
 │              "use_few_shots": true                                          │
 │            }                                                                │
 │ Output:    {                                                                │
@@ -330,8 +329,7 @@ Atomic Opinion Structure:
 │ Input:     turn=5  // Optional turn limit                                   │
 │ Output:    {                                                                │
 │              "summary": "Conversation summary text...",                    │
-│              "conversation_length": 10,                                     │
-│              "execution_mode": "chain_local"                                │
+│              "conversation_length": 10                                     │
 │            }                                                                │
 │ Use:       Summarize a specific conversation thread                         │
 └─────────────────────────────────────────────────────────────────────────────┘
@@ -412,5 +410,330 @@ Pattern 3: Manage Conversations
 
    # Delete conversation
    curl -X DELETE http://localhost:8000/api/v1/bot/{bot_id}/conversation/{conversation_id}
+
+═══════════════════════════════════════════════════════════════════════════════
+                           Privacy Detector API Structure
+═══════════════════════════════════════════════════════════════════════════════
+
+┌─────────────────────────────────────────────────────────────────────────────┐
+│                         Base: /api/v1/privacy-detector                       │
+└─────────────────────────────────────────────────────────────────────────────┘
+
+┌─────────────────────────────────────────────────────────────────────────────┐
+│ 1. Detect Privacy Leaks API ⭐⭐⭐                                           │
+├─────────────────────────────────────────────────────────────────────────────┤
+│ Endpoint:  POST /detect                                                     │
+│ Input:     {                                                                │
+│              "conversation_records": [                                      │
+│                {"user": "My email is john@example.com"},                    │
+│                {"user": "My phone is 555-123-4567"}                         │
+│              ],                                                             │
+│              "account_id": "user123"  // Optional: Unique account identifier│
+│              "use_few_shots": true                                          │
+│            }                                                                │
+│ Output:    {                                                                │
+│              "privacy_detected": true/false,                                │
+│              "privacy_leaks": [                                             │
+│                {                                                            │
+│                  "privacy_type": "contact_info",                            │
+│                  "severity": "medium",                                      │
+│                  "reasoning": "Email address detected in user message",     │
+│                  "detected_items": ["john@example.com"],                    │
+│                  "locations": [                                             │
+│                    {                                                        │
+│                      "message_index": 0,                                    │
+│                      "exact_text": "john@example.com",                      │
+│                      "start_position": 12,                                  │
+│                      "end_position": 27                                     │
+│                    }                                                        │
+│                  ],                                                         │
+│                  "confidence": "high"                                       │
+│                }                                                            │
+│              ],                                                             │
+│              "overall_severity": "medium",                                  │
+│              "detection_id": "uuid...",                                     │
+│              "reasoning": "Analysis completed with local validation"        │
+│            }                                                                │
+│ Features:  Local validation prevents LLM hallucinations                     │
+│            Position tracking for all detected items                         │
+│            Account-based conversation grouping                              │
+│ Use:       Analyze conversation for privacy leaks with validation           │
+└─────────────────────────────────────────────────────────────────────────────┘
+
+┌─────────────────────────────────────────────────────────────────────────────┐
+│ 2. Get Detection Result API                                                 │
+├─────────────────────────────────────────────────────────────────────────────┤
+│ Endpoint:  GET /results/{detection_id}                                      │
+│ Output:    Same as Detect API output                                        │
+│ Use:       Retrieve specific privacy detection result by ID                 │
+└─────────────────────────────────────────────────────────────────────────────┘
+
+┌─────────────────────────────────────────────────────────────────────────────┐
+│ 3. List Detection Results API                                               │
+├─────────────────────────────────────────────────────────────────────────────┤
+│ Endpoint:  GET /results                                                     │
+│ Query:     limit=50, offset=0                                               │
+│ Output:    Array of detection results                                       │
+│ Use:       List all stored privacy detection results                        │
+└─────────────────────────────────────────────────────────────────────────────┘
+
+┌─────────────────────────────────────────────────────────────────────────────┐
+│ 4. Get Statistics API ⭐⭐                                                   │
+├─────────────────────────────────────────────────────────────────────────────┤
+│ Endpoint:  GET /stats                                                       │
+│ Query:     account_id=user123  // Optional: Filter by account               │
+│ Output:    {                                                                │
+│              "total_detections": 150,                                       │
+│              "detection_rate_percent": 23.5,                                │
+│              "error_rate_percent": 2.1,                                     │
+│              "severity_distribution": {"low": 45, "medium": 23, "high": 8},│
+│              "privacy_type_distribution": {                                 │
+│                "contact_info": 35, "government_ids": 12, ...               │
+│              },                                                             │
+│              "confidence_distribution": {"high": 28, "medium": 32, ...},   │
+│              "account_distribution": {"user123": 45, "user456": 23, ...},  │
+│              "average_conversation_length": 8.2,                           │
+│              "recent_detections_24h": 12,                                  │
+│              "daily_stats_last_7_days": [...],                             │
+│              "top_leak_types": [                                           │
+│                {"privacy_type": "contact_info", "count": 35}, ...          │
+│              ],                                                             │
+│              "metadata": {"account_filter": "user123", "generated_at": "..."}│
+│            }                                                                │
+│ Features:  Comprehensive statistics with account filtering                 │
+│            Detection rates, confidence analysis, trend data                 │
+│ Use:       Get detailed privacy detection statistics                        │
+└─────────────────────────────────────────────────────────────────────────────┘
+
+┌─────────────────────────────────────────────────────────────────────────────┐
+│ 5. Delete Detection Result API                                              │
+├─────────────────────────────────────────────────────────────────────────────┤
+│ Endpoint:  DELETE /results/{detection_id}                                   │
+│ Output:    {"message": "Privacy detection result deleted successfully"}    │
+│ Use:       Delete specific privacy detection result                         │
+└─────────────────────────────────────────────────────────────────────────────┘
+
+═══════════════════════════════════════════════════════════════════════════════
+                          Privacy Types & Severity
+═══════════════════════════════════════════════════════════════════════════════
+
+Privacy Types:
+- personal_identifiers: Names, usernames, nicknames
+- contact_info: Phone numbers, emails, addresses
+- government_ids: SSN, passport, driver's license
+- financial_accounts: Bank accounts, credit cards, transactions
+- health_records: Medical conditions, prescriptions, test results
+- authentication_credentials: Passwords, API keys, tokens
+- precise_location: GPS coordinates, exact addresses
+- messaging_content: Chat logs, private communications
+- social_security: Social security information
+- relationship_data: Family information, social connections
+- behavioral_data: Usage patterns, preferences
+
+Severity Levels:
+- low: Publicly available or low-risk information
+- medium: Personal but commonly shared information
+- high: Sensitive personal or financial information
+- critical: Government IDs, full financial access, life-critical data
+
+Confidence Levels:
+- high: All detected items validated against original messages
+- medium: Some items validated or strong pattern corroboration
+- low: Pattern-based detection only, no location validation
+- invalid: No detected items found in original messages (LLM hallucination)
+
+═══════════════════════════════════════════════════════════════════════════════
+                          Usage Patterns
+═══════════════════════════════════════════════════════════════════════════════
+
+Pattern 1: Basic Privacy Check
+────────────────────────────
+┌────────────┐      ┌──────────────┐      ┌─────────────────────┐
+│ Messages   │─────▶│  detect      │─────▶│  Privacy Analysis   │
+└────────────┘      └──────────────┘      │  with Validation    │
+                                           └─────────────────────┘
+
+Pattern 2: Account-Based Analysis
+────────────────────────────────
+┌────────────┐      ┌────────────────┐      ┌─────────────────────┐
+│ Account    │─────▶│  detect w/     │─────▶│  Account-Scoped     │
+│ Messages   │      │  account_id    │      │  Privacy Analysis   │
+└────────────┘      └────────────────┘      └─────────────────────┘
+
+Pattern 3: Statistical Monitoring
+──────────────────────────────
+┌────────────┐      ┌──────────────┐      ┌─────────────────────┐
+│ All Data   │─────▶│  stats        │─────▶│  Detection Trends   │
+│            │      │  (by account) │      │  & Privacy Metrics  │
+└────────────┘      └──────────────┘      └─────────────────────┘
+
+═══════════════════════════════════════════════════════════════════════════════
+                              Quick Examples
+═══════════════════════════════════════════════════════════════════════════════
+
+1. Basic Privacy Detection:
+   curl -X POST http://localhost:8000/api/v1/privacy-detector/detect \
+     -H "Content-Type: application/json" \
+     -d '{
+       "conversation_records": [
+         {"user": "My email is john@example.com"},
+         {"user": "Call me at 555-123-4567"}
+       ]
+     }'
+
+2. Account-Based Detection:
+   curl -X POST http://localhost:8000/api/v1/privacy-detector/detect \
+     -H "Content-Type: application/json" \
+     -d '{
+       "conversation_records": [
+         {"user": "My email is john@example.com", "account_id": "user123"}
+       ],
+       "account_id": "user123"
+     }'
+
+3. Get Statistics (All Accounts):
+   curl http://localhost:8000/api/v1/privacy-detector/stats
+
+4. Get Statistics (Specific Account):
+   curl "http://localhost:8000/api/v1/privacy-detector/stats?account_id=user123"
+
+5. Python Example:
+   import requests
+
+   # Detect privacy leaks
+   response = requests.post("http://localhost:8000/api/v1/privacy-detector/detect", json={
+       "conversation_records": [
+           {"user": "My SSN is 123-45-6789"},
+           {"user": "Password: secret123"}
+       ],
+       "account_id": "user123"
+   })
+   result = response.json()
+   print(f"Leaks detected: {len(result['privacy_leaks'])}")
+   print(f"Overall severity: {result['overall_severity']}")
+
+   # Get statistics
+   stats = requests.get("http://localhost:8000/api/v1/privacy-detector/stats").json()
+   print(f"Total detections: {stats['total_detections']}")
+   print(f"Detection rate: {stats['detection_rate_percent']}%")
+
+═══════════════════════════════════════════════════════════════════════════════
+                          Few-Shot Management API Structure
+═══════════════════════════════════════════════════════════════════════════════
+
+┌─────────────────────────────────────────────────────────────────────────────┐
+│                         Base: /api/v1/shots                                 │
+└─────────────────────────────────────────────────────────────────────────────┘
+
+The Few-Shot Management API provides centralized configuration for few-shot examples across all AI agents. Few-shot examples help guide LLM behavior by providing example inputs and outputs.
+
+Supported Agents:
+- summarizer: Conversation summarization agent
+- demographic-evaluator: Sentence evaluation from demographic perspectives
+- nudge-collapse: 4-turn radicalization protocol agent
+- bot-creator: Bot creation and configuration agent
+- content-extractor: Academic content extraction from web pages
+- claim-atomizer: Atomic claim decomposition from text
+- conflict-auditor: Logical consistency auditing
+- privacy-detector: Privacy leak detection agent
+- compare-claims: Claim comparison functionality
+- web-opinion-extractor: Opinion extraction with bias analysis
+
+┌─────────────────────────────────────────────────────────────────────────────┐
+│ 1. Get Effective Few-Shot Examples                                         │
+├─────────────────────────────────────────────────────────────────────────────┤
+│ Endpoint:  GET /{agent_type}                                                │
+│ Output:    {                                                                │
+│              "agent_type": "privacy-detector",                              │
+│              "few_shots": "string or dict",                                 │
+│              "is_custom": true/false                                        │
+│            }                                                                │
+│ Use:       Get current effective few-shot examples (custom if set,         │
+│            otherwise system defaults)                                       │
+└─────────────────────────────────────────────────────────────────────────────┘
+
+┌─────────────────────────────────────────────────────────────────────────────┐
+│ 2. Set Custom Few-Shot Examples                                            │
+├─────────────────────────────────────────────────────────────────────────────┤
+│ Endpoint:  POST /{agent_type}/custom                                        │
+│ Input:     {                                                                │
+│              "custom_few_shots": "string or dict"                           │
+│            }                                                                │
+│ Output:    {                                                                │
+│              "message": "Custom few-shot examples set successfully",        │
+│              "agent_type": "privacy-detector"                               │
+│            }                                                                │
+│ Use:       Set custom few-shot examples for an agent (persists across      │
+│            restarts)                                                        │
+└─────────────────────────────────────────────────────────────────────────────┘
+
+┌─────────────────────────────────────────────────────────────────────────────┐
+│ 3. Get Current Custom Few-Shot Examples                                    │
+├─────────────────────────────────────────────────────────────────────────────┤
+│ Endpoint:  GET /{agent_type}/custom                                         │
+│ Output:    {                                                                │
+│              "agent_type": "privacy-detector",                              │
+│              "custom_few_shots": "string or dict or null"                   │
+│            }                                                                │
+│ Use:       Get currently set custom few-shot examples or null if not set   │
+└─────────────────────────────────────────────────────────────────────────────┘
+
+┌─────────────────────────────────────────────────────────────────────────────┐
+│ 4. Reset to Default Few-Shot Examples                                      │
+├─────────────────────────────────────────────────────────────────────────────┤
+│ Endpoint:  DELETE /{agent_type}/custom                                      │
+│ Output:    {                                                                │
+│              "message": "Custom few-shot examples reset successfully",      │
+│              "agent_type": "privacy-detector"                               │
+│            }                                                                │
+│ Use:       Reset custom few-shot examples (revert to system defaults)      │
+└─────────────────────────────────────────────────────────────────────────────┘
+
+═══════════════════════════════════════════════════════════════════════════════
+                              Usage Patterns
+═══════════════════════════════════════════════════════════════════════════════
+
+Pattern 1: Configure Custom Few Shots
+───────────────────────────────────
+┌──────────────┐      ┌──────────────────┐      ┌────────────────┐
+│ Check Current│─────▶│ Set Custom Shots │─────▶│  Verify Custom │
+└──────────────┘      └──────────────────┘      └────────────────┘
+
+Pattern 2: Reset to Defaults
+──────────────────────────
+┌──────────────┐      ┌──────────────────┐      ┌────────────────┐
+│ Check Current│─────▶│  Reset to Default│─────▶│ Verify Default │
+└──────────────┘      └──────────────────┘      └────────────────┘
+
+═══════════════════════════════════════════════════════════════════════════════
+                              Quick Examples
+═══════════════════════════════════════════════════════════════════════════════
+
+1. Get Privacy Detector Effective Few Shots:
+   curl http://localhost:8000/api/v1/shots/privacy-detector
+
+2. Set Custom Few Shots for Privacy Detector:
+   curl -X POST http://localhost:8000/api/v1/shots/privacy-detector/custom \
+     -H "Content-Type: application/json" \
+     -d '{"custom_few_shots": "EXAMPLE: User says SSN..."}'
+
+3. Check Current Custom Few Shots:
+   curl http://localhost:8000/api/v1/shots/privacy-detector/custom
+
+4. Reset to Default Few Shots:
+   curl -X DELETE http://localhost:8000/api/v1/shots/privacy-detector/custom
+
+5. Python Example:
+   import requests
+
+   # Get effective few shots
+   response = requests.get("http://localhost:8000/api/v1/shots/privacy-detector")
+   result = response.json()
+   print(f"Using custom shots: {result['is_custom']}")
+
+   # Set custom few shots
+   custom_shots = "Custom privacy detection examples..."
+   requests.post("http://localhost:8000/api/v1/shots/privacy-detector/custom",
+                json={"custom_few_shots": custom_shots})
 
 ═══════════════════════════════════════════════════════════════════════════════

@@ -47,8 +47,6 @@ async def create_bot(
 
             bot_name=request.bot_name,
 
-            execution_mode=request.execution_mode,
-
             use_few_shots=request.use_few_shots
 
         )
@@ -268,7 +266,6 @@ async def summarize_conversation(
     bot_id: str,
     conversation_id: str,
     turn: Optional[int] = Query(default=None, description="Turn index (0-based) to summarize up to. If None, summarizes all turns."),
-    execution_mode: Optional[str] = Query(default=None, description="Execution mode: 'chain_online', 'chain_local', or 'no_chain'"),
     use_few_shots: bool = Query(default=True, description="Whether to use few-shot examples"),
     custom_few_shots: Optional[str] = Query(default=None, description="Optional custom few-shot examples"),
     _api_key: str = Depends(get_api_key)  # Authentication dependency (value not used)
@@ -286,7 +283,6 @@ async def summarize_conversation(
         bot_id: UUID of the bot
         conversation_id: UUID of the conversation thread
         turn: Optional turn index (0-based). If None, summarizes all turns.
-        execution_mode: Optional execution mode ('chain_online', 'chain_local', 'no_chain')
         use_few_shots: Whether to use few-shot examples (default: True)
         custom_few_shots: Optional custom few-shot examples
         _api_key: Authentication dependency (value not used, required for auth check)
@@ -356,7 +352,6 @@ async def summarize_conversation(
         # Summarize the conversation
         result = summarizer.summarize_conversation(
             conversation_records=conversation_records,
-            execution_mode=execution_mode,
             use_few_shots=use_few_shots,
             custom_few_shots=custom_few_shots
         )

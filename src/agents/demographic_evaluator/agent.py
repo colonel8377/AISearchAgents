@@ -1,13 +1,14 @@
 """Demographic Evaluator Agent implementation for evaluating sentences from demographic perspectives."""
 
 import json
-from typing import Dict, List, Optional, Any
+from typing import Dict, List, Optional, Any, Union
 from langchain_openai import ChatOpenAI
 from langchain_core.messages import SystemMessage, HumanMessage
 from tenacity import retry, stop_after_attempt, wait_exponential, retry_if_exception_type
 
 from ...utils.logger import get_logger
 from ...config.settings import settings, ExecutionMode
+from ...agents.web_opinion_extractor import CoTMode
 from ...utils.llm_client import llm_manager
 from ...utils.agent_cache import cached
 from ...few_shots.demographic_evaluator.few_shots import DEMOGRAPHIC_EVALUATOR_FEW_SHOTS
@@ -146,8 +147,7 @@ OUTPUT SCHEMA:
         model_name: Optional[str] = None,
         api_key: Optional[str] = None,
         api_base: Optional[str] = None,
-        temperature: float = 0.7,
-        proxy: Optional[str] = None
+        temperature: float = 0.7
     ):
         """
         Initialize the DemographicEvaluatorAgent.
@@ -157,13 +157,12 @@ OUTPUT SCHEMA:
             api_key: OpenAI API key or compatible API key
             api_base: Base URL for the API
             temperature: Temperature for LLM responses
-            proxy: Optional HTTP proxy for API requests
         """
         model_name = model_name or settings.openai_model
         logger.info(f"Initializing DemographicEvaluatorAgent: model={model_name}, temperature={temperature}")
         
         # Use shared HTTP client for better connection pooling and performance
-        http_client = llm_manager.get_http_client(proxy=proxy)
+        http_client = llm_manager.get_http_client()
         
         self.llm = ChatOpenAI(
             model_name=model_name,
@@ -187,18 +186,18 @@ OUTPUT SCHEMA:
         self,
         demography_json: Dict[str, Any],
         sentences: List[str],
-        use_cot: bool = False,
+        use_cot: Union[CoTMode, bool] = CoTMode.NO_CHAIN,
         execution_mode: Optional[ExecutionMode] = None,
         use_few_shots: bool = True,
         custom_few_shots: Optional[str] = None
     ) -> Dict[str, Any]:
         """
         Evaluate a list of sentences from a demographic perspective.
-        
+
         Args:
             demography_json: Dictionary containing demographic profile information
             sentences: List of sentences to evaluate
-            use_cot: Whether to use Chain of Thought reasoning (default: False)
+            use_cot: Chain of Thought mode ('chain_online', 'chain_local', 'no_chain') or boolean
             execution_mode: Execution mode for CoT ('chain_online', 'chain_local', 'no_chain').
                           If provided, overrides use_cot parameter.
                           - 'chain_online' or 'chain_local': Enable CoT reasoning
@@ -206,7 +205,7 @@ OUTPUT SCHEMA:
             use_few_shots: Whether to include few-shot examples in the prompt (default: True)
             custom_few_shots: Optional custom few-shot examples to use instead of defaults.
                              If provided, use_few_shots must be True
-            
+
         Returns:
             Dictionary containing judgments with the following structure:
             {
@@ -222,10 +221,14 @@ OUTPUT SCHEMA:
         """
         # Determine if CoT should be used
         if execution_mode is not None:
-            use_cot = execution_mode in ("chain_local", "chain_online")
-            logger.debug(f"Using execution_mode={execution_mode}, CoT enabled={use_cot}")
+            effective_cot = execution_mode in ("chain_local", "chain_online")
+            logger.debug(f"Using execution_mode={execution_mode}, CoT enabled={effective_cot}")
+        elif isinstance(use_cot, CoTMode):
+            effective_cot = use_cot.value in ("chain_local", "chain_online")
+            logger.debug(f"Using CoTMode={use_cot.value}, CoT enabled={effective_cot}")
         else:
-            logger.debug(f"Using use_cot={use_cot}")
+            effective_cot = bool(use_cot)
+            logger.debug(f"Using use_cot={use_cot}, CoT enabled={effective_cot}")
         
         # Validate few-shots parameters
         if custom_few_shots is not None and not use_few_shots:
@@ -249,13 +252,13 @@ OUTPUT SCHEMA:
         else:
             logger.info("Few-shot examples disabled")
         
-        logger.info(f"Evaluating {len(sentences)} sentences for demographic profile (CoT={use_cot}, use_few_shots={use_few_shots})")
+        logger.info(f"Evaluating {len(sentences)} sentences for demographic profile (CoT={effective_cot}, use_few_shots={use_few_shots})")
         
         # Convert demography_json to formatted string
         demography_str = json.dumps(demography_json, indent=2)
         
         # Select base system prompt based on CoT setting
-        if use_cot:
+        if effective_cot:
             base_system_prompt = self.SYSTEM_PROMPT_TEMPLATE_COT.format(
                 demography_json=demography_str
             )
@@ -273,7 +276,7 @@ OUTPUT SCHEMA:
         # Build user message with sentences
         sentences_text = "\n".join(f"{i+1}. {sentence}" for i, sentence in enumerate(sentences))
         
-        if use_cot:
+        if effective_cot:
             user_message = f"""Please evaluate the following sentences.
 For each sentence, provide detailed step-by-step reasoning showing your thought process:
 1. Consider the sentence in context of your values and experiences
@@ -352,7 +355,7 @@ Return your evaluation as a JSON object."""
         self,
         demography_json_str: str,
         sentences: List[str],
-        use_cot: bool = False,
+        use_cot: Union[CoTMode, bool] = CoTMode.NO_CHAIN,
         execution_mode: Optional[ExecutionMode] = None,
         use_few_shots: bool = True,
         custom_few_shots: Optional[str] = None

@@ -149,8 +149,9 @@ class StorageDatabase:
         cursor.execute("CREATE INDEX IF NOT EXISTS idx_privacy_detection_id ON privacy_detection_results(detection_id)")
         cursor.execute("CREATE INDEX IF NOT EXISTS idx_privacy_analyzed_at ON privacy_detection_results(analyzed_at)")
 
-        # Run migration for existing databases
+        # Run migrations for existing databases
         self._migrate_debate_sessions()
+        self._migrate_privacy_detection_results()
 
         conn.commit()
         logger.info(f"Database initialized at {self.db_path}")
@@ -183,6 +184,28 @@ class StorageDatabase:
 
         except Exception as e:
             logger.error(f"Failed to migrate debate_sessions table: {e}")
+            # Don't fail initialization if migration fails - just log the error
+
+    def _migrate_privacy_detection_results(self) -> None:
+        """Migrate existing privacy_detection_results table to support account_id."""
+        conn = self._get_connection()
+        cursor = conn.cursor()
+
+        try:
+            # Check if account_id column exists
+            cursor.execute("PRAGMA table_info(privacy_detection_results)")
+            columns = [row[1] for row in cursor.fetchall()]
+
+            if 'account_id' not in columns:
+                logger.info("Adding account_id column to privacy_detection_results table")
+                cursor.execute("ALTER TABLE privacy_detection_results ADD COLUMN account_id TEXT")
+                cursor.execute("CREATE INDEX IF NOT EXISTS idx_privacy_account_id ON privacy_detection_results(account_id)")
+
+            conn.commit()
+            logger.info("Privacy detection results migration completed")
+
+        except Exception as e:
+            logger.error(f"Failed to migrate privacy_detection_results table: {e}")
             # Don't fail initialization if migration fails - just log the error
 
     def _json_dumps(self, data: Any) -> str:
@@ -1001,7 +1024,8 @@ class StorageDatabase:
                 "conversation_length": result_data.get("conversation_length"),
                 "analyzed_at": result_data.get("analyzed_at"),
                 "agent_version": result_data.get("agent_version"),
-                "error": result_data.get("error")
+                "error": result_data.get("error"),
+                "account_id": result_data.get("account_id")
             }
 
             if existing:
@@ -1010,24 +1034,24 @@ class StorageDatabase:
                     UPDATE privacy_detection_results SET
                         conversation_records = ?, detection_result = ?, execution_mode = ?,
                         use_few_shots = ?, conversation_length = ?, analyzed_at = ?,
-                        agent_version = ?, error = ?, updated_at = CURRENT_TIMESTAMP
+                        agent_version = ?, error = ?, account_id = ?, updated_at = CURRENT_TIMESTAMP
                     WHERE detection_id = ?
                 """, (
                     data["conversation_records"], data["detection_result"], data["execution_mode"],
                     data["use_few_shots"], data["conversation_length"], data["analyzed_at"],
-                    data["agent_version"], data["error"], data["detection_id"]
+                    data["agent_version"], data["error"], data["account_id"], data["detection_id"]
                 ))
             else:
                 # Insert new result
                 cursor.execute("""
                     INSERT INTO privacy_detection_results (
                         detection_id, conversation_records, detection_result, execution_mode,
-                        use_few_shots, conversation_length, analyzed_at, agent_version, error
-                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                        use_few_shots, conversation_length, analyzed_at, agent_version, error, account_id
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """, (
                     data["detection_id"], data["conversation_records"], data["detection_result"],
                     data["execution_mode"], data["use_few_shots"], data["conversation_length"],
-                    data["analyzed_at"], data["agent_version"], data["error"]
+                    data["analyzed_at"], data["agent_version"], data["error"], data["account_id"]
                 ))
 
             conn.commit()
@@ -1069,8 +1093,9 @@ class StorageDatabase:
                 "analyzed_at": row[7],
                 "agent_version": row[8],
                 "error": row[9],
-                "created_at": row[10],
-                "updated_at": row[11]
+                "account_id": row[10],
+                "created_at": row[11],
+                "updated_at": row[12]
             }
 
         except Exception as e:
@@ -1119,8 +1144,9 @@ class StorageDatabase:
                     "analyzed_at": row[7],
                     "agent_version": row[8],
                     "error": row[9],
-                    "created_at": row[10],
-                    "updated_at": row[11]
+                    "account_id": row[10],
+                    "created_at": row[11],
+                    "updated_at": row[12]
                 })
 
             return results
@@ -1169,52 +1195,173 @@ class StorageDatabase:
             logger.error(f"Failed to clear all privacy detection results: {e}")
             return False
 
-    def get_privacy_detection_stats(self) -> Dict[str, Any]:
+    def get_privacy_detection_stats(self, account_id: Optional[str] = None) -> Dict[str, Any]:
         """
-        Get statistics about privacy detection results.
+        Get comprehensive statistics about privacy detection results.
+
+        Args:
+            account_id: Optional account ID to filter results by
 
         Returns:
-            Dictionary with various statistics
+            Dictionary with comprehensive statistics
         """
         try:
             conn = self._get_connection()
             cursor = conn.cursor()
 
+            # Base query with optional account filter
+            account_filter = "WHERE account_id = ?" if account_id else ""
+            account_params = [account_id] if account_id else []
+
             # Total count
-            cursor.execute("SELECT COUNT(*) FROM privacy_detection_results")
+            cursor.execute(f"SELECT COUNT(*) FROM privacy_detection_results {account_filter}", account_params)
             total_count = cursor.fetchone()[0]
 
-            # Count by severity
-            cursor.execute("""
+            # Count by severity (only for detected leaks)
+            cursor.execute(f"""
                 SELECT
                     json_extract(detection_result, '$.overall_severity') as severity,
                     COUNT(*) as count
                 FROM privacy_detection_results
-                WHERE json_extract(detection_result, '$.privacy_detected') = 1
+                {account_filter}
+                AND json_extract(detection_result, '$.privacy_detected') = 1
                 GROUP BY severity
-            """)
+            """, account_params)
             severity_counts = dict(cursor.fetchall())
 
             # Count by execution mode
-            cursor.execute("""
+            cursor.execute(f"""
                 SELECT execution_mode, COUNT(*) as count
                 FROM privacy_detection_results
+                {account_filter}
                 GROUP BY execution_mode
-            """)
+            """, account_params)
             execution_mode_counts = dict(cursor.fetchall())
 
-            # Recent activity (last 24 hours)
-            cursor.execute("""
+            # Count by privacy type (aggregate all leaks)
+            cursor.execute(f"""
+                SELECT
+                    json_extract(value, '$.privacy_type') as privacy_type,
+                    COUNT(*) as count
+                FROM privacy_detection_results,
+                json_each(json_extract(detection_result, '$.privacy_leaks'))
+                {account_filter}
+                GROUP BY privacy_type
+            """, account_params)
+            privacy_type_counts = dict(cursor.fetchall())
+
+            # Count by confidence level
+            cursor.execute(f"""
+                SELECT
+                    json_extract(value, '$.confidence') as confidence,
+                    COUNT(*) as count
+                FROM privacy_detection_results,
+                json_each(json_extract(detection_result, '$.privacy_leaks'))
+                {account_filter}
+                GROUP BY confidence
+            """, account_params)
+            confidence_counts = dict(cursor.fetchall())
+
+            # Account distribution (only if no specific account filter)
+            account_distribution = {}
+            if not account_id:
+                cursor.execute("""
+                    SELECT account_id, COUNT(*) as count
+                    FROM privacy_detection_results
+                    WHERE account_id IS NOT NULL
+                    GROUP BY account_id
+                    ORDER BY count DESC
+                    LIMIT 20
+                """)
+                account_distribution = dict(cursor.fetchall())
+
+            # Error rate
+            cursor.execute(f"""
                 SELECT COUNT(*) FROM privacy_detection_results
-                WHERE created_at >= datetime('now', '-1 day')
-            """)
+                {account_filter}
+                AND error IS NOT NULL AND error != ''
+            """, account_params)
+            error_count = cursor.fetchone()[0]
+
+            # Average conversation length
+            cursor.execute(f"""
+                SELECT AVG(conversation_length) FROM privacy_detection_results
+                {account_filter}
+                WHERE conversation_length IS NOT NULL
+            """, account_params)
+            avg_conversation_length = cursor.fetchone()[0] or 0
+
+            # Detection rate (percentage of conversations with leaks)
+            cursor.execute(f"""
+                SELECT COUNT(*) FROM privacy_detection_results
+                {account_filter}
+                AND json_extract(detection_result, '$.privacy_detected') = 1
+            """, account_params)
+            detected_count = cursor.fetchone()[0]
+
+            detection_rate = (detected_count / total_count * 100) if total_count > 0 else 0
+
+            # Recent activity (last 24 hours)
+            cursor.execute(f"""
+                SELECT COUNT(*) FROM privacy_detection_results
+                {account_filter}
+                AND created_at >= datetime('now', '-1 day')
+            """, account_params)
             recent_count = cursor.fetchone()[0]
+
+            # Time-based statistics (last 7 days)
+            cursor.execute(f"""
+                SELECT
+                    DATE(created_at) as date,
+                    COUNT(*) as count,
+                    SUM(CASE WHEN json_extract(detection_result, '$.privacy_detected') = 1 THEN 1 ELSE 0 END) as detected_count
+                FROM privacy_detection_results
+                {account_filter}
+                AND created_at >= datetime('now', '-7 days')
+                GROUP BY DATE(created_at)
+                ORDER BY date
+            """, account_params)
+            daily_stats = cursor.fetchall()
+
+            # Most common leak types
+            cursor.execute(f"""
+                SELECT
+                    json_extract(value, '$.privacy_type') as privacy_type,
+                    COUNT(*) as count
+                FROM privacy_detection_results,
+                json_each(json_extract(detection_result, '$.privacy_leaks'))
+                {account_filter}
+                GROUP BY privacy_type
+                ORDER BY count DESC
+                LIMIT 10
+            """, account_params)
+            top_leak_types = cursor.fetchall()
 
             return {
                 "total_detections": total_count,
+                "detection_rate_percent": round(detection_rate, 2),
+                "error_rate_percent": round((error_count / total_count * 100) if total_count > 0 else 0, 2),
                 "severity_distribution": severity_counts,
+                "privacy_type_distribution": privacy_type_counts,
+                "confidence_distribution": confidence_counts,
                 "execution_mode_distribution": execution_mode_counts,
-                "recent_detections_24h": recent_count
+                "account_distribution": account_distribution,
+                "average_conversation_length": round(avg_conversation_length, 2),
+                "recent_detections_24h": recent_count,
+                "daily_stats_last_7_days": [
+                    {
+                        "date": row[0],
+                        "total_detections": row[1],
+                        "privacy_detections": row[2]
+                    } for row in daily_stats
+                ],
+                "top_leak_types": [
+                    {"privacy_type": row[0], "count": row[1]} for row in top_leak_types
+                ],
+                "metadata": {
+                    "account_filter": account_id,
+                    "generated_at": self._get_timestamp()
+                }
             }
 
         except Exception as e:

@@ -4,12 +4,20 @@ This module provides a singleton LLM client that reuses HTTP connections
 and applies optimized settings for better performance.
 """
 
-from typing import Optional
+from typing import Optional, Union
 import httpx
 from langchain_openai import ChatOpenAI
 
 from ..config.settings import settings
 from .logger import get_logger
+
+# Try to import Google Gemini integration
+try:
+    from langchain_google_genai import ChatGoogleGenerativeAI
+    GOOGLE_AVAILABLE = True
+except ImportError:
+    GOOGLE_AVAILABLE = False
+    ChatGoogleGenerativeAI = None
 
 logger = get_logger(__name__)
 
@@ -45,7 +53,7 @@ class LLMClientManager:
         # Proxy configuration is now handled via environment variables (HTTP_PROXY, HTTPS_PROXY)
         # to ensure compatibility across different versions of httpx and OpenAI SDK.
         # The trust_env=True parameter enables httpx to respect these environment variables.
-        if proxy or settings.openai_proxy:
+        if proxy:
             logger.warning(
                 "Proxy parameter is deprecated. Please use HTTP_PROXY and HTTPS_PROXY "
                 "environment variables instead. The proxy parameter will be ignored."
@@ -87,45 +95,61 @@ class LLMClientManager:
         model_name: Optional[str] = None,
         temperature: Optional[float] = None,
         api_key: Optional[str] = None,
-        api_base: Optional[str] = None,
-        proxy: Optional[str] = None
-    ) -> ChatOpenAI:
+        api_base: Optional[str] = None
+    ) -> Union[ChatOpenAI, "ChatGoogleGenerativeAI"]:
         """
         Get or create a shared LLM client.
-        
+
         Args:
             model_name: Model name (defaults to settings)
             temperature: Temperature (defaults to settings)
             api_key: API key (defaults to settings)
             api_base: API base URL (defaults to settings)
-            proxy: HTTP proxy (defaults to settings)
-            
+
         Returns:
-            Configured ChatOpenAI instance
+            Configured LLM client (ChatOpenAI for OpenAI-compatible APIs,
+            ChatGoogleGenerativeAI for official Google Gemini API)
         """
         # Use defaults from settings if not provided
         model_name = model_name or settings.openai_model
         temperature = temperature if temperature is not None else settings.agent_temperature
         api_key = api_key or settings.openai_api_key
         api_base = api_base or settings.openai_api_base
-        proxy = proxy or settings.openai_proxy or None
-        
+
         logger.info(f"Creating LLM client: model={model_name}, temperature={temperature}")
-        
-        # Create http_client with proxy configured if needed
-        http_client = self.get_http_client(proxy=proxy)
-        
-        llm_client = ChatOpenAI(
-            model_name=model_name,
-            api_key=api_key,
-            base_url=api_base,
-            temperature=temperature,
-            max_retries=settings.openai_max_retries,
-            timeout=settings.openai_timeout,
-            http_client=http_client
-        )
-        
-        logger.debug("LLM client created with shared HTTP client")
+
+        # Check if this is a Google Gemini model AND using Google's official API
+        # Only use Google integration when the API base is Google's official endpoint
+        is_google_official = api_base and "googleapis.com" in api_base
+        is_gemini_model = "gemini" in model_name.lower()
+
+        if GOOGLE_AVAILABLE and is_gemini_model and is_google_official:
+            logger.info(f"Using Google Gemini integration for model: {model_name}")
+            llm_client = ChatGoogleGenerativeAI(
+                model=model_name,
+                api_key=api_key,
+                temperature=temperature,
+                max_retries=settings.openai_max_retries,
+                timeout=settings.openai_timeout
+            )
+        else:
+            # Use OpenAI-compatible client for custom API endpoints or non-Gemini models
+            if is_gemini_model and not is_google_official:
+                logger.info(f"Using OpenAI-compatible client for custom API endpoint: {model_name} -> {api_base}")
+            # Create http_client with proxy configured via environment variables
+            http_client = self.get_http_client()
+
+            llm_client = ChatOpenAI(
+                model_name=model_name,
+                api_key=api_key,
+                base_url=api_base,
+                temperature=temperature,
+                max_retries=settings.openai_max_retries,
+                timeout=settings.openai_timeout,
+                http_client=http_client
+            )
+
+        logger.debug("LLM client created")
         return llm_client
     
     def close(self):

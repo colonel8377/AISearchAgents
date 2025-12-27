@@ -50,14 +50,12 @@ class Settings(BaseSettings):
     openai_api_key: str = Field(default="", description="OpenAI API key or Qwen API key")
     openai_api_base: str = Field(default="https://api.openai.com/v1", description="OpenAI API base URL")
     openai_model: str = Field(default="gpt-3.5-turbo", description="Model name (e.g., qwen-turbo)")
-    openai_proxy: str = Field(default="", description="HTTP proxy for OpenAI API requests (optional)")
 
     # Embedding Settings
     embedding_provider: str = Field(default="openai", description="Embedding provider: 'openai', 'qwen', 'gemini', 'deepseek', etc.")
     embedding_model: str = Field(default="text-embedding-ada-002", description="Embedding model name")
     embedding_api_key: str = Field(default="", description="API key for embedding provider (uses openai_api_key if empty)")
     embedding_api_base: str = Field(default="", description="API base URL for embedding provider (uses openai_api_base if empty)")
-    embedding_proxy: str = Field(default="", description="HTTP proxy for embedding requests (uses openai_proxy if empty)")
     
     # Vector Store Settings
     vector_store_type: Literal["redis", "postgres", "chroma"] = Field(

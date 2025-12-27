@@ -13,7 +13,7 @@ from ..schemas import (
 )
 from ...agents.content_extractor.agent import ContentExtractorAgent
 from ...agents.claim_atomizer.agent import ClaimAtomizerAgent
-from ...agents.web_opinion_extractor import WebOpinionAnalyzer
+from ...agents.web_opinion_extractor import WebOpinionAnalyzer, CoTMode
 from ...config.settings import settings
 from ...utils.logger import get_logger
 from .consistency import complete_academic_analysis
@@ -221,13 +221,7 @@ async def _evaluate_content(content: str, content_type: str, enable_deep_analysi
 
                 from ...agents.web_opinion_extractor import WebOpinionAnalyzer
 
-                analyzer = WebOpinionAnalyzer(
-
-                    execution_mode=settings.default_execution_mode,
-
-                    proxy=settings.openai_proxy if settings.openai_proxy else None
-
-                )
+                analyzer = WebOpinionAnalyzer()
 
                 # Analyze text to extract facts and opinions
 
@@ -381,9 +375,7 @@ async def _evaluate_url(url: str, enable_deep_analysis: bool = True) -> Dict[str
 
             api_base=settings.openai_api_base,
 
-            temperature=settings.agent_temperature,
-
-            proxy=settings.openai_proxy
+            temperature=settings.agent_temperature
 
         )
 
@@ -457,9 +449,7 @@ async def _check_summary_vs_url_consistency(summary: str, url: str, enable_deep_
 
             api_base=settings.openai_api_base,
 
-            temperature=settings.agent_temperature,
-
-            proxy=settings.openai_proxy
+            temperature=settings.agent_temperature
 
         )
 
@@ -479,9 +469,7 @@ async def _check_summary_vs_url_consistency(summary: str, url: str, enable_deep_
 
             api_base=settings.openai_api_base,
 
-            temperature=settings.agent_temperature,
-
-            proxy=settings.openai_proxy
+            temperature=settings.agent_temperature
 
         )
 
@@ -497,9 +485,7 @@ async def _check_summary_vs_url_consistency(summary: str, url: str, enable_deep_
 
                 api_base=settings.openai_api_base,
 
-                temperature=settings.agent_temperature,
-
-                proxy=settings.openai_proxy
+                temperature=settings.agent_temperature
 
             )
 
@@ -533,7 +519,7 @@ async def _check_summary_vs_url_consistency(summary: str, url: str, enable_deep_
 
         # Create LLM instance for comparisons
 
-        http_client = llm_manager.get_http_client(proxy=settings.openai_proxy)
+        http_client = llm_manager.get_http_client()
 
         llm = ChatOpenAI(
 
@@ -919,43 +905,6 @@ async def _comparative_analysis(summary: str, url: str, enable_deep_analysis: bo
 
 # ===========================
 
-class CompleteAnalysisRequest(BaseModel):
-
-    """Request model for complete academic analysis pipeline."""
-
-    url: str = Field(..., description="URL to analyze completely")
-
-    use_llm_content_extraction: bool = Field(default=False, description="Use LLM for content extraction refinement")
-
-    use_cot_atomization: bool = Field(default=False, description="Use CoT for claim atomization")
-
-    use_cot_audit: bool = Field(default=False, description="Use CoT for conflict auditing")
-
-    custom_few_shots_atomizer: Optional[str] = Field(default=None, description="Custom few-shots for atomizer")
-
-    custom_few_shots_auditor: Optional[str] = Field(default=None, description="Custom few-shots for auditor")
-
-    model_config = {
-
-        "json_schema_extra": {
-
-            "examples": [
-
-                {
-
-                    "url": "https://example.com/research-paper",
-
-                    "use_cot_atomization": True,
-
-                    "use_cot_audit": True,
-
-                }
-
-            ]
-
-        }
-
-    }
 
 class PipelineStepResponse(BaseModel):
 

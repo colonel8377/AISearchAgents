@@ -165,7 +165,7 @@ class OpinionExtractionResult(BaseModel):
 class LogicMode(str, Enum):
     """
     Logic mode for the web opinion analysis pipeline.
-    
+
     - LOCAL_CHAIN: Extract -> Atomize -> Score (full pipeline with atomization)
     - NO_CHAIN: Extract -> Score (skip atomization, score full text)
     - PURE_ONLINE: End-to-end LLM analysis without intermediate steps
@@ -173,6 +173,42 @@ class LogicMode(str, Enum):
     LOCAL_CHAIN = "LOCAL_CHAIN"
     NO_CHAIN = "NO_CHAIN"
     PURE_ONLINE = "PURE_ONLINE"
+
+
+class CoTMode(str, Enum):
+    """
+    Chain of Thought (CoT) reasoning modes for LLM agents.
+
+    - CHAIN_ONLINE: LLM handles task decomposition and chaining (more tokens, better reasoning)
+    - CHAIN_LOCAL: System handles task decomposition, LLM executes individual steps (balanced)
+    - NO_CHAIN: Direct prompt without CoT reasoning (fewer tokens, simpler)
+    """
+    CHAIN_ONLINE = "chain_online"
+    CHAIN_LOCAL = "chain_local"
+    NO_CHAIN = "no_chain"
+
+    @classmethod
+    def from_code_or_value(cls, value):
+        """Convert code (int) or value (str) to CoTMode enum."""
+        if isinstance(value, int):
+            # Map numeric codes to enum values
+            code_map = {0: cls.CHAIN_ONLINE, 1: cls.CHAIN_LOCAL, 2: cls.NO_CHAIN}
+            if value in code_map:
+                return code_map[value]
+            raise ValueError(f"Invalid CoT mode code: {value}. Must be 0, 1, or 2.")
+        elif isinstance(value, str):
+            # Try direct enum value
+            try:
+                return cls(value.lower())
+            except ValueError:
+                # Try code as string
+                try:
+                    code = int(value)
+                    return cls.from_code_or_value(code)
+                except ValueError:
+                    raise ValueError(f"Invalid CoT mode: {value}. Must be 'chain_online', 'chain_local', 'no_chain', or code 0, 1, 2.")
+        else:
+            raise ValueError(f"CoT mode must be string or int, got {type(value)}")
 
 
 class PipelineConfig(BaseModel):

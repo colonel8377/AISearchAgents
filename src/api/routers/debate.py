@@ -77,8 +77,6 @@ async def generate_personas(
 
     try:
 
-        execution_mode = request.execution_mode or settings.default_execution_mode
-
         personas, detected_style = await debate_service.generate_personas_for_topic(
 
             topic=request.topic,
@@ -86,8 +84,6 @@ async def generate_personas(
             context=request.context,
 
             num_agents=request.num_agents,
-
-            execution_mode=execution_mode,
 
             corpus=request.corpus
 
@@ -180,8 +176,6 @@ async def init_debate(
 
     try:
 
-        execution_mode = None
-
         # Determine personas to use
 
         if request.custom_personas:
@@ -190,29 +184,17 @@ async def init_debate(
 
         elif request.auto_agent_count > 0:
 
-            # Use chain-based persona generation if execution_mode is specified
+            personas, detected_style = await debate_service.generate_personas_for_topic(
 
-            if request.execution_mode:
+                topic=request.topic,
 
-                execution_mode = request.execution_mode
+                context=request.context or "",
 
-                personas, detected_style = await debate_service.generate_personas_for_topic(
-
-                    topic=request.topic,
-
-                    context=request.context or "",
-
-                    num_agents=request.auto_agent_count,
-
-                    execution_mode=execution_mode,
+                num_agents=request.auto_agent_count,
 
                     corpus=request.corpus
 
                 )
-
-            else:
-
-                personas = generate_default_personas(request.auto_agent_count)
 
         else:
 
@@ -254,9 +236,7 @@ async def init_debate(
 
             topic=request.topic,
 
-            max_rounds=max_rounds,
-
-            execution_mode=execution_mode
+            max_rounds=max_rounds
 
         )
 

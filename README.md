@@ -29,6 +29,11 @@ EMBEDDING_API_KEY=  # Leave empty to use OPENAI_API_KEY
 API_HOST=0.0.0.0
 API_PORT=8000
 VECTOR_STORE_TYPE=chroma
+
+# Proxy Configuration (for API requests)
+# Set these environment variables to configure HTTP proxies
+HTTP_PROXY=http://your-proxy-server:port
+HTTPS_PROXY=http://your-proxy-server:port
 ```
 
 ## Core Features
@@ -38,6 +43,7 @@ VECTOR_STORE_TYPE=chroma
 - **Consistency Checking**: Verify if website summaries accurately reflect their content
 - **Debate Simulation**: Multi-agent debates with stability analysis
 - **Quality Assessment**: Content metrics and bias detection
+- **Privacy Detection**: Analyze conversations for privacy leaks with LLM hallucination prevention
 - **Bot Chat System**: Create custom AI personas and chat in persistent conversation threads or incognito mode
 
 ## API Structure
@@ -56,6 +62,11 @@ VECTOR_STORE_TYPE=chroma
 │   ├── check-summary-url    # Verify summary accuracy
 │   ├── compare-claims       # Compare two specific claims
 │   └── complete             # Full 5-step academic analysis pipeline
+├── privacy-detector/# Privacy leak detection
+│   ├── detect               # Analyze conversations for privacy leaks
+│   ├── results              # Get/list detection results
+│   ├── stats                # Comprehensive privacy statistics
+│   └── results/{id}         # Individual result management
 ├── quality/         # Quality assessment
 │   └── overall              # Comprehensive quality evaluation
 ├── opinion/         # Bias analysis
@@ -111,6 +122,51 @@ incognito_response = requests.post("http://localhost:8000/api/v1/bot/chat", json
 print("Incognito response:", incognito_response.json()["response"])
 ```
 
+### Privacy Detection System
+
+Analyze user conversations for potential privacy leaks with advanced LLM hallucination prevention:
+
+```python
+import requests
+
+BASE_URL = "http://localhost:8000"
+
+# 1. Detect privacy leaks in conversation (with anti-hallucination validation)
+response = requests.post(f"{BASE_URL}/api/v1/privacy-detector/detect", json={
+    "conversation_records": [
+        {"user": "My email is john@example.com and SSN is 123-45-6789"},
+        {"user": "The password for my bank account is 'secret123'"},
+        {"user": "Call me at 555-123-4567 if you need anything"}
+    ],
+    "account_id": "user123",  # Optional: group by account
+    "execution_mode": "chain_local",
+    "use_few_shots": True
+})
+result = response.json()
+
+print(f"Privacy leaks detected: {len(result['privacy_leaks'])}")
+print(f"Overall severity: {result['overall_severity']}")
+
+# Each leak includes validation information
+for leak in result['privacy_leaks']:
+    print(f"Type: {leak['privacy_type']}, Confidence: {leak['confidence']}")
+    if leak['confidence'] == 'invalid':
+        print(f"  Warning: {leak['validation_error']}")
+
+# 2. Get comprehensive privacy statistics
+stats_response = requests.get(f"{BASE_URL}/api/v1/privacy-detector/stats")
+stats = stats_response.json()
+
+print(f"Total detections: {stats['total_detections']}")
+print(f"Detection rate: {stats['detection_rate_percent']}%")
+print(f"Most common leak type: {stats['top_leak_types'][0]['privacy_type']}")
+
+# 3. Get account-specific statistics
+account_stats = requests.get(f"{BASE_URL}/api/v1/privacy-detector/stats?account_id=user123")
+account_data = account_stats.json()
+print(f"User123 detections: {account_data['total_detections']}")
+```
+
 ### Content Analysis
 
 ```python
@@ -147,8 +203,8 @@ if result.get('conflicting_points'):
 resp = requests.post(f"{BASE_URL}/api/v1/consistency/complete",
     json={
         "url": "https://example.com/research-paper",
-        "use_cot_atomization": True,
-        "use_cot_audit": True,
+        "use_cot_atomization": "chain_local",  # Options: "chain_online", "chain_local", "no_chain" or 0, 1, 2
+        "use_cot_audit": "chain_local",       # Options: "chain_online", "chain_local", "no_chain" or 0, 1, 2
         "use_llm_synthesis": True
     })
 result = resp.json()
@@ -385,6 +441,19 @@ System-provided default few-shot examples are professionally crafted for each ag
 - `POST /api/v1/consistency/compare-claims` - Compare two specific claims
 - `POST /api/v1/consistency/complete` - Full 5-step academic analysis pipeline
 - `POST /api/v1/quality/overall` - Comprehensive quality evaluation
+
+### Privacy Detection
+- `POST /api/v1/privacy-detector/detect` - Analyze conversations for privacy leaks with validation
+- `GET /api/v1/privacy-detector/results/{detection_id}` - Get specific detection result
+- `GET /api/v1/privacy-detector/results` - List detection results
+- `GET /api/v1/privacy-detector/stats` - Get comprehensive privacy statistics
+- `DELETE /api/v1/privacy-detector/results/{detection_id}` - Delete detection result
+
+### Few-Shot Management
+- `GET /api/v1/shots/{agent_type}` - Get effective few-shot examples for any agent
+- `POST /api/v1/shots/{agent_type}/custom` - Set custom few-shot examples
+- `GET /api/v1/shots/{agent_type}/custom` - Get current custom few-shot examples
+- `DELETE /api/v1/shots/{agent_type}/custom` - Reset to default few-shot examples
 
 ### Opinion Analysis
 - `POST /api/v1/opinion/extract-clean` - Extract and clean HTML content

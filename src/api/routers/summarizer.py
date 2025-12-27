@@ -9,6 +9,7 @@ from ..schemas import (
     SummarizeRequest, SummaryResponse, AddTurnRequest
 )
 from ...agents.manager import AgentType
+from ...agents.web_opinion_extractor import CoTMode
 from ...utils.logger import get_logger
 
 logger = get_logger(__name__)
@@ -68,7 +69,7 @@ async def summarize_conversation(
 
             request.conversation_records,
 
-            execution_mode=request.execution_mode,
+            execution_mode=request.use_cot.value if isinstance(request.use_cot, CoTMode) else str(request.use_cot),
 
             use_few_shots=request.use_few_shots
 
@@ -422,24 +423,22 @@ async def delete_conversation(
 async def summarize_conversation_by_id(
     agent_id: str,
     conversation_id: str,
-    execution_mode: Optional[str] = Query(default=None, description="Execution mode: 'chain_online', 'chain_local', or 'no_chain'"),
     use_few_shots: bool = Query(default=True, description="Whether to use few-shot examples"),
     custom_few_shots: Optional[str] = Query(default=None, description="Optional custom few-shot examples"),
     _api_key: str = Depends(get_api_key)  # Authentication dependency (value not used)
 ):
     """
     Generate a summary for a specific conversation.
-    
+
     This summarizes all turns in the conversation and stores the summary with the conversation.
-    
+
     Args:
         agent_id: The agent's unique identifier
         conversation_id: The conversation ID to summarize
-        execution_mode: Optional execution mode ('chain_online', 'chain_local', 'no_chain')
         use_few_shots: Whether to use few-shot examples (default: True)
         custom_few_shots: Optional custom few-shot examples
         _api_key: Authentication dependency (value not used, required for auth check)
-    
+
     Returns:
         Summary response with summary text and metadata
     """
@@ -459,7 +458,7 @@ async def summarize_conversation_by_id(
     try:
         result = agent.summarize_conversation_by_id(
             conversation_id=conversation_id,
-            execution_mode=execution_mode,
+            execution_mode="chain_local",  # Default for conversation summarization
             use_few_shots=use_few_shots,
             custom_few_shots=custom_few_shots
         )
@@ -471,7 +470,7 @@ async def summarize_conversation_by_id(
         if "metadata" not in result:
             result["metadata"] = {}
         result["metadata"]["conversation_id"] = conversation_id
-        
+
         return SummaryResponse(**result)
     except HTTPException:
         raise

@@ -124,7 +124,6 @@ Keep your summary clear, structured, and easy to understand."""
         api_base: Optional[str] = None,
         temperature: float = 0.3,
         vector_store: Optional[Any] = None,
-        proxy: Optional[str] = None
     ):
         """
         Initialize the SummarizerAgent.
@@ -135,14 +134,13 @@ Keep your summary clear, structured, and easy to understand."""
             api_base: Base URL for the API
             temperature: Temperature for LLM responses (lower for more focused summaries)
             vector_store: Optional vector store for memory
-            proxy: Optional HTTP proxy for API requests
         """
         model_name = model_name or settings.openai_model
         logger.info(f"Initializing SummarizerAgent: model={model_name}, temperature={temperature}")
         
         # Use shared HTTP client for better connection pooling and performance
         # Configure proxy on the http_client itself, not via openai_proxy parameter
-        http_client = llm_manager.get_http_client(proxy=proxy)
+        http_client = llm_manager.get_http_client()
         
         self.llm = ChatOpenAI(
             model_name=model_name,
