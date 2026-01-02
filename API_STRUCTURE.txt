@@ -416,7 +416,7 @@ Pattern 3: Manage Conversations
 ═══════════════════════════════════════════════════════════════════════════════
 
 ┌─────────────────────────────────────────────────────────────────────────────┐
-│                         Base: /api/v1/privacy-detector                       │
+│                         Base: /api/v1/privacy                                │
 └─────────────────────────────────────────────────────────────────────────────┘
 
 ┌─────────────────────────────────────────────────────────────────────────────┐
@@ -461,20 +461,24 @@ Pattern 3: Manage Conversations
 └─────────────────────────────────────────────────────────────────────────────┘
 
 ┌─────────────────────────────────────────────────────────────────────────────┐
-│ 2. Get Detection Result API                                                 │
+│ 2. Get Detection Result API ⭐⭐                                            │
 ├─────────────────────────────────────────────────────────────────────────────┤
 │ Endpoint:  GET /results/{detection_id}                                      │
-│ Output:    Same as Detect API output                                        │
+│ Output:    Same as Detect API output (includes file analysis if uploaded)   │
 │ Use:       Retrieve specific privacy detection result by ID                 │
+│            This is the main endpoint for getting full detection details    │
 └─────────────────────────────────────────────────────────────────────────────┘
 
 ┌─────────────────────────────────────────────────────────────────────────────┐
-│ 3. List Detection Results API                                               │
+│ 3. List Detection IDs API                                                   │
 ├─────────────────────────────────────────────────────────────────────────────┤
 │ Endpoint:  GET /results                                                     │
 │ Query:     limit=50, offset=0                                               │
-│ Output:    Array of detection results                                       │
-│ Use:       List all stored privacy detection results                        │
+│ Output:    {                                                                │
+│              "detection_ids": ["uuid1", "uuid2", ...],                      │
+│              "count": 50                                                    │
+│            }                                                                │
+│ Use:       List detection IDs only. Use /results/{detection_id} for details│
 └─────────────────────────────────────────────────────────────────────────────┘
 
 ┌─────────────────────────────────────────────────────────────────────────────┐
@@ -572,7 +576,7 @@ Pattern 3: Statistical Monitoring
 ═══════════════════════════════════════════════════════════════════════════════
 
 1. Basic Privacy Detection:
-   curl -X POST http://localhost:8000/api/v1/privacy-detector/detect \
+   curl -X POST http://localhost:8000/api/v1/privacy/detect \
      -H "Content-Type: application/json" \
      -d '{
        "conversation_records": [
@@ -582,7 +586,7 @@ Pattern 3: Statistical Monitoring
      }'
 
 2. Account-Based Detection:
-   curl -X POST http://localhost:8000/api/v1/privacy-detector/detect \
+   curl -X POST http://localhost:8000/api/v1/privacy/detect \
      -H "Content-Type: application/json" \
      -d '{
        "conversation_records": [
@@ -591,17 +595,25 @@ Pattern 3: Statistical Monitoring
        "account_id": "user123"
      }'
 
-3. Get Statistics (All Accounts):
-   curl http://localhost:8000/api/v1/privacy-detector/stats
+3. Get Detection Result by ID:
+   curl http://localhost:8000/api/v1/privacy/results/{detection_id}
 
-4. Get Statistics (Specific Account):
-   curl "http://localhost:8000/api/v1/privacy-detector/stats?account_id=user123"
+4. List Detection IDs:
+   curl "http://localhost:8000/api/v1/privacy/results?limit=50&offset=0"
 
-5. Python Example:
+5. Get Statistics (All Accounts):
+   curl http://localhost:8000/api/v1/privacy/stats
+
+6. Get Statistics (Specific Account):
+   curl "http://localhost:8000/api/v1/privacy/stats?account_id=user123"
+
+7. Python Example:
    import requests
 
+   BASE_URL = "http://localhost:8000"
+
    # Detect privacy leaks
-   response = requests.post("http://localhost:8000/api/v1/privacy-detector/detect", json={
+   response = requests.post(f"{BASE_URL}/api/v1/privacy/detect", json={
        "conversation_records": [
            {"user": "My SSN is 123-45-6789"},
            {"user": "Password: secret123"}
@@ -609,11 +621,23 @@ Pattern 3: Statistical Monitoring
        "account_id": "user123"
    })
    result = response.json()
+   detection_id = result["detection_id"]
    print(f"Leaks detected: {len(result['privacy_leaks'])}")
    print(f"Overall severity: {result['overall_severity']}")
 
+   # Get detection result by ID
+   result_response = requests.get(f"{BASE_URL}/api/v1/privacy/results/{detection_id}")
+   full_result = result_response.json()
+   print(f"Full result: {full_result}")
+
+   # List detection IDs
+   ids_response = requests.get(f"{BASE_URL}/api/v1/privacy/results?limit=10")
+   ids = ids_response.json()
+   print(f"Total detections: {ids['count']}")
+   print(f"Detection IDs: {ids['detection_ids']}")
+
    # Get statistics
-   stats = requests.get("http://localhost:8000/api/v1/privacy-detector/stats").json()
+   stats = requests.get(f"{BASE_URL}/api/v1/privacy/stats").json()
    print(f"Total detections: {stats['total_detections']}")
    print(f"Detection rate: {stats['detection_rate_percent']}%")
 
