@@ -46,3 +46,5 @@ logs/
 # OS
 .DS_Store
 Thumbs.db
+/data/694dac56-98fc-8320-82d8-9b8f46621ba0.json
+/data/app_storage.db
