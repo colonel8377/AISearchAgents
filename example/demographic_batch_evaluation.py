@@ -145,7 +145,7 @@ def load_articles_from_feather(feather_path: str, text_column: str = "text") -> 
 
 def evaluate_sentences_api(
     demography_json: Dict[str, Any],
-    sentences: List[str],
+    sentences: Any,  # Can be List[str] or str (API auto-splits strings)
     use_cot: str = "no_chain",
     use_few_shots: bool = True,
     api_key: Optional[str] = None
@@ -155,7 +155,7 @@ def evaluate_sentences_api(
     
     Args:
         demography_json: Demographic profile as dictionary
-        sentences: List of sentences to evaluate
+        sentences: List of sentences or a single string (API will auto-split strings into sentences)
         use_cot: Chain of Thought mode ('chain_online', 'chain_local', 'no_chain')
         use_few_shots: Whether to use few-shot examples
         api_key: Optional API key for authentication
