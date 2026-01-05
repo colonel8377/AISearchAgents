@@ -12,6 +12,8 @@ DataFrame format expected:
     Columns: ['article_id', 'sentence', 'target', 'source_bias']
     Example row: 5.0, "[0]: The wife of Kentucky...", 2, right
 
+Results are stored in SQLite database at: data/demographic_evaluation.db
+
 Requirements:
     pip install pandas pyarrow requests
 
@@ -42,7 +44,10 @@ Quick integration example:
 """
 
 import json
+import os
+import sqlite3
 import time
+from datetime import datetime
 from itertools import combinations, product
 from typing import Generator, Dict, List, Any, Optional
 
@@ -68,8 +73,257 @@ API_KEY = None  # Set if API_KEY_REQUIRED=true in your .env
 # Feather file path (update this to your file)
 FEATHER_PATH = "your_articles.feather"
 
+# SQLite database path (in data directory)
+DATA_DIR = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "data")
+SQLITE_DB_PATH = os.path.join(DATA_DIR, "demographic_evaluation.db")
+
 # Rate limiting (requests per second)
 RATE_LIMIT_DELAY = 0.5  # seconds between API calls
+
+
+# =============================================================================
+# SQLite Storage
+# =============================================================================
+
+def init_sqlite_db(db_path: str = SQLITE_DB_PATH) -> sqlite3.Connection:
+    """
+    Initialize SQLite database with required tables.
+    
+    Args:
+        db_path: Path to the SQLite database file
+    
+    Returns:
+        sqlite3.Connection: Database connection
+    """
+    # Ensure data directory exists
+    os.makedirs(os.path.dirname(db_path), exist_ok=True)
+    
+    conn = sqlite3.connect(db_path)
+    cursor = conn.cursor()
+    
+    # Create evaluation_runs table
+    cursor.execute('''
+        CREATE TABLE IF NOT EXISTS evaluation_runs (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            run_id TEXT UNIQUE NOT NULL,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            total_personas INTEGER,
+            successful_evaluations INTEGER,
+            failed_evaluations INTEGER,
+            num_sentences INTEGER,
+            use_cot TEXT,
+            use_few_shots INTEGER
+        )
+    ''')
+    
+    # Create personas table
+    cursor.execute('''
+        CREATE TABLE IF NOT EXISTS personas (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            run_id TEXT NOT NULL,
+            persona_json TEXT NOT NULL,
+            gender TEXT,
+            age TEXT,
+            ethnicity TEXT,
+            degree TEXT,
+            politicsParty TEXT,
+            politicalStance TEXT,
+            parent TEXT,
+            success INTEGER,
+            error TEXT,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            FOREIGN KEY (run_id) REFERENCES evaluation_runs(run_id)
+        )
+    ''')
+    
+    # Create judgments table
+    cursor.execute('''
+        CREATE TABLE IF NOT EXISTS judgments (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            run_id TEXT NOT NULL,
+            persona_id INTEGER NOT NULL,
+            sentence_index INTEGER,
+            sentence TEXT,
+            agree INTEGER,
+            reason TEXT,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            FOREIGN KEY (run_id) REFERENCES evaluation_runs(run_id),
+            FOREIGN KEY (persona_id) REFERENCES personas(id)
+        )
+    ''')
+    
+    # Create indexes for faster queries
+    cursor.execute('CREATE INDEX IF NOT EXISTS idx_judgments_run_id ON judgments(run_id)')
+    cursor.execute('CREATE INDEX IF NOT EXISTS idx_judgments_persona_id ON judgments(persona_id)')
+    cursor.execute('CREATE INDEX IF NOT EXISTS idx_personas_run_id ON personas(run_id)')
+    
+    conn.commit()
+    return conn
+
+
+def save_results_to_sqlite(
+    results: List[Dict[str, Any]],
+    num_sentences: int,
+    use_cot: str,
+    use_few_shots: bool,
+    db_path: str = SQLITE_DB_PATH
+) -> str:
+    """
+    Save evaluation results to SQLite database.
+    
+    Args:
+        results: List of evaluation results
+        num_sentences: Number of sentences evaluated
+        use_cot: Chain of Thought mode used
+        use_few_shots: Whether few-shot examples were used
+        db_path: Path to the SQLite database file
+    
+    Returns:
+        str: Run ID for this batch
+    """
+    conn = init_sqlite_db(db_path)
+    cursor = conn.cursor()
+    
+    # Generate unique run ID
+    run_id = datetime.now().strftime("%Y%m%d_%H%M%S")
+    
+    # Count successful/failed evaluations
+    successful = sum(1 for r in results if r['success'])
+    failed = len(results) - successful
+    
+    # Insert evaluation run
+    cursor.execute('''
+        INSERT INTO evaluation_runs (run_id, total_personas, successful_evaluations, 
+                                      failed_evaluations, num_sentences, use_cot, use_few_shots)
+        VALUES (?, ?, ?, ?, ?, ?, ?)
+    ''', (run_id, len(results), successful, failed, num_sentences, use_cot, int(use_few_shots)))
+    
+    # Insert personas and judgments
+    for result in results:
+        persona = result['persona']
+        
+        # Insert persona
+        cursor.execute('''
+            INSERT INTO personas (run_id, persona_json, gender, age, ethnicity, degree,
+                                   politicsParty, politicalStance, parent, success, error)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        ''', (
+            run_id,
+            json.dumps(persona),
+            persona.get('gender'),
+            persona.get('age'),
+            persona.get('ethnicity'),
+            persona.get('degree'),
+            persona.get('politicsParty'),
+            persona.get('politicalStance'),
+            persona.get('parent'),
+            int(result['success']),
+            result.get('error')
+        ))
+        
+        persona_id = cursor.lastrowid
+        
+        # Insert judgments
+        for judgment in result.get('judgments', []):
+            cursor.execute('''
+                INSERT INTO judgments (run_id, persona_id, sentence_index, sentence, agree, reason)
+                VALUES (?, ?, ?, ?, ?, ?)
+            ''', (
+                run_id,
+                persona_id,
+                judgment.get('index'),
+                judgment.get('sentence'),
+                judgment.get('agree'),
+                judgment.get('reason')
+            ))
+    
+    conn.commit()
+    conn.close()
+    
+    print(f"Results saved to SQLite: {db_path}")
+    print(f"Run ID: {run_id}")
+    
+    return run_id
+
+
+def query_results_from_sqlite(
+    run_id: Optional[str] = None,
+    db_path: str = SQLITE_DB_PATH
+) -> Dict[str, Any]:
+    """
+    Query evaluation results from SQLite database.
+    
+    Args:
+        run_id: Specific run ID to query (None for latest)
+        db_path: Path to the SQLite database file
+    
+    Returns:
+        dict: Query results
+    """
+    conn = sqlite3.connect(db_path)
+    conn.row_factory = sqlite3.Row
+    cursor = conn.cursor()
+    
+    # Get run info
+    if run_id:
+        cursor.execute('SELECT * FROM evaluation_runs WHERE run_id = ?', (run_id,))
+    else:
+        cursor.execute('SELECT * FROM evaluation_runs ORDER BY created_at DESC LIMIT 1')
+    
+    run = cursor.fetchone()
+    if not run:
+        conn.close()
+        return {"error": "No runs found"}
+    
+    run_id = run['run_id']
+    
+    # Get personas
+    cursor.execute('SELECT * FROM personas WHERE run_id = ?', (run_id,))
+    personas = cursor.fetchall()
+    
+    # Get judgments
+    cursor.execute('SELECT * FROM judgments WHERE run_id = ?', (run_id,))
+    judgments = cursor.fetchall()
+    
+    conn.close()
+    
+    return {
+        "run_id": run_id,
+        "created_at": run['created_at'],
+        "total_personas": run['total_personas'],
+        "successful_evaluations": run['successful_evaluations'],
+        "failed_evaluations": run['failed_evaluations'],
+        "num_sentences": run['num_sentences'],
+        "use_cot": run['use_cot'],
+        "use_few_shots": bool(run['use_few_shots']),
+        "personas": [dict(p) for p in personas],
+        "judgments": [dict(j) for j in judgments]
+    }
+
+
+def list_runs_from_sqlite(db_path: str = SQLITE_DB_PATH) -> List[Dict[str, Any]]:
+    """
+    List all evaluation runs from SQLite database.
+    
+    Args:
+        db_path: Path to the SQLite database file
+    
+    Returns:
+        List of run summaries
+    """
+    if not os.path.exists(db_path):
+        return []
+    
+    conn = sqlite3.connect(db_path)
+    conn.row_factory = sqlite3.Row
+    cursor = conn.cursor()
+    
+    cursor.execute('SELECT * FROM evaluation_runs ORDER BY created_at DESC')
+    runs = cursor.fetchall()
+    
+    conn.close()
+    
+    return [dict(r) for r in runs]
 
 # =============================================================================
 # Demographic Combinations Generator
@@ -242,6 +496,7 @@ def run_batch_evaluation(
     use_cot: str = "no_chain",
     use_few_shots: bool = False,
     save_results: bool = True,
+    save_to_sqlite: bool = True,
     output_file: str = "evaluation_results.json"
 ) -> List[Dict[str, Any]]:
     """
@@ -252,8 +507,9 @@ def run_batch_evaluation(
         demographic_combinations: List of demographic profiles to test
         use_cot: Chain of Thought mode
         use_few_shots: Whether to use few-shot examples (default: False)
-        save_results: Whether to save results to a file
-        output_file: Output file path for results
+        save_results: Whether to save results to a JSON file
+        save_to_sqlite: Whether to save results to SQLite database (default: True)
+        output_file: Output file path for JSON results
     
     Returns:
         List of results for each demographic combination
@@ -308,11 +564,21 @@ def run_batch_evaluation(
     print("-" * 50)
     print(f"Batch evaluation complete. {sum(1 for r in results if r['success'])}/{total} successful.")
     
-    # Save results
+    # Save results to JSON
     if save_results:
         with open(output_file, 'w') as f:
             json.dump(results, f, indent=2)
-        print(f"Results saved to: {output_file}")
+        print(f"Results saved to JSON: {output_file}")
+    
+    # Save results to SQLite
+    if save_to_sqlite:
+        run_id = save_results_to_sqlite(
+            results=results,
+            num_sentences=len(sentences),
+            use_cot=use_cot,
+            use_few_shots=use_few_shots
+        )
+        print(f"Results saved to SQLite with run_id: {run_id}")
     
     return results
 
@@ -408,12 +674,14 @@ def main():
     
     # Run batch evaluation
     # NOTE: use_few_shots=False as requested - no few-shot examples in prompt
+    # Results are saved to both JSON file and SQLite database (data/demographic_evaluation.db)
     results = run_batch_evaluation(
         sentences=sentences,  # Pass as array (pre-split sentences)
         demographic_combinations=test_personas,
         use_cot="no_chain",  # Use "chain_local" for more detailed reasoning
         use_few_shots=False,  # Disable few-shot examples
-        save_results=True,
+        save_results=True,  # Save to JSON
+        save_to_sqlite=True,  # Save to SQLite (data/demographic_evaluation.db)
         output_file="demographic_evaluation_results.json"
     )
     
@@ -421,6 +689,14 @@ def main():
     analysis = analyze_results(results)
     print("\n=== Analysis Summary ===")
     print(json.dumps(analysis, indent=2))
+    
+    # Show how to query results from SQLite
+    print("\n=== SQLite Query Example ===")
+    print(f"Database location: {SQLITE_DB_PATH}")
+    runs = list_runs_from_sqlite()
+    print(f"Total runs in database: {len(runs)}")
+    if runs:
+        print(f"Latest run: {runs[0]['run_id']}")
 
 
 if __name__ == "__main__":
