@@ -378,6 +378,125 @@ def get_full_demographic_combinations() -> List[Dict[str, str]]:
 # Article/Sentences Loading
 # =============================================================================
 
+def extract_sentence_index(sentence: str) -> int:
+    """
+    Extract the index from a sentence with bracket prefix like "[0]: text".
+    
+    Args:
+        sentence: Sentence string with format "[index]: text"
+    
+    Returns:
+        int: The extracted index, or 9999 if not found
+    """
+    import re
+    match = re.match(r'\[(\d+)\]:', sentence)
+    if match:
+        return int(match.group(1))
+    return 9999  # Default for sentences without index
+
+
+def remove_bracket_prefix(sentence: str) -> str:
+    """
+    Remove the bracket prefix from a sentence like "[0]: text" -> "text".
+    
+    Args:
+        sentence: Sentence string with format "[index]: text"
+    
+    Returns:
+        str: Sentence without the bracket prefix
+    """
+    import re
+    # Remove pattern like "[0]: " or "[12]: " from the start
+    cleaned = re.sub(r'^\[\d+\]:\s*', '', sentence)
+    return cleaned.strip()
+
+
+def load_sentences_by_article(
+    feather_path: str,
+    article_id: float,
+    sentence_column: str = "sentence",
+    article_id_column: str = "article_id",
+    remove_brackets: bool = True
+) -> List[str]:
+    """
+    Load sentences for a specific article, sorted by index and with brackets removed.
+    
+    Args:
+        feather_path: Path to the feather file
+        article_id: The article ID to filter by
+        sentence_column: Name of the column containing sentences
+        article_id_column: Name of the column containing article IDs
+        remove_brackets: Whether to remove bracket prefixes like "[0]: "
+    
+    Returns:
+        List[str]: List of sentences sorted by index
+    """
+    if not HAS_PANDAS:
+        raise ImportError("pandas is required. Install with: pip install pandas pyarrow")
+    
+    df = pd.read_feather(feather_path)
+    
+    # Filter by article_id
+    article_df = df[df[article_id_column] == article_id].copy()
+    
+    if article_df.empty:
+        raise ValueError(f"No sentences found for article_id: {article_id}")
+    
+    # Extract index from bracket prefix for sorting
+    article_df['_sort_index'] = article_df[sentence_column].apply(extract_sentence_index)
+    
+    # Sort by extracted index
+    article_df = article_df.sort_values('_sort_index')
+    
+    # Get sentences
+    sentences = article_df[sentence_column].tolist()
+    
+    # Remove bracket prefixes if requested
+    if remove_brackets:
+        sentences = [remove_bracket_prefix(s) for s in sentences]
+    
+    return sentences
+
+
+def load_all_articles_sentences(
+    feather_path: str,
+    sentence_column: str = "sentence",
+    article_id_column: str = "article_id",
+    remove_brackets: bool = True
+) -> Dict[float, List[str]]:
+    """
+    Load all articles with their sentences sorted and cleaned.
+    
+    Args:
+        feather_path: Path to the feather file
+        sentence_column: Name of the column containing sentences
+        article_id_column: Name of the column containing article IDs
+        remove_brackets: Whether to remove bracket prefixes like "[0]: "
+    
+    Returns:
+        Dict[float, List[str]]: Dictionary mapping article_id to sorted sentences
+    """
+    if not HAS_PANDAS:
+        raise ImportError("pandas is required. Install with: pip install pandas pyarrow")
+    
+    df = pd.read_feather(feather_path)
+    
+    # Get unique article IDs
+    article_ids = df[article_id_column].unique()
+    
+    result = {}
+    for article_id in article_ids:
+        result[article_id] = load_sentences_by_article(
+            feather_path=feather_path,
+            article_id=article_id,
+            sentence_column=sentence_column,
+            article_id_column=article_id_column,
+            remove_brackets=remove_brackets
+        )
+    
+    return result
+
+
 def load_sentences_from_feather(feather_path: str, sentence_column: str = "sentence") -> List[str]:
     """
     Load pre-split sentences from a feather file.
@@ -642,25 +761,45 @@ def analyze_results(results: List[Dict[str, Any]]) -> Dict[str, Any]:
 def main():
     """Main function demonstrating batch demographic evaluation."""
     
-    # Example 1: Using pre-split sentences as a list (RECOMMENDED)
-    # Sentences from user's feather format: "[0]: The wife of Kentucky..."
-    # The API receives the sentences exactly as provided (no splitting)
-    sample_sentences = [
+    # Example 1: Using sample sentences (bracket prefixes will be removed)
+    # Original format: "[0]: The wife of Kentucky..."
+    # After processing: "The wife of Kentucky..."
+    sample_sentences_raw = [
         "[0]: The wife of Kentucky State Rep. Dan Johnson announced Thursday that she would pursue her husband's seat.",
-        "[1]: Dan Johnson, a preacher and a Republican, committed suicide Wednesday on a bridge.",
         "[2]: Washington, according to Bullitt County Sheriff Donnie Tinnell.",
+        "[1]: Dan Johnson, a preacher and a Republican, committed suicide Wednesday on a bridge.",
+        "[5]: Tax cuts for corporations stimulate economic growth.",
         "[3]: The government should increase funding for public education.",
         "[4]: Climate change requires immediate global action.",
-        "[5]: Tax cuts for corporations stimulate economic growth.",
-        "[6]: Universal healthcare should be a fundamental right.",
         "[7]: Gun ownership is a constitutional right that must be protected.",
+        "[6]: Universal healthcare should be a fundamental right.",
     ]
     
-    # Example 2: Load pre-split sentences from feather file
-    # DataFrame columns: ['article_id', 'sentence', 'target', 'source_bias']
-    # sentences = load_sentences_from_feather(FEATHER_PATH, sentence_column="sentence")
+    # Sort by index and remove bracket prefixes
+    sample_sentences_raw.sort(key=extract_sentence_index)
+    sample_sentences = [remove_bracket_prefix(s) for s in sample_sentences_raw]
     
-    # Use sample sentences for this demo
+    print("=== Processed Sentences (sorted, brackets removed) ===")
+    for i, s in enumerate(sample_sentences):
+        print(f"  {i}: {s[:60]}...")
+    print()
+    
+    # Example 2: Load from feather file for a specific article
+    # DataFrame columns: ['article_id', 'sentence', 'target', 'source_bias']
+    # sentences = load_sentences_by_article(
+    #     feather_path=FEATHER_PATH,
+    #     article_id=5.0,  # Specific article
+    #     sentence_column="sentence",
+    #     article_id_column="article_id",
+    #     remove_brackets=True  # Remove "[0]: " prefix
+    # )
+    
+    # Example 3: Load all articles
+    # all_articles = load_all_articles_sentences(FEATHER_PATH, remove_brackets=True)
+    # for article_id, sentences in all_articles.items():
+    #     print(f"Article {article_id}: {len(sentences)} sentences")
+    
+    # Use processed sample sentences for this demo
     sentences = sample_sentences
     
     # Get a subset of demographic combinations for testing
@@ -676,7 +815,7 @@ def main():
     # NOTE: use_few_shots=False as requested - no few-shot examples in prompt
     # Results are saved to both JSON file and SQLite database (data/demographic_evaluation.db)
     results = run_batch_evaluation(
-        sentences=sentences,  # Pass as array (pre-split sentences)
+        sentences=sentences,  # Pass as array (sorted, brackets removed)
         demographic_combinations=test_personas,
         use_cot="no_chain",  # Use "chain_local" for more detailed reasoning
         use_few_shots=False,  # Disable few-shot examples
