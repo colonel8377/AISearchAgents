@@ -2,8 +2,11 @@
 Example: Batch Demographic Evaluation with Feather Files
 
 This script demonstrates how to use the Demographic Evaluator API to run
-batch evaluations across multiple demographic combinations on articles
-stored in a feather file.
+batch evaluations across multiple demographic combinations on pre-split
+sentences stored in a feather file.
+
+IMPORTANT: Pass sentences as an array (List[str]) to the API.
+The API will NOT split the sentences - use pre-split sentences.
 
 Requirements:
     pip install pandas pyarrow requests
@@ -12,6 +15,26 @@ Usage:
     1. Start the API server: uvicorn src.presentation.api.main:app --reload
     2. Update FEATHER_PATH to point to your feather file
     3. Run: python example/demographic_batch_evaluation.py
+
+Quick integration example:
+    >>> import pandas as pd
+    >>> import requests
+    >>>
+    >>> # Load pre-split sentences from feather
+    >>> df = pd.read_feather("your_file.feather")
+    >>> sentences = df["sentence_column"].tolist()  # Get as list
+    >>>
+    >>> response = requests.post(
+    ...     "http://localhost:8000/api/v1/agent/demographic-evaluator/evaluate",
+    ...     json={
+    ...         "demography_json": {"gender": "male", "age": "25to34", ...},
+    ...         "sentences": sentences,  # Pass as array!
+    ...         "use_cot": "no_chain",
+    ...         "use_few_shots": True
+    ...     }
+    ... )
+    >>> result = response.json()
+    >>> # result["judgments"] contains: index, sentence, agree (0/1), reason
 """
 
 import json
@@ -94,8 +117,31 @@ def get_full_demographic_combinations() -> List[Dict[str, str]]:
 
 
 # =============================================================================
-# Article Loading
+# Article/Sentences Loading
 # =============================================================================
+
+def load_sentences_from_feather(feather_path: str, sentence_column: str = "sentence") -> List[str]:
+    """
+    Load pre-split sentences from a feather file.
+    
+    Args:
+        feather_path: Path to the feather file
+        sentence_column: Name of the column containing sentences
+    
+    Returns:
+        List[str]: List of sentences
+    """
+    if not HAS_PANDAS:
+        raise ImportError("pandas is required. Install with: pip install pandas pyarrow")
+    
+    df = pd.read_feather(feather_path)
+    
+    if sentence_column not in df.columns:
+        available = ", ".join(df.columns.tolist())
+        raise ValueError(f"Column '{sentence_column}' not found. Available columns: {available}")
+    
+    return df[sentence_column].tolist()
+
 
 def load_article_from_feather(feather_path: str, text_column: str = "text") -> str:
     """
@@ -145,7 +191,7 @@ def load_articles_from_feather(feather_path: str, text_column: str = "text") -> 
 
 def evaluate_sentences_api(
     demography_json: Dict[str, Any],
-    sentences: Any,  # Can be List[str] or str (API auto-splits strings)
+    sentences: List[str],
     use_cot: str = "no_chain",
     use_few_shots: bool = True,
     api_key: Optional[str] = None
@@ -155,7 +201,7 @@ def evaluate_sentences_api(
     
     Args:
         demography_json: Demographic profile as dictionary
-        sentences: List of sentences or a single string (API will auto-split strings into sentences)
+        sentences: List of pre-split sentences to evaluate (passed as array to API)
         use_cot: Chain of Thought mode ('chain_online', 'chain_local', 'no_chain')
         use_few_shots: Whether to use few-shot examples
         api_key: Optional API key for authentication
@@ -187,7 +233,7 @@ def evaluate_sentences_api(
 # =============================================================================
 
 def run_batch_evaluation(
-    article_text: str,
+    sentences: List[str],
     demographic_combinations: List[Dict[str, str]],
     use_cot: str = "no_chain",
     use_few_shots: bool = True,
@@ -198,7 +244,7 @@ def run_batch_evaluation(
     Run batch evaluation across multiple demographic combinations.
     
     Args:
-        article_text: Article text (will be split into sentences by the API)
+        sentences: List of pre-split sentences to evaluate (passed as array to API)
         demographic_combinations: List of demographic profiles to test
         use_cot: Chain of Thought mode
         use_few_shots: Whether to use few-shot examples
@@ -212,7 +258,7 @@ def run_batch_evaluation(
     total = len(demographic_combinations)
     
     print(f"Starting batch evaluation with {total} demographic combinations...")
-    print(f"Article length: {len(article_text)} characters")
+    print(f"Number of sentences: {len(sentences)}")
     print("-" * 50)
     
     for i, persona in enumerate(demographic_combinations, 1):
@@ -221,7 +267,7 @@ def run_batch_evaluation(
         try:
             response = evaluate_sentences_api(
                 demography_json=persona,
-                sentences=article_text,  # API will split into sentences
+                sentences=sentences,  # Pass as array (pre-split)
                 use_cot=use_cot,
                 use_few_shots=use_few_shots,
                 api_key=API_KEY
@@ -326,23 +372,24 @@ def analyze_results(results: List[Dict[str, Any]]) -> Dict[str, Any]:
 def main():
     """Main function demonstrating batch demographic evaluation."""
     
-    # Example 1: Using a sample article text directly
-    sample_article = """
-    The government should increase funding for public education.
-    Climate change requires immediate global action.
-    Tax cuts for corporations stimulate economic growth.
-    Universal healthcare should be a fundamental right.
-    Gun ownership is a constitutional right that must be protected.
-    Immigration strengthens our economy and cultural diversity.
-    Traditional family values are essential for society.
-    Social media platforms need stronger content moderation.
-    """
+    # Example 1: Using pre-split sentences as a list (RECOMMENDED)
+    # Pass sentences as an array - the API will NOT split them further
+    sample_sentences = [
+        "The government should increase funding for public education.",
+        "Climate change requires immediate global action.",
+        "Tax cuts for corporations stimulate economic growth.",
+        "Universal healthcare should be a fundamental right.",
+        "Gun ownership is a constitutional right that must be protected.",
+        "Immigration strengthens our economy and cultural diversity.",
+        "Traditional family values are essential for society.",
+        "Social media platforms need stronger content moderation.",
+    ]
     
-    # Example 2: Load from feather file (uncomment when you have a feather file)
-    # article_text = load_article_from_feather(FEATHER_PATH, text_column="article_text")
+    # Example 2: Load pre-split sentences from feather file
+    # sentences = load_sentences_from_feather(FEATHER_PATH, sentence_column="sentence")
     
-    # Use sample article for this demo
-    article_text = sample_article
+    # Use sample sentences for this demo
+    sentences = sample_sentences
     
     # Get a subset of demographic combinations for testing
     # Full run: all_personas = get_full_demographic_combinations()  # 3240 combinations
@@ -355,7 +402,7 @@ def main():
     
     # Run batch evaluation
     results = run_batch_evaluation(
-        article_text=article_text,
+        sentences=sentences,  # Pass as array (pre-split sentences)
         demographic_combinations=test_personas,
         use_cot="no_chain",  # Use "chain_local" for more detailed reasoning
         use_few_shots=True,
