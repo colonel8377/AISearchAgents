@@ -63,7 +63,7 @@ def init_db(db_path: str = SQLITE_DB_PATH) -> None:
             failed_evaluations INTEGER DEFAULT 0,
             num_sentences INTEGER,
             use_cot TEXT,
-            use_few_shots INTEGER
+            use_few_shots INTEGER  -- 0 for False, 1 for True
         )
     ''')
     
@@ -189,8 +189,12 @@ def update_run_stats(run_id: str, successful: int, failed: int, db_path: str = S
 # Sentence Loading Helpers
 # =============================================================================
 
-def extract_sentence_index(sentence: str) -> int:
-    """Extract sentence index from bracketed prefix like '[1] sentence text'."""
+def extract_sentence_index(sentence: str) -> Optional[int]:
+    """Extract sentence index from bracketed prefix like '[1] sentence text'.
+    
+    Returns:
+        int: The extracted index, or None if no valid index is found
+    """
     if sentence.startswith('['):
         end_bracket = sentence.find(']')
         if end_bracket > 0:
@@ -198,7 +202,7 @@ def extract_sentence_index(sentence: str) -> int:
                 return int(sentence[1:end_bracket])
             except ValueError:
                 pass
-    return -1
+    return None
 
 def remove_bracket_prefix(sentence: str) -> str:
     """Remove bracketed index prefix from sentence."""
@@ -324,9 +328,12 @@ async def evaluate_persona_async(
             data = response.json()
             result["judgments"] = data.get("judgments", [])
             result["success"] = True
+        except (httpx.HTTPError, httpx.TimeoutException) as e:
+            result["error"] = f"HTTP error: {str(e)}"
+            print(f"\nHTTP error evaluating persona {persona}: {e}")
         except Exception as e:
-            result["error"] = str(e)
-            print(f"\nError evaluating persona {persona}: {e}")
+            result["error"] = f"Unexpected error: {str(e)}"
+            print(f"\nUnexpected error evaluating persona {persona}: {e}")
 
     # Fetch one, save one
     save_single_result(run_id, result)
