@@ -6,7 +6,11 @@ batch evaluations across multiple demographic combinations on pre-split
 sentences stored in a feather file.
 
 IMPORTANT: Pass sentences as an array (List[str]) to the API.
-The API will NOT split the sentences - use pre-split sentences.
+The API will NOT split the sentences when a list is provided - use pre-split sentences.
+
+DataFrame format expected:
+    Columns: ['article_id', 'sentence', 'target', 'source_bias']
+    Example row: 5.0, "[0]: The wife of Kentucky...", 2, right
 
 Requirements:
     pip install pandas pyarrow requests
@@ -22,7 +26,7 @@ Quick integration example:
     >>>
     >>> # Load pre-split sentences from feather
     >>> df = pd.read_feather("your_file.feather")
-    >>> sentences = df["sentence_column"].tolist()  # Get as list
+    >>> sentences = df["sentence"].tolist()  # Get as list
     >>>
     >>> response = requests.post(
     ...     "http://localhost:8000/api/v1/agent/demographic-evaluator/evaluate",
@@ -30,7 +34,7 @@ Quick integration example:
     ...         "demography_json": {"gender": "male", "age": "25to34", ...},
     ...         "sentences": sentences,  # Pass as array!
     ...         "use_cot": "no_chain",
-    ...         "use_few_shots": True
+    ...         "use_few_shots": False  # Disable few-shot examples
     ...     }
     ... )
     >>> result = response.json()
@@ -193,7 +197,7 @@ def evaluate_sentences_api(
     demography_json: Dict[str, Any],
     sentences: List[str],
     use_cot: str = "no_chain",
-    use_few_shots: bool = True,
+    use_few_shots: bool = False,
     api_key: Optional[str] = None
 ) -> Dict[str, Any]:
     """
@@ -203,7 +207,7 @@ def evaluate_sentences_api(
         demography_json: Demographic profile as dictionary
         sentences: List of pre-split sentences to evaluate (passed as array to API)
         use_cot: Chain of Thought mode ('chain_online', 'chain_local', 'no_chain')
-        use_few_shots: Whether to use few-shot examples
+        use_few_shots: Whether to use few-shot examples (default: False)
         api_key: Optional API key for authentication
     
     Returns:
@@ -236,7 +240,7 @@ def run_batch_evaluation(
     sentences: List[str],
     demographic_combinations: List[Dict[str, str]],
     use_cot: str = "no_chain",
-    use_few_shots: bool = True,
+    use_few_shots: bool = False,
     save_results: bool = True,
     output_file: str = "evaluation_results.json"
 ) -> List[Dict[str, Any]]:
@@ -247,7 +251,7 @@ def run_batch_evaluation(
         sentences: List of pre-split sentences to evaluate (passed as array to API)
         demographic_combinations: List of demographic profiles to test
         use_cot: Chain of Thought mode
-        use_few_shots: Whether to use few-shot examples
+        use_few_shots: Whether to use few-shot examples (default: False)
         save_results: Whether to save results to a file
         output_file: Output file path for results
     
@@ -373,19 +377,21 @@ def main():
     """Main function demonstrating batch demographic evaluation."""
     
     # Example 1: Using pre-split sentences as a list (RECOMMENDED)
-    # Pass sentences as an array - the API will NOT split them further
+    # Sentences from user's feather format: "[0]: The wife of Kentucky..."
+    # The API receives the sentences exactly as provided (no splitting)
     sample_sentences = [
-        "The government should increase funding for public education.",
-        "Climate change requires immediate global action.",
-        "Tax cuts for corporations stimulate economic growth.",
-        "Universal healthcare should be a fundamental right.",
-        "Gun ownership is a constitutional right that must be protected.",
-        "Immigration strengthens our economy and cultural diversity.",
-        "Traditional family values are essential for society.",
-        "Social media platforms need stronger content moderation.",
+        "[0]: The wife of Kentucky State Rep. Dan Johnson announced Thursday that she would pursue her husband's seat.",
+        "[1]: Dan Johnson, a preacher and a Republican, committed suicide Wednesday on a bridge.",
+        "[2]: Washington, according to Bullitt County Sheriff Donnie Tinnell.",
+        "[3]: The government should increase funding for public education.",
+        "[4]: Climate change requires immediate global action.",
+        "[5]: Tax cuts for corporations stimulate economic growth.",
+        "[6]: Universal healthcare should be a fundamental right.",
+        "[7]: Gun ownership is a constitutional right that must be protected.",
     ]
     
     # Example 2: Load pre-split sentences from feather file
+    # DataFrame columns: ['article_id', 'sentence', 'target', 'source_bias']
     # sentences = load_sentences_from_feather(FEATHER_PATH, sentence_column="sentence")
     
     # Use sample sentences for this demo
@@ -401,11 +407,12 @@ def main():
     ]
     
     # Run batch evaluation
+    # NOTE: use_few_shots=False as requested - no few-shot examples in prompt
     results = run_batch_evaluation(
         sentences=sentences,  # Pass as array (pre-split sentences)
         demographic_combinations=test_personas,
         use_cot="no_chain",  # Use "chain_local" for more detailed reasoning
-        use_few_shots=True,
+        use_few_shots=False,  # Disable few-shot examples
         save_results=True,
         output_file="demographic_evaluation_results.json"
     )
