@@ -14,11 +14,13 @@ from typing import Optional, Tuple, List
 import httpx
 from bs4 import BeautifulSoup, Tag, FeatureNotFound
 
+from ..config.settings import settings
 from ..utils.logger import get_logger
+from ...infrastructure.repositories import AgentProtocol
 
 logger = get_logger(__name__)
 
-class HTMLExtractor(ABC):
+class HTMLExtractor(AgentProtocol):
     """
     Base class for HTML content extraction with robust cleaning and parsing.
 
@@ -88,6 +90,7 @@ class HTMLExtractor(ABC):
             "AppleWebKit/537.36 (KHTML, like Gecko) "
             "Chrome/120.0.0.0 Safari/537.36"
         )
+        self.proxy = settings.openai_proxy
 
     def fetch_html(self, url: str) -> str:
         """
@@ -115,12 +118,9 @@ class HTMLExtractor(ABC):
         }
 
         try:
-            with httpx.Client(timeout=self.request_timeout, trust_env=True) as client:
+            with httpx.Client(timeout=self.request_timeout, trust_env=True, proxy=self.proxy) as client:
                 response = client.get(url, headers=headers, follow_redirects=True)
 
-                # Robust Encoding Handling:
-                # If charset isn't provided, httpx defaults to ISO-8859-1.
-                # If the content looks like UTF-8 but was decoded as ISO, fix it.
                 if response.encoding == "ISO-8859-1":
                     try:
                         # Peek at the content to see if it's actually valid UTF-8
@@ -336,7 +336,10 @@ class HTMLExtractor(ABC):
         # Hard cut if no punctuation found
         return snippet, True
 
-    @abstractmethod
+
     def reset(self) -> None:
         """Reset the extractor to initial state."""
         pass
+
+
+html_extractor = HTMLExtractor()

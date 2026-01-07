@@ -281,6 +281,98 @@ Analysis Result:
   "reasoning": "Critical API tokens and authentication credentials were exposed"
 }
 
+EXAMPLE 13 - Real Privacy Data (Chinese):
+User Messages:
+[1] User: 我的手机号是13812345678，邮箱zhangsan@company.com
+
+Analysis Result:
+{
+  "privacy_detected": true,
+  "privacy_leaks": [
+    {
+      "privacy_type": "PHONE_NUMBER_CN",
+      "severity": "high",
+      "severity_level": "L3",
+      "detected_items": ["13812345678"],
+      "confidence": 0.95,
+      "reasoning": "中国手机号格式正确，用户主动提供个人信息"
+    },
+    {
+      "privacy_type": "EMAIL_ADDRESS",
+      "severity": "high",
+      "severity_level": "L3",
+      "detected_items": ["zhangsan@company.com"],
+      "confidence": 0.92,
+      "reasoning": "邮箱格式正确，出现在个人分享上下文中"
+    }
+  ],
+  "overall_severity": "high",
+  "overall_severity_level": "L3"
+}
+
+EXAMPLE 14 - Example/Test Data (Should Filter):
+User Messages:
+[1] User: 请输入手机号，格式如：13800138000
+
+Analysis Result:
+{
+  "privacy_detected": false,
+  "privacy_leaks": [],
+  "reasoning": "号码出现在'格式如'说明文字中，是示例而非真实数据"
+}
+
+EXAMPLE 15 - Version Number (False Positive):
+User Messages:
+[1] User: 服务器版本 v1.2.3.456
+
+Analysis Result:
+{
+  "privacy_detected": false,
+  "privacy_leaks": [],
+  "reasoning": "'版本'上下文明确表明这是软件版本号，不是电话号码"
+}
+
+EXAMPLE 16 - Credential in Code Context:
+User Messages:
+[1] User: 配置文件中 api_key = 'sk-1234567890abcdef1234567890abcdef1234567890abcdef'
+
+Analysis Result:
+{
+  "privacy_detected": true,
+  "privacy_leaks": [
+    {
+      "privacy_type": "OPENAI_KEY",
+      "severity": "critical",
+      "severity_level": "L4",
+      "detected_items": ["sk-1234567890abcdef1234567890abcdef1234567890abcdef"],
+      "confidence": 0.98,
+      "reasoning": "OpenAI API Key 格式 (sk-前缀)，出现在配置上下文中"
+    }
+  ],
+  "overall_severity": "critical",
+  "overall_severity_level": "L4"
+}
+
+EXAMPLE 17 - Mixed Real and Example:
+User Messages:
+[1] User: 我的身份证是110101199001010018，不是示例的000000000000000000
+
+Analysis Result:
+{
+  "privacy_detected": true,
+  "privacy_leaks": [
+    {
+      "privacy_type": "CN_ID_CARD",
+      "severity": "critical",
+      "severity_level": "L4",
+      "detected_items": ["110101199001010018"],
+      "confidence": 0.96,
+      "reasoning": "用户明确区分真实数据和示例，110101199001010018校验位正确"
+    }
+  ],
+  "note": "000000000000000000 被正确识别为示例数据并排除"
+}
+
 GUIDELINES:
 - Consider context and potential impact of information exposure
 - Be conservative - err on the side of caution for ambiguous cases
@@ -292,4 +384,7 @@ GUIDELINES:
 - Biometric and authentication data are typically high/critical severity
 - Location and communication data may be medium depending on context
 - Financial and system access data are usually critical severity
+- IMPORTANT: Distinguish between real data and example/test data
+- Example indicators: "格式如", "for example", "e.g.", sequential digits (123456789), test patterns (555-xxx, test@example.com)
+- Real data indicators: Personal context ("我的", "my"), non-pattern values, conversation flow suggests real sharing
 """

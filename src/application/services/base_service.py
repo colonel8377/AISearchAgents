@@ -1,9 +1,10 @@
 """Base service class for all business logic services."""
 
-from typing import Any, Optional
+from typing import Optional
 from abc import ABC
 
 from ...application.agents.manager import AgentManager
+from ...infrastructure.repositories.interfaces import AgentProtocol
 from ...shared.constant.enums import AgentType
 from ...shared.utils.logger import get_logger
 
@@ -28,7 +29,7 @@ class BaseService(ABC):
         self.agent_manager = agent_manager
         logger.debug(f"{self.__class__.__name__} initialized")
     
-    def _get_agent(self, agent_id: str) -> Optional[Any]:
+    def _get_agent(self, agent_id: str) -> Optional[AgentProtocol]:
         """
         Get an agent instance by ID.
         
@@ -84,3 +85,20 @@ class BaseService(ABC):
                 f"but agent '{agent_id}' is type '{agent_type.value}'"
             )
 
+    def _set_agent(self, agent_id: str, agent_instance: AgentProtocol, agent_type: AgentType) -> str:
+        """
+        Register an agent instance.
+
+        Args:
+            agent_id: The agent ID
+            agent_instance: The agent instance
+            agent_type: The agent type
+
+        Returns:
+            The agent ID
+        """
+        return self.agent_manager.create_agent(
+            agent_instance=agent_instance,
+            agent_type=agent_type,
+            agent_id=agent_id
+        )

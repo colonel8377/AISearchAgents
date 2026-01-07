@@ -7,19 +7,17 @@ and applies optimized settings for better performance.
 
 import atexit
 import threading
-from typing import Optional, Union, Any
+from typing import Optional, Union
+
 import httpx
+from langchain_google_genai import ChatGoogleGenerativeAI
 from langchain_openai import ChatOpenAI
 
 from ...shared.config.settings import settings
 from ...shared.utils.logger import get_logger
 
-try:
-    from langchain_google_genai import ChatGoogleGenerativeAI
-    GOOGLE_AVAILABLE = True
-except ImportError:
-    GOOGLE_AVAILABLE = False
-    ChatGoogleGenerativeAI = Any
+GOOGLE_AVAILABLE = True
+
 
 
 logger = get_logger(__name__)

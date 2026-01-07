@@ -7,6 +7,7 @@ from typing import Dict, Callable, Any
 import psycopg2
 from psycopg2.extensions import ISOLATION_LEVEL_AUTOCOMMIT
 
+from . import BaseService
 from ..few_shots import reset_all_agent_few_shots
 from ...infrastructure.state import clear_in_memory_state
 from ...infrastructure.storage.persistence import get_storage
@@ -17,15 +18,14 @@ from ...shared.utils.logger import get_logger
 logger = get_logger(__name__)
 
 
-class SystemService:
+class SystemService(BaseService):
     """
     Service for system management operations.
     
     Single Responsibility: Handle system-level operations like reset.
     """
     
-    @staticmethod
-    def reset_system() -> Dict[str, Any]:
+    def reset_system(self) -> Dict[str, Any]:
         """
         Reset the entire system: clear all persistence state, caches, and memory state.
         
@@ -67,7 +67,7 @@ class SystemService:
             except Exception as e:
                 add_error(f"Failed to reset application storage persistence: {e}")
 
-            SystemService._clear_vector_store(reset_results, add_error)
+            self._clear_vector_store(reset_results, add_error)
             
             # 4. Clear in-memory state
             try:
@@ -104,20 +104,18 @@ class SystemService:
             reset_results["errors"].append(error_msg)
             return reset_results
     
-    @staticmethod
-    def _clear_vector_store(reset_results: Dict, add_error: Callable) -> None:
+    def _clear_vector_store(self, reset_results: Dict, add_error: Callable) -> None:
         """Clear vector store data (Chroma/PostgreSQL)."""
         try:
             if settings.vector_store_type == "chroma":
-                SystemService._clear_chroma_store(reset_results, add_error)
+                self._clear_chroma_store(reset_results, add_error)
             elif settings.vector_store_type == "postgres":
-                SystemService._clear_postgres_store(reset_results, add_error)
+                self._clear_postgres_store(reset_results, add_error)
         except Exception as e:
             msg = f"Failed to clear vector store: {e}"
             add_error(msg)
 
-    @staticmethod
-    def _clear_chroma_store(reset_results: Dict, add_error: Callable) -> None:
+    def _clear_chroma_store(self, reset_results: Dict, add_error: Callable) -> None:
         """Clear Chroma vector store."""
         chroma_dir = Path(settings.chroma_persist_directory)
         if chroma_dir.exists():
@@ -137,8 +135,7 @@ class SystemService:
             reset_results["cleared_items"].append("chroma_vector_store")
             logger.info("Chroma vector store cleared")
 
-    @staticmethod
-    def _clear_postgres_store(reset_results: Dict, add_error: Callable) -> None:
+    def _clear_postgres_store(self, reset_results: Dict, add_error: Callable) -> None:
         """Clear PostgreSQL vector store."""
         try:
             conn = psycopg2.connect(

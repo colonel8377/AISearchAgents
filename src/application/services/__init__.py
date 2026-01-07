@@ -7,6 +7,8 @@ from .summarizer_service import SummarizerService
 from .nudge_collapse_service import NudgeCollapseService
 from .system_service import SystemService
 from .privacy_detector_service import PrivacyDetectorService
+from .consistency_service import ConsistencyService
+from .content_service import ContentService
 
 __all__ = [
     "BaseService",
@@ -16,5 +18,7 @@ __all__ = [
     "NudgeCollapseService",
     "SystemService",
     "PrivacyDetectorService",
+    "ConsistencyService",
+    "ContentService",
 ]
 

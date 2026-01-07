@@ -19,6 +19,7 @@ from src.shared.config.settings import settings
 from src.shared.constant.enums import CoTMode
 from src.shared.llm import llm_retry
 from src.shared.utils.logger import get_logger
+from ....infrastructure.repositories import AgentProtocol
 from ....infrastructure.storage.persistence import get_database
 from ....shared.constant.enums import ConflictType
 from ....shared.llm.llm_manager import llm_manager
@@ -49,7 +50,7 @@ class ConflictAuditResult:
     metadata: Optional[Dict[str, Any]] = None
 
 
-class ConflictAuditorAgent:
+class ConflictAuditorAgent(AgentProtocol):
     """
     Conflict Auditor Agent that compares claims against evidence to detect
     logical inconsistencies and factual conflicts.
@@ -205,21 +206,59 @@ REASON: [Detailed explanation with chain of thought, citing specific source quot
 
         logger.debug(f"ConflictAuditorAgent initialized successfully")
 
+    async def audit_conflicts(
+        self,
+        claim_evidences: List[Dict[str, Any]],
+        use_cot: Union[CoTMode, bool] = CoTMode.NO_CHAIN,
+        custom_few_shots: Optional[str] = None
+    ) -> ConflictAuditResult:
+        """Async version of audit_conflicts."""
+        logger.info(f"Auditing conflicts for {len(claim_evidences)} claim-evidence pairs with CoT={use_cot}")
+
+        analysis_data = await self._audit_conflicts_with_llm(
+            claim_evidences,
+            use_cot=use_cot,
+            custom_few_shots=custom_few_shots
+        )
+
+        conflict_analyses = []
+        for data in analysis_data:
+            original_ce = None
+            for ce in claim_evidences:
+                if str(ce.get('claim_id', '')) == str(data['claim_id']):
+                    original_ce = ce
+                    break
+
+            if original_ce:
+                analysis = ConflictAnalysis(
+                    claim_id=original_ce['claim_id'],
+                    claim_text=original_ce['claim_text'],
+                    evidence_quotes=original_ce.get('evidence_quotes', []),
+                    verdict=data['verdict'],
+                    conflict_type=data['conflict_type'],
+                    analysis=data['analysis'],
+                    confidence=data['confidence']
+                )
+                conflict_analyses.append(analysis)
+
+        summary_stats = {}
+        for analysis in conflict_analyses:
+            conflict_type = analysis.conflict_type
+            summary_stats[conflict_type] = summary_stats.get(conflict_type, 0) + 1
+
+        result = ConflictAuditResult(
+            analyses=conflict_analyses,
+            summary_stats=summary_stats,
+            execution_mode="cot" if use_cot else "direct",
+            metadata={"total_claims": len(claim_evidences)}
+        )
+
+        return result
+
     @llm_retry
     @cached()
-    def _audit_conflicts_with_llm(self, claim_evidences: List[Dict[str, Any]], use_cot: Union[CoTMode, bool] = CoTMode.NO_CHAIN, custom_few_shots: Optional[str] = None) -> List[Dict[str, Any]]:
-        """
-        Use LLM to audit conflicts between claims and evidence.
-
-        Args:
-            claim_evidences: List of claim-evidence pairs
-            use_cot: Whether to use Chain of Thought reasoning
-            custom_few_shots: Optional custom few-shot examples
-
-        Returns:
-            List of conflict analysis results
-        """
-        # Determine effective CoT mode
+    async def _audit_conflicts_with_llm(self, claim_evidences: List[Dict[str, Any]], use_cot: Union[CoTMode, bool] = CoTMode.NO_CHAIN, custom_few_shots: Optional[str] = None) -> List[Dict[str, Any]]:
+        """Async version of _audit_conflicts_with_llm."""
         if isinstance(use_cot, CoTMode):
             effective_cot = use_cot.value in ("chain_local", "chain_online")
         else:
@@ -227,23 +266,16 @@ REASON: [Detailed explanation with chain of thought, citing specific source quot
 
         logger.debug(f"Auditing conflicts for {len(claim_evidences)} claim-evidence pairs with CoT={effective_cot}")
 
-        # Select system prompt based on CoT mode
         if effective_cot:
             system_prompt = self.SYSTEM_PROMPT_COT
         else:
             system_prompt = self.SYSTEM_PROMPT
 
-        # Add few-shot examples
         if custom_few_shots:
-            # Use explicitly provided custom few shots
             system_prompt = custom_few_shots + "\n\n" + system_prompt
-
         elif self._custom_few_shots:
-            # Use stored custom few shots
             system_prompt = self._custom_few_shots + "\n\n" + system_prompt
 
-
-        # Prepare input text
         claims_text = ""
         for i, ce in enumerate(claim_evidences, 1):
             claims_text += f"\nCLAIM_{ce['claim_id']}: {ce['claim_text']}\n"
@@ -264,12 +296,11 @@ For each claim, provide analysis in the specified format."""
             HumanMessage(content=user_message)
         ]
 
-        response = self.llm.invoke(messages)
+        response = await self.llm.ainvoke(messages)
         response_text = response.content.strip()
 
-        # Parse the response
         analyses = []
-        sections = response_text.split('CLAIM_')[1:]  # Skip the first empty part
+        sections = response_text.split('CLAIM_')[1:]
 
         for section in sections:
             analysis_data = {
@@ -307,7 +338,6 @@ For each claim, provide analysis in the specified format."""
 
             analyses.append(analysis_data)
 
-        # Ensure we have the right number of analyses
         while len(analyses) < len(claim_evidences):
             analyses.append({
                 "claim_id": f"missing_{len(analyses)}",
@@ -319,68 +349,92 @@ For each claim, provide analysis in the specified format."""
 
         return analyses[:len(claim_evidences)]
 
-    def audit_conflicts(
+    async def compare_two_claims(
         self,
-        claim_evidences: List[Dict[str, Any]],
-        use_cot: Union[CoTMode, bool] = CoTMode.NO_CHAIN,
-        custom_few_shots: Optional[str] = None
-    ) -> ConflictAuditResult:
+        summary_claim: str,
+        url_claim: str,
+        use_cot: Union[CoTMode, bool] = CoTMode.NO_CHAIN
+    ) -> Dict[str, Any]:
         """
-        Audit conflicts between claims and their evidence.
+        Async version: Compare two specific claims for consistency.
 
         Args:
-            claim_evidences: List of claim-evidence pairs with keys: claim_id, claim_text, evidence_quotes
+            summary_claim: Claim from the summary
+            url_claim: Claim from the URL content
+            url_content: Optional full URL content for context
             use_cot: Whether to use Chain of Thought reasoning
-            custom_few_shots: Optional custom few-shot examples
 
         Returns:
-            ConflictAuditResult with detailed analyses
+            Dict with comparison result: status, confidence, and reason
         """
-        logger.info(f"Auditing conflicts for {len(claim_evidences)} claim-evidence pairs with CoT={use_cot}")
+        if isinstance(use_cot, CoTMode):
+            effective_cot = use_cot.value in ("chain_local", "chain_online")
+        else:
+            effective_cot = bool(use_cot)
 
-        # Perform conflict auditing
-        analysis_data = self._audit_conflicts_with_llm(
-            claim_evidences,
-            use_cot=use_cot,
-            custom_few_shots=custom_few_shots
-        )
+        if effective_cot:
+            system_prompt = """You are a fact-checker.
+Analyze if the summary claim is supported, contradicted, or neutral compared to the URL claim.
+Provide a concise, clear reason without unnecessary quotes or references.
 
-        # Convert to ConflictAnalysis objects
-        conflict_analyses = []
-        for data in analysis_data:
-            # Find the original claim-evidence pair
-            original_ce = None
-            for ce in claim_evidences:
-                if str(ce.get('claim_id', '')) == str(data['claim_id']):
-                    original_ce = ce
-                    break
+Format your response as:
+STATUS: [supported|contradicted|neutral]
+CONFIDENCE: [0.0-1.0]
+REASON: [Concise explanation, 1-2 sentences max]"""
+        else:
+            system_prompt = """You are a fact-checker. 
+Analyze if the summary claim is supported, contradicted, or neutral compared to the URL claim.
+Provide a concise, clear reason without unnecessary quotes or references.
 
-            if original_ce:
-                analysis = ConflictAnalysis(
-                    claim_id=original_ce['claim_id'],
-                    claim_text=original_ce['claim_text'],
-                    evidence_quotes=original_ce.get('evidence_quotes', []),
-                    verdict=data['verdict'],
-                    conflict_type=data['conflict_type'],
-                    analysis=data['analysis'],
-                    confidence=data['confidence']
-                )
-                conflict_analyses.append(analysis)
+Format your response as:
+STATUS: [supported|contradicted|neutral]
+CONFIDENCE: [0.0-1.0]
+REASON: [Concise explanation, 1-2 sentences max]"""
 
-        # Calculate summary statistics
-        summary_stats = {}
-        for analysis in conflict_analyses:
-            conflict_type = analysis.conflict_type
-            summary_stats[conflict_type] = summary_stats.get(conflict_type, 0) + 1
+        user_prompt = f"""SUMMARY CLAIM: {summary_claim}
+URL CLAIM: {url_claim}
+"""
 
-        result = ConflictAuditResult(
-            analyses=conflict_analyses,
-            summary_stats=summary_stats,
-            execution_mode="cot" if use_cot else "direct",
-            metadata={"total_claims": len(claim_evidences)}
-        )
+        messages = [
+            SystemMessage(content=system_prompt),
+            HumanMessage(content=user_prompt)
+        ]
 
-        return result
+        try:
+            response = await self.llm.ainvoke(messages)
+            response_text = response.content.strip()
+
+            status = "neutral"
+            confidence = 0.5
+            reason = "Analysis failed"
+
+            for line in response_text.split('\n'):
+                line = line.strip()
+                if line.startswith('STATUS:'):
+                    status_value = line.split(':', 1)[1].strip().lower()
+                    if status_value in ['supported', 'contradicted', 'neutral']:
+                        status = status_value
+                elif line.startswith('CONFIDENCE:'):
+                    try:
+                        confidence = float(line.split(':', 1)[1].strip())
+                        confidence = max(0.0, min(1.0, confidence))
+                    except ValueError:
+                        pass
+                elif line.startswith('REASON:'):
+                    reason = line.split(':', 1)[1].strip()
+
+            return {
+                "status": status,
+                "confidence": confidence,
+                "reason": reason
+            }
+        except Exception as e:
+            logger.error(f"Claim comparison failed: {e}", exc_info=True)
+            return {
+                "status": "error",
+                "confidence": 0.0,
+                "reason": f"Analysis failed: {str(e)}"
+            }
 
     def compare_claims(
         self,

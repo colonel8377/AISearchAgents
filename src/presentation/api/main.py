@@ -63,7 +63,6 @@ from .routers import (
     nudge_collapse,
     opinion,
     privacy_detector,
-    quality,
     shots,
     summarizer,
     system
@@ -82,7 +81,6 @@ app.include_router(debate.router)
 app.include_router(opinion.router)
 app.include_router(content.router)
 app.include_router(consistency.router)
-app.include_router(quality.router)
 app.include_router(privacy_detector.router)  # Privacy Detection endpoints
 app.include_router(shots.router)  # Few-Shot Configuration endpoints
 

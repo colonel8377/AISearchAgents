@@ -2,6 +2,7 @@
 
 from typing import Optional
 
+from . import BaseService
 from .agent_business_logic import AgentBusinessLogic
 from ...infrastructure.repositories import AgentRepository
 from ..commands.agent_commands import AgentCommandHandler
@@ -16,7 +17,7 @@ from ...shared.utils.logger import get_logger
 logger = get_logger(__name__)
 
 
-class AgentService:
+class AgentService(BaseService):
     """
     CQRS-based service for managing agent lifecycle and operations.
 

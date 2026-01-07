@@ -1,6 +1,6 @@
 """Agent Factory for creating agent instances - Single Responsibility: Agent Creation."""
 
-from typing import Optional, Any
+from typing import Optional, Any, Union
 from langchain_openai import OpenAIEmbeddings
 
 from ...shared.constant.enums import AgentType
@@ -11,6 +11,7 @@ from ...application.agents.content_extractor.agent import ContentExtractorAgent
 from ...application.agents.demographic_evaluator.agent import DemographicEvaluatorAgent
 from ...application.agents.nudge_collapse.agent import NudgeCollapseAgent
 from ...application.agents.summarizer.agent import SummarizerAgent
+from ...infrastructure.repositories.interfaces import AgentProtocol
 from ...shared.config.settings import settings
 from ...infrastructure.factory import VectorStoreFacade
 from ...shared.utils.logger import get_logger
@@ -86,7 +87,7 @@ class AgentFactory:
         agent_id: Optional[str] = None,
         use_memory: bool = False,
         persona_mode: Optional[str] = None
-    ) -> Any:
+    ) -> AgentProtocol:
         """
         Create an agent instance of the specified type.
         
@@ -132,7 +133,7 @@ class AgentFactory:
             
             return BotCreatorAgent(
                 vector_store=vector_store,
-                persona_mode=persona_mode or "system_prompt",
+                persona_mode=persona_mode,
                 **common_params
             )
         elif agent_type == AgentType.DEMOGRAPHIC_EVALUATOR:

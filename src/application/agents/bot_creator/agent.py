@@ -10,6 +10,7 @@ from langchain_core.runnables import Runnable
 from langchain_openai import ChatOpenAI
 
 from src.application.few_shots.bot_creator.few_shots import BOT_CREATOR_FEW_SHOTS
+from src.infrastructure.repositories import AgentProtocol
 from src.infrastructure.storage.persistence import get_database
 from src.shared.cache import cached
 from src.shared.config.settings import settings, ExecutionMode
@@ -35,7 +36,7 @@ BOT_CONFIG_SECTION_MARKERS = [
 ]
 
 
-class BotCreatorAgent:
+class BotCreatorAgent(AgentProtocol):
     """
     Bot Creator Agent with two persona modes for comparative experiments.
 

@@ -6,13 +6,13 @@ advertisements, and other non-content elements.
 """
 
 import re
-from dataclasses import dataclass
-from typing import Optional, Dict, Any, Union, LiteralString
+from typing import Optional, Union
 
 import httpx
 from langchain_core.messages import SystemMessage, HumanMessage
 from langchain_openai import ChatOpenAI
 
+from src.application.agents.content_extractor.model import ContentExtractionResult
 from src.application.few_shots.content_extractor.few_shots import CONTENT_EXTRACTOR_FEW_SHOTS
 from src.infrastructure.storage.persistence import get_database
 from src.shared.cache import cached
@@ -23,17 +23,6 @@ from src.shared.parsers.html_extractor import HTMLExtractor
 from src.shared.utils.logger import get_logger
 
 logger = get_logger(__name__)
-
-
-@dataclass
-class ContentExtractionResult:
-    """Result of content extraction."""
-    url: Optional[str] = None
-    title: Optional[str] = None
-    main_body: Optional[str] = None
-    text_length: int = 0
-    truncated: bool = False
-    extraction_metadata: Optional[Dict[str, Any]] = None
 
 
 class ContentExtractorAgent(HTMLExtractor):
@@ -150,106 +139,11 @@ OUTPUT FORMAT:
 
         logger.debug(f"ContentExtractorAgent initialized successfully with execution_mode={self.execution_mode}")
 
-    @cached()
-    def _extract_with_llm(self, text: str, use_cot: Union[CoTMode, bool] = CoTMode.NO_CHAIN, custom_few_shots: Optional[str] = None) -> \
-    tuple[LiteralString | None, LiteralString | str] | tuple[None, str]:
-        """
-        Use LLM to extract title and main body from cleaned text.
 
-        WARNING: This method consumes significant tokens. Only use when HTML parsing
-        is insufficient and you need LLM-level understanding for content refinement.
-
-        Args:
-            text: Cleaned text content (already extracted from HTML)
-            use_cot: Whether to use Chain of Thought reasoning
-            custom_few_shots: Optional custom few-shot examples
-
-        Returns:
-            Tuple of (title, main_body)
-        """
-        # Determine effective CoT mode
-        if isinstance(use_cot, CoTMode):
-            effective_cot = use_cot.value in ("chain_local", "chain_online")
-        else:
-            effective_cot = bool(use_cot)
-
-        logger.warning(f"Using LLM for content extraction (consuming tokens): text_length={len(text)}, CoT={effective_cot}")
-
-        # Truncate input if too long to save tokens
-        if len(text) > 8000:  # Keep under ~2000 tokens for input
-            logger.warning(f"Truncating input text from {len(text)} to 8000 chars to save tokens")
-            text = text[:8000] + "...[TRUNCATED]"
-
-        # Select system prompt based on CoT mode
-        if effective_cot:
-            system_prompt = self.SYSTEM_PROMPT_COT
-        else:
-            system_prompt = self.SYSTEM_PROMPT
-
-        # Add few-shot examples
-        if custom_few_shots:
-            # Use explicitly provided custom few shots
-            system_prompt = f"{custom_few_shots}\n\n{system_prompt}"
-        elif self._custom_few_shots:
-            # Use stored custom few shots
-            system_prompt = f"{self._custom_few_shots}\n\n{system_prompt}"
-
-        user_message = f"""Please extract the main title and body content from the following text:
-
-{text}
-
-Return your extraction in the exact format specified:
-- TITLE: [Extracted Title]
-- MAIN BODY: [Extracted Full Text]"""
-
-        messages = [
-            SystemMessage(content=system_prompt),
-            HumanMessage(content=user_message)
-        ]
-
-        try:
-            response = self.llm.invoke(messages)
-            response_text = response.content
-
-            # Parse the response
-            title_match = re.search(r'- TITLE:\s*(.+?)(?=\n-|$)', response_text, re.DOTALL)
-            body_match = re.search(r'- MAIN BODY:\s*(.+?)(?=\n-|$)', response_text, re.DOTALL)
-
-            title = title_match.group(1).strip() if title_match else None
-            main_body = body_match.group(1).strip() if body_match else text
-
-            logger.info(f"LLM extraction successful: extracted_title='{title[:30] if title else None}...', output_length={len(main_body)}")
-            return title, main_body
-
-        except Exception as e:
-            logger.error(f"LLM extraction failed: {e}", exc_info=True)
-            # Fallback: return None for title and use full text as body
-            return None, text
-
-    def extract_from_url(self, url: str, use_llm: bool = False, use_cot: Union[CoTMode, bool] = CoTMode.NO_CHAIN, custom_few_shots: Optional[str] = None) -> ContentExtractionResult:
-        """
-        Extract content from a URL.
-
-        This method first uses HTML parsing to extract title and main body directly from the DOM structure,
-        which is much more token-efficient than sending raw HTML to LLM. LLM is only used for refinement
-        when explicitly requested.
-
-        Args:
-            url: The URL to process
-            use_llm: Whether to use LLM for additional content refinement (use sparingly to save tokens)
-            use_cot: Whether to use Chain of Thought reasoning (only when use_llm=True)
-            custom_few_shots: Optional custom few-shot examples (only when use_llm=True)
-
-        Returns:
-            ContentExtractionResult with extracted title and body. If extraction fails,
-            returns a result with error metadata instead of raising exceptions.
-            httpx.TimeoutException: If the request times out
-            httpx.HTTPStatusError: If the response has an error status
-            httpx.RequestError: If there\'s a network error
-        """
+    async def extract_from_url(self, url: str, use_llm: bool = False, use_cot: Union[CoTMode, bool] = CoTMode.NO_CHAIN, custom_few_shots: Optional[str] = None) -> ContentExtractionResult:
+        """Async version of extract_from_url."""
         logger.info(f"Extracting content from URL: {url} (use_llm={use_llm})")
 
-        # Fetch HTML with error handling
         try:
             html = self.fetch_html(url)
         except httpx.HTTPStatusError as e:
@@ -281,7 +175,6 @@ Return your extraction in the exact format specified:
                 }
             )
 
-        # Use HTML parsing to extract structured content (token-efficient)
         main_body, title = self.clean_html(html)
 
         if not main_body or len(main_body.strip()) < 50:
@@ -295,13 +188,10 @@ Return your extraction in the exact format specified:
                 extraction_metadata={"error": "insufficient_content"}
             )
 
-        # Use LLM for refinement only if explicitly requested (saves tokens)
         if use_llm:
             logger.info("Using LLM for content refinement (this consumes tokens)")
-            title, main_body = self._extract_with_llm(main_body, use_cot=use_cot, custom_few_shots=custom_few_shots)
-        # Otherwise, use the already structured content from HTML parsing
+            title, main_body = await self._extract_with_llm(main_body, use_cot=use_cot, custom_few_shots=custom_few_shots)
 
-        # Truncate if necessary
         main_body, was_truncated = self.truncate_text(main_body)
 
         result = ContentExtractionResult(
@@ -319,72 +209,65 @@ Return your extraction in the exact format specified:
         )
 
         logger.info(f"Content extraction complete: title='{title[:50] if title else None}...', body_length={len(main_body)}, method={'LLM' if use_llm else 'HTML parsing'}")
-
         return result
 
-    def extract_from_html(self, html: str, url: Optional[str] = None, use_llm: bool = False, use_cot: Union[CoTMode, bool] = CoTMode.NO_CHAIN, custom_few_shots: Optional[str] = None) -> ContentExtractionResult:
+    @cached()
+    async def _extract_with_llm(self, text: str, use_cot: Union[CoTMode, bool] = CoTMode.NO_CHAIN, custom_few_shots: Optional[str] = None) -> tuple[Optional[str], str]:
+        """Async version of _extract_with_llm."""
+        if isinstance(use_cot, CoTMode):
+            effective_cot = use_cot.value in ("chain_local", "chain_online")
+        else:
+            effective_cot = bool(use_cot)
+
+        logger.warning(f"Using LLM for content extraction (consuming tokens): text_length={len(text)}, CoT={effective_cot}")
+
+        if len(text) > 8000:
+            logger.warning(f"Truncating input text from {len(text)} to 8000 chars to save tokens")
+            text = text[:8000] + "...[TRUNCATED]"
+
+        if effective_cot:
+            system_prompt = self.SYSTEM_PROMPT_COT
+        else:
+            system_prompt = self.SYSTEM_PROMPT
+
+        if custom_few_shots:
+            system_prompt = f"{custom_few_shots}\n\n{system_prompt}"
+        elif self._custom_few_shots:
+            system_prompt = f"{self._custom_few_shots}\n\n{system_prompt}"
+
+        user_message = f"""Please extract the main title and body content from the following text:
+
+{text}
+
+Return your extraction in the exact format specified:
+- TITLE: [Extracted Title]
+- MAIN BODY: [Extracted Full Text]"""
+
+        messages = [
+            SystemMessage(content=system_prompt),
+            HumanMessage(content=user_message)
+        ]
+
+        try:
+            response = await self.llm.ainvoke(messages)
+            response_text = response.content
+
+            title_match = re.search(r'- TITLE:\s*(.+?)(?=\n-|$)', response_text, re.DOTALL)
+            body_match = re.search(r'- MAIN BODY:\s*(.+?)(?=\n-|$)', response_text, re.DOTALL)
+
+            title = title_match.group(1).strip() if title_match else None
+            main_body = body_match.group(1).strip() if body_match else text
+
+            logger.info(f"LLM extraction successful: extracted_title='{title[:30] if title else None}...', output_length={len(main_body)}")
+            return title, main_body
+
+        except Exception as e:
+            logger.error(f"LLM extraction failed: {e}", exc_info=True)
+            return None, text
+
+    async def extract_from_text(self, text: str, url: Optional[str] = None, title: Optional[str] = None, use_llm: bool = True, use_cot: Union[CoTMode, bool] = CoTMode.NO_CHAIN, custom_few_shots: Optional[str] = None) -> ContentExtractionResult:
         """
-        Extract content from raw HTML content.
-
-        This method uses HTML parsing to extract title and main body directly from the DOM structure,
-        which is much more token-efficient than sending raw HTML to LLM.
-
-        Args:
-            html: Raw HTML string
-            url: Optional source URL for metadata
-            use_llm: Whether to use LLM for additional content refinement (use sparingly to save tokens)
-            use_cot: Whether to use Chain of Thought reasoning (only when use_llm=True)
-            custom_few_shots: Optional custom few-shot examples (only when use_llm=True)
-
-        Returns:
-            ContentExtractionResult with extracted title and body
-        """
-        logger.info(f"Extracting content from HTML content (use_llm={use_llm})")
-
-        # Use HTML parsing to extract structured content (token-efficient)
-        main_body, title = self.clean_html(html)
-
-        if not main_body or len(main_body.strip()) < 50:
-            logger.warning("Insufficient content in HTML")
-            return ContentExtractionResult(
-                url=url,
-                title=title,
-                main_body="",
-                text_length=0,
-                truncated=False,
-                extraction_metadata={"error": "insufficient_content"}
-            )
-
-        # Use LLM for refinement only if explicitly requested (saves tokens)
-        if use_llm:
-            logger.info("Using LLM for HTML content refinement (this consumes tokens)")
-            title, main_body = self._extract_with_llm(main_body, use_cot=use_cot, custom_few_shots=custom_few_shots)
-        # Otherwise, use the already structured content from HTML parsing
-
-        # Truncate if necessary
-        main_body, was_truncated = self.truncate_text(main_body)
-
-        result = ContentExtractionResult(
-            url=url,
-            title=title,
-            main_body=main_body,
-            text_length=len(main_body),
-            truncated=was_truncated,
-            extraction_metadata={
-                "model": self.llm.model_name if use_llm else None,
-                "temperature": self.llm.temperature if use_llm else None,
-                "use_llm": use_llm,
-                "extraction_method": "llm_refinement" if use_llm else "html_parsing_direct"
-            }
-        )
-
-        logger.info(f"HTML content extraction complete: title='{title[:50] if title else None}...', body_length={len(main_body)}, method={'LLM' if use_llm else 'HTML parsing'}")
-
-        return result
-
-    def extract_from_text(self, text: str, url: Optional[str] = None, title: Optional[str] = None, use_llm: bool = True, use_cot: Union[CoTMode, bool] = CoTMode.NO_CHAIN, custom_few_shots: Optional[str] = None) -> ContentExtractionResult:
-        """
-        Extract content from plain text (assumes text is already cleaned).
+        Extract content from plain text (assumes text is already cleaned) - async version.
 
         Args:
             text: Plain text content
@@ -404,7 +287,7 @@ Return your extraction in the exact format specified:
 
         # Use LLM for refinement if requested
         if use_llm:
-            extracted_title, main_body = self._extract_with_llm(text, use_cot=use_cot, custom_few_shots=custom_few_shots)
+            extracted_title, main_body = await self._extract_with_llm(text, use_cot=use_cot, custom_few_shots=custom_few_shots)
             # Use provided title if LLM didn't find one
             final_title = extracted_title or title
         else:

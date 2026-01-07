@@ -4,53 +4,27 @@ This agent breaks down provided text snippets into independent, verifiable
 atomic claims, each containing only one factual point.
 """
 
-import re
+import asyncio
 from dataclasses import dataclass
 from typing import Optional, List, Dict, Any, Union
 
 from langchain_core.messages import SystemMessage, HumanMessage
 from langchain_openai import ChatOpenAI
 
+from .model import AtomicClaim
 from ...few_shots.claim_atomizer.few_shots import CLAIM_ATOMIZER_FEW_SHOTS
+from ....infrastructure.repositories import AgentProtocol
 from ....infrastructure.storage.persistence import get_database
 from ....shared.constant.enums import CoTMode
 from ....shared.config.settings import settings, ExecutionMode
-from ....shared.cache.decorator import cached
 from src.shared.llm import llm_manager
 from ....shared.utils.logger import get_logger
+from .utils import TextProcessor, ClaimParser, ClaimFormatter
 
 logger = get_logger(__name__)
 
 
-@dataclass
-class AtomicClaim:
-    """An atomic claim extracted from text."""
-    id: str
-    text: str
-    original_sentence: str
-    confidence: float
-    paragraph_index: Optional[int] = None  # Index of the paragraph this claim came from
-    paragraph_text: Optional[str] = None   # Full text of the paragraph this claim came from
-
-
-@dataclass
-class ParagraphClaims:
-    """Claims from a single paragraph."""
-    paragraph_index: int
-    paragraph_text: str
-    atomic_claims: List[AtomicClaim]
-
-@dataclass
-class ClaimAtomizationResult:
-    """Result of claim atomization."""
-    atomic_claims: List[AtomicClaim]  # Flat list for backward compatibility
-    paragraphs: List[ParagraphClaims]  # New: claims grouped by paragraphs
-    original_text: str
-    execution_mode: str
-    metadata: Optional[Dict[str, Any]] = None
-
-
-class ClaimAtomizerAgent:
+class ClaimAtomizerAgent(AgentProtocol):
     """
     Claim Atomizer Agent that decomposes text snippets into independent,
     verifiable atomic claims.
@@ -60,9 +34,9 @@ class ClaimAtomizerAgent:
     - Chain of Thought reasoning support
     - Few-shot example support
     - Confidence scoring
+    - Async LLM calls
     """
 
-    # Class variable for caching custom few shots (optional performance optimization)
     _custom_few_shots_cache: Optional[str] = None
 
     SYSTEM_PROMPT = """You are a Linguistic Logic Analyst specializing in Atomic Claim Decomposition.
@@ -72,19 +46,8 @@ Task: Break down the provided text into independent, verifiable atomic claims. E
 Requirements:
 1. Each claim must contain ONLY ONE factual point that can be empirically verified.
 2. Make claims self-contained with clear subjects and complete information.
-3. Remove all subjective language, opinions, and rhetorical elements.
-4. Focus on concrete facts: numbers, dates, events, relationships, properties.
-5. IMPORTANT: Do NOT decompose questions, rhetorical questions, or interrogative sentences into claims. If the input contains questions, skip them entirely.
-
-Examples of good atomic claims:
-- "The company reported $2.3 billion in revenue for Q3 2023."
-- "Dr. Sarah Johnson published the paper in Nature magazine."
-- "The temperature reached 35 degrees Celsius on July 15th."
-
-Examples of what NOT to include:
-- Questions: "What is the best approach?" (SKIP entirely)
-- Opinions: "This is an excellent solution." (too subjective)
-- Vague statements: "Things improved significantly." (not specific)
+3. Focus on concrete facts: numbers, dates, events, relationships, properties.
+4. IMPORTANT: Do NOT decompose questions, rhetorical questions, or interrogative sentences into claims. If the input contains questions, skip them entirely.
 
 Output Format:
 - CLAIM_1: [Single concrete factual claim]
@@ -136,12 +99,11 @@ Then list claims:
             api_key: OpenAI API key or compatible API key
             api_base: Base URL for the API
             temperature: Temperature for LLM responses
-            execution_mode: Execution mode for CoT ('chain_online', 'chain_local', 'no_chain')
+            execution_mode: Execution mode for CoT (deprecated, kept for compatibility)
         """
         model_name = model_name or settings.openai_model
-        logger.info(f"Initializing ClaimAtomizerAgent: model={model_name}, temperature={temperature}, execution_mode={execution_mode}")
+        logger.info(f"Initializing ClaimAtomizerAgent: model={model_name}, temperature={temperature}")
 
-        # Use shared HTTP client for LLM
         http_client = llm_manager.get_http_client()
 
         self.llm = ChatOpenAI(
@@ -165,20 +127,18 @@ Then list claims:
             except Exception as e:
                 logger.warning(f"Failed to load custom few shots: {e}")
 
-        logger.debug(f"ClaimAtomizerAgent initialized successfully with execution_mode={self.execution_mode}")
+        logger.debug(f"ClaimAtomizerAgent initialized successfully")
 
-    @cached()
-    def _atomize_claims_with_llm(self, text: str, use_cot: Union[CoTMode, bool] = CoTMode.NO_CHAIN, custom_few_shots: Optional[str] = None) -> List[Dict[str, Any]]:
+    def _get_system_prompt(self, use_cot: Union[CoTMode, bool], use_few_shots: bool = True) -> str:
         """
-        Use LLM to decompose text into atomic claims.
+        Get the appropriate system prompt based on CoT mode and few-shot settings.
 
         Args:
-            text: Text snippet to decompose
             use_cot: Whether to use Chain of Thought reasoning
-            custom_few_shots: Optional custom few-shot examples
+            use_few_shots: Whether to use few-shot examples
 
         Returns:
-            List of claim dictionaries
+            System prompt string
         """
         # Determine effective CoT mode
         if isinstance(use_cot, CoTMode):
@@ -186,21 +146,39 @@ Then list claims:
         else:
             effective_cot = bool(use_cot)
 
-        logger.debug(f"Atomizing claims from text ({len(text)} chars) with CoT={effective_cot}")
+        # Select base prompt
+        base_prompt = self.SYSTEM_PROMPT_COT if effective_cot else self.SYSTEM_PROMPT
 
-        # Select system prompt based on CoT mode
-        if effective_cot:
-            system_prompt = self.SYSTEM_PROMPT_COT
-        else:
-            system_prompt = self.SYSTEM_PROMPT
+        # Add few-shot examples if enabled
+        if use_few_shots:
+            if self._custom_few_shots:
+                return f"{self._custom_few_shots}\n\n{base_prompt}"
+            else:
+                # Use default few shots
+                return f"{CLAIM_ATOMIZER_FEW_SHOTS}\n\n{base_prompt}"
 
-        # Add few-shot examples
-        if custom_few_shots:
-            # Use explicitly provided custom few shots
-            system_prompt = f"{custom_few_shots}\n\n{system_prompt}"
-        elif self._custom_few_shots:
-            # Use stored custom few shots
-            system_prompt = f"{self._custom_few_shots}\n\n{system_prompt}"
+        return base_prompt
+
+    async def _atomize_text_with_llm(
+        self,
+        text: str,
+        use_cot: Union[CoTMode, bool] = CoTMode.NO_CHAIN,
+        use_few_shots: bool = True
+    ) -> List[Dict[str, Any]]:
+        """
+        Use LLM to decompose text into atomic claims (async).
+
+        Args:
+            text: Text snippet to decompose
+            use_cot: Whether to use Chain of Thought reasoning
+            use_few_shots: Whether to use few-shot examples
+
+        Returns:
+            List of claim dictionaries
+        """
+        logger.debug(f"Atomizing claims from text ({len(text)} chars) with CoT={use_cot}, use_few_shots={use_few_shots}")
+
+        system_prompt = self._get_system_prompt(use_cot, use_few_shots=use_few_shots)
 
         user_message = f"""Please decompose the following text into atomic claims. Remember: do NOT extract claims from questions or interrogative sentences.
 
@@ -208,8 +186,8 @@ Text to analyze:
 {text}
 
 Return each atomic claim in the format:
-- CLAIM_1: [Single concrete factual claim]
-- CLAIM_2: [Single concrete factual claim]
+- CLAIM_1: [Single concrete atomic factual claim]
+- CLAIM_2: [Single concrete atomic factual claim]
 ..."""
 
         messages = [
@@ -218,30 +196,10 @@ Return each atomic claim in the format:
         ]
 
         try:
-            response = self.llm.invoke(messages)
+            response = await self.llm.ainvoke(messages)
             response_text = response.content
 
-            # Parse claims from response
-            claims = []
-            claim_pattern = r'- CLAIM_(\d+):\s*(.+?)(?=\n- CLAIM_|\n*$)'
-
-            for match in re.finditer(claim_pattern, response_text, re.DOTALL):
-                claim_id = match.group(1)
-                claim_text = match.group(2).strip()
-
-                # Try to find the sentence containing this claim
-                original_sentence = self._find_sentence_containing_claim(text, claim_text)
-                if not original_sentence:
-                    # Fallback: truncate the text if it's too long
-                    original_sentence = text[:200] + "..." if len(text) > 200 else text
-
-                claims.append({
-                    "id": claim_id,
-                    "text": claim_text,
-                    "original_sentence": original_sentence,
-                    "confidence": 0.8  # Default confidence
-                })
-
+            claims = ClaimParser.parse_claims_from_response(response_text, text)
             logger.info(f"Extracted {len(claims)} atomic claims")
             return claims
 
@@ -249,273 +207,196 @@ Return each atomic claim in the format:
             logger.error(f"LLM atomization failed: {e}", exc_info=True)
             return []
 
-    def _find_sentence_containing_claim(self, text: str, claim_text: str) -> str:
-        """
-        Find the most appropriate sentence in the text that contains the given claim.
-        Prioritizes declarative sentences over questions, titles, or list items.
-
-        Args:
-            text: The full text to search in
-            claim_text: The claim text to find
-
-        Returns:
-            The most appropriate sentence containing the claim, or empty string if not found
-        """
-        import re
-
-        # Split text into sentences (simple approach)
-        sentences = re.split(r'(?<=[.!?])\s+', text.strip())
-
-        # Filter and score sentences
-        candidate_sentences = []
-
-        claim_words = set(re.findall(r'\b\w+\b', claim_text.lower()))
-
-        for sentence in sentences:
-            sentence = sentence.strip()
-            if not sentence or len(sentence) < 10:
-                continue
-
-            sentence_lower = sentence.lower()
-            sentence_words = set(re.findall(r'\b\w+\b', sentence_lower))
-
-            # Calculate word overlap
-            overlap = len(claim_words.intersection(sentence_words))
-            if overlap == 0:
-                continue
-
-            # Score the sentence quality
-            quality_score = self._score_sentence_quality(sentence)
-
-            # Calculate relevance score (overlap + quality bonus)
-            relevance_score = overlap + quality_score
-
-            candidate_sentences.append({
-                'sentence': sentence,
-                'overlap': overlap,
-                'quality_score': quality_score,
-                'relevance_score': relevance_score
-            })
-
-        if not candidate_sentences:
-            return ""
-
-        # Sort by relevance score (highest first)
-        candidate_sentences.sort(key=lambda x: x['relevance_score'], reverse=True)
-
-        # Return the best sentence if it's not too long
-        best_candidate = candidate_sentences[0]
-        if len(best_candidate['sentence']) <= 500:
-            return best_candidate['sentence']
-
-        # If too long, return empty (will fallback to truncated text)
-        return ""
-
-    def _score_sentence_quality(self, sentence: str) -> float:
-        """
-        Score sentence quality to prefer declarative statements over questions/titles.
-
-        Args:
-            sentence: The sentence to score
-
-        Returns:
-            Quality score (higher is better)
-        """
-        score = 0.0
-        sentence_lower = sentence.lower()
-
-        # Prefer sentences that end with periods (declarative)
-        if sentence.endswith('.'):
-            score += 2.0
-
-        # Penalize questions (sentences ending with ?)
-        if sentence.endswith('?'):
-            score -= 3.0
-
-        # Penalize potential titles (short, all caps, or starting with numbers)
-        if len(sentence.split()) <= 8:
-            score -= 1.0
-
-        # Penalize all caps sentences (likely titles)
-        if sentence.isupper() and len(sentence) > 10:
-            score -= 2.0
-
-        # Penalize sentences starting with numbers (likely lists)
-        if sentence.strip()[0].isdigit():
-            score -= 1.0
-
-        # Penalize very short sentences
-        if len(sentence.split()) < 5:
-            score -= 1.0
-
-        # Bonus for sentences with common declarative words
-        declarative_indicators = ['is', 'are', 'was', 'were', 'has', 'have', 'had', 'does', 'do', 'did']
-        for word in declarative_indicators:
-            if f' {word} ' in sentence_lower:
-                score += 0.5
-                break
-
-        return score
-
-    def _split_text_into_paragraphs(self, text: str) -> List[str]:
-        """
-        Split text into paragraphs using robust paragraph detection.
-
-        Args:
-            text: The text to split
-
-        Returns:
-            List of paragraphs
-        """
-        import re
-
-        # Split by double newlines (common paragraph separator)
-        paragraphs = re.split(r'\n\s*\n', text.strip())
-
-        # Filter out empty paragraphs and clean up
-        paragraphs = [p.strip() for p in paragraphs if p.strip()]
-
-        # If no paragraphs found, treat the whole text as one paragraph
-        if not paragraphs:
-            paragraphs = [text.strip()]
-
-        # Filter out very short paragraphs (likely headers or separators)
-        paragraphs = [p for p in paragraphs if len(p) > 20]
-
-        return paragraphs
-
-    def atomize_text(
+    async def _process_paragraphs(
         self,
-        text: str,
-        use_cot: Union[CoTMode, bool] = CoTMode.NO_CHAIN,
-        custom_few_shots: Optional[str] = None,
-        split_into_paragraphs: bool = False
-    ) -> ClaimAtomizationResult:
+        paragraphs: List[str],
+        use_cot: Union[CoTMode, bool],
+        use_few_shots: bool = True
+    ) -> List[Dict[str, Any]]:
         """
-        Decompose text into atomic claims.
+        Process multiple paragraphs concurrently and extract claims.
 
         Args:
-            text: Text snippet to decompose
-            use_cot: Whether to use Chain of Thought reasoning
-            custom_few_shots: Optional custom few-shot examples
-            split_into_paragraphs: Whether to split text into paragraphs before atomization
+            paragraphs: List of paragraph texts
+            use_cot: Chain of Thought mode
+            use_few_shots: Whether to use few-shot examples
 
         Returns:
-            ClaimAtomizationResult with atomic claims
+            List of formatted claim dictionaries with paragraph information
         """
-        logger.info(f"Atomizing text ({len(text)} chars) with CoT={use_cot}, split_paragraphs={split_into_paragraphs}")
+        # Process paragraphs concurrently
+        tasks = [
+            self._atomize_text_with_llm(paragraph, use_cot=use_cot, use_few_shots=use_few_shots)
+            for paragraph in paragraphs
+        ]
 
-        if split_into_paragraphs:
-            # Split text into paragraphs and process each separately
-            paragraphs = self._split_text_into_paragraphs(text)
-            logger.info(f"Split text into {len(paragraphs)} paragraphs")
+        all_paragraph_results = await asyncio.gather(*tasks)
 
-            all_raw_claims = []
-            claim_counter = 0
+        # Format claims with paragraph information
+        all_claims = []
+        for para_idx, (paragraph, para_claims) in enumerate(zip(paragraphs, all_paragraph_results)):
+            for claim_data in para_claims:
+                formatted_claim = ClaimFormatter.format_claim_data(
+                    claim_data=claim_data,
+                    paragraph_index=para_idx,
+                    paragraph_text=paragraph,
+                    source_text=paragraph
+                )
+                # Update claim ID to be unique across paragraphs
+                formatted_claim['id'] = f"P{para_idx + 1}_{claim_data.get('id', para_idx)}"
+                all_claims.append(formatted_claim)
 
-            # Process each paragraph separately
-            for para_idx, paragraph in enumerate(paragraphs):
-                logger.debug(f"Processing paragraph {para_idx + 1}/{len(paragraphs)} ({len(paragraph)} chars)")
+        return all_claims
 
-                # Skip very short paragraphs
-                if len(paragraph) < 50:
-                    logger.debug(f"Skipping short paragraph: {paragraph[:50]}...")
-                    continue
+    def _create_atomic_claims(
+        self,
+        claim_data_list: List[Dict[str, Any]],
+        source_text: str,
+        split_into_paragraphs: bool
+    ) -> List[AtomicClaim]:
+        """
+        Convert claim data dictionaries to AtomicClaim objects.
 
-                # Decompose paragraph into atomic claims
-                para_claims = self._atomize_claims_with_llm(paragraph, use_cot=use_cot, custom_few_shots=custom_few_shots)
+        Args:
+            claim_data_list: List of claim data dictionaries
+            source_text: Original source text
+            split_into_paragraphs: Whether text was split into paragraphs
 
-                # Add paragraph information to each claim
-                for claim_data in para_claims:
-                    claim_data['paragraph_index'] = para_idx
-                    claim_data['paragraph_text'] = paragraph
-                    # Update claim IDs to be unique across paragraphs
-                    if 'id' in claim_data:
-                        claim_data['id'] = f"P{para_idx + 1}_{claim_data['id']}"
-                    else:
-                        claim_counter += 1
-                        claim_data['id'] = f"P{para_idx + 1}_{claim_counter}"
-
-                all_raw_claims.extend(para_claims)
-
-            logger.info(f"Extracted {len(all_raw_claims)} atomic claims from {len(paragraphs)} paragraphs")
-        else:
-            # Process the entire text as one unit (for summaries)
-            all_raw_claims = self._atomize_claims_with_llm(text, use_cot=use_cot, custom_few_shots=custom_few_shots)
-
-            # Reformat IDs for summary claims to be consistent with paragraph format (P1_1, P1_2, etc.)
-            for i, claim_data in enumerate(all_raw_claims, 1):
-                claim_data['id'] = f"P1_{i}"
-
-            logger.info(f"Extracted {len(all_raw_claims)} atomic claims from entire text")
-
-        # Convert to AtomicClaim objects
+        Returns:
+            List of AtomicClaim objects
+        """
         atomic_claims = []
-        for data in all_raw_claims:
+        for data in claim_data_list:
             try:
-                claim_text = data.get("text", "")
-                original_sentence = data.get("original_sentence")
-
-                if split_into_paragraphs:
-                    # When split into paragraphs, use paragraph context
-                    paragraph_text = data.get("paragraph_text", text)
-                    paragraph_index = data.get("paragraph_index")
-                else:
-                    # When not split, treat entire text as context
-                    paragraph_text = text
-                    paragraph_index = None
-
-                # If no original_sentence provided, try to find it in the context
-                if not original_sentence:
-                    original_sentence = self._find_sentence_containing_claim(paragraph_text, claim_text)
-                    if not original_sentence:
-                        # Fallback: use the context text (truncated if too long)
-                        original_sentence = paragraph_text[:300] + "..." if len(paragraph_text) > 300 else paragraph_text
-
                 claim = AtomicClaim(
                     id=data.get("id", ""),
-                    text=claim_text,
-                    original_sentence=original_sentence,
+                    text=data.get("text", ""),
+                    original_sentence=data.get("original_sentence", ""),
                     confidence=data.get("confidence", 0.8),
-                    paragraph_index=paragraph_index,
-                    paragraph_text=paragraph_text if split_into_paragraphs else None
+                    paragraph_index=data.get("paragraph_index") if split_into_paragraphs else None,
+                    paragraph_text=data.get("paragraph_text") if split_into_paragraphs else None
                 )
                 atomic_claims.append(claim)
             except Exception as e:
                 logger.warning(f"Failed to create atomic claim: {e}")
                 continue
 
-        # Group claims by paragraphs (only if text was split into paragraphs)
-        if split_into_paragraphs:
-            paragraph_groups = {}
-            for claim in atomic_claims:
-                para_idx = claim.paragraph_index
-                if para_idx is not None:
-                    if para_idx not in paragraph_groups:
-                        paragraph_groups[para_idx] = {
-                            'paragraph_index': para_idx,
-                            'paragraph_text': claim.paragraph_text or '',
-                            'atomic_claims': []
-                        }
-                    paragraph_groups[para_idx]['atomic_claims'].append(claim)
+        return atomic_claims
 
-            # Convert to ParagraphClaims objects
-            paragraphs = []
-            for para_idx in sorted(paragraph_groups.keys()):
-                para_data = paragraph_groups[para_idx]
-                paragraphs.append(ParagraphClaims(
-                    paragraph_index=para_data['paragraph_index'],
-                    paragraph_text=para_data['paragraph_text'],
-                    atomic_claims=para_data['atomic_claims']
-                ))
+    def _group_claims_by_paragraphs(
+        self,
+        atomic_claims: List[AtomicClaim]
+    ) -> List[ParagraphClaims]:
+        """
+        Group atomic claims by their paragraph index.
+
+        Args:
+            atomic_claims: List of atomic claims
+
+        Returns:
+            List of ParagraphClaims objects
+        """
+        paragraph_groups = {}
+        for claim in atomic_claims:
+            para_idx = claim.paragraph_index
+            if para_idx is not None:
+                if para_idx not in paragraph_groups:
+                    paragraph_groups[para_idx] = {
+                        'paragraph_index': para_idx,
+                        'paragraph_text': claim.paragraph_text or '',
+                        'atomic_claims': []
+                    }
+                paragraph_groups[para_idx]['atomic_claims'].append(claim)
+
+        # Convert to ParagraphClaims objects
+        paragraphs = []
+        for para_idx in sorted(paragraph_groups.keys()):
+            para_data = paragraph_groups[para_idx]
+            paragraphs.append(ParagraphClaims(
+                paragraph_index=para_data['paragraph_index'],
+                paragraph_text=para_data['paragraph_text'],
+                atomic_claims=para_data['atomic_claims']
+            ))
+
+        return paragraphs
+
+    async def atomize_text(
+        self,
+        text: str,
+        use_cot: Union[CoTMode, bool] = CoTMode.NO_CHAIN,
+        split_into_paragraphs: bool = False,
+        use_few_shots: bool = True
+    ) -> ClaimAtomizationResult:
+        """
+        Decompose text into atomic claims (async).
+
+        Args:
+            text: Text snippet to decompose
+            use_cot: Whether to use Chain of Thought reasoning
+            split_into_paragraphs: Whether to split text into paragraphs before atomization
+            use_few_shots: Whether to use few-shot examples
+
+        Returns:
+            ClaimAtomizationResult with atomic claims
+        """
+        logger.info(f"Atomizing text ({len(text)} chars) with CoT={use_cot}, split_paragraphs={split_into_paragraphs}, use_few_shots={use_few_shots}")
+
+        # Process text based on split mode
+        if split_into_paragraphs:
+            paragraphs = TextProcessor.split_text_into_paragraphs(text)
+            logger.info(f"Split text into {len(paragraphs)} paragraphs")
+
+            # Filter short paragraphs
+            valid_paragraphs = [p for p in paragraphs if len(p) >= 10]
+            logger.debug(f"Processing {len(valid_paragraphs)} valid paragraphs (filtered {len(paragraphs) - len(valid_paragraphs)} short ones)")
+
+            # Process paragraphs concurrently
+            claim_data_list = await self._process_paragraphs(
+                valid_paragraphs,
+                use_cot=use_cot,
+                use_few_shots=use_few_shots
+            )
+
+            logger.info(f"Extracted {len(claim_data_list)} atomic claims from {len(valid_paragraphs)} paragraphs")
         else:
-            paragraphs = []
+            # Process entire text as one unit
+            raw_claims = await self._atomize_text_with_llm(text, use_cot=use_cot, use_few_shots=use_few_shots)
+
+            # Format claim IDs consistently
+            claim_data_list = []
+            for i, claim_data in enumerate(raw_claims, 1):
+                formatted_claim = ClaimFormatter.format_claim_data(
+                    claim_data=claim_data,
+                    paragraph_index=None,
+                    paragraph_text=None,
+                    source_text=text
+                )
+                formatted_claim['id'] = f"P1_{i}"
+                claim_data_list.append(formatted_claim)
+
+            logger.info(f"Extracted {len(claim_data_list)} atomic claims from entire text")
+
+        # Convert to AtomicClaim objects
+        atomic_claims = self._create_atomic_claims(
+            claim_data_list,
+            source_text=text,
+            split_into_paragraphs=split_into_paragraphs
+        )
+
+        # Group by paragraphs if split
+        paragraphs = self._group_claims_by_paragraphs(atomic_claims) if split_into_paragraphs else []
+
+        # Determine execution mode
+        if isinstance(use_cot, CoTMode):
+            execution_mode = "chain_online" if use_cot.value in ("chain_local", "chain_online") else "no_chain"
+        else:
+            execution_mode = "chain_online" if use_cot else "no_chain"
 
         result = ClaimAtomizationResult(
-            atomic_claims=atomic_claims,  # Keep flat list for backward compatibility
-            paragraphs=paragraphs,        # New: claims grouped by paragraphs
+            atomic_claims=atomic_claims,
+            paragraphs=paragraphs,
             original_text=text,
-            execution_mode="chain_online" if use_cot else "no_chain",
+            execution_mode=execution_mode,
             metadata={
                 "model": self.llm.model_name,
                 "temperature": self.llm.temperature,
@@ -526,17 +407,11 @@ Return each atomic claim in the format:
         )
 
         logger.info(f"Atomization complete: {len(atomic_claims)} atomic claims extracted")
-
         return result
 
     @staticmethod
     def get_default_few_shots() -> str:
-        """
-        Get default few-shot examples for claim atomization.
-
-        Returns:
-            String containing few-shot examples
-        """
+        """Get default few-shot examples for claim atomization."""
         return CLAIM_ATOMIZER_FEW_SHOTS
 
     @classmethod
@@ -546,13 +421,13 @@ Return each atomic claim in the format:
             database = get_database()
             success = database.save_custom_few_shots("claim_atomizer", custom_few_shots)
             if success:
-                cls._custom_few_shots_cache = custom_few_shots  # Update cache
-                logger.info("Custom few shots saved for ClaimAtomizerAgent: {}".format(custom_few_shots is not None))
+                cls._custom_few_shots_cache = custom_few_shots
+                logger.info(f"Custom few shots saved for ClaimAtomizerAgent: {custom_few_shots is not None}")
             else:
                 logger.warning("Failed to save custom few shots to persistence")
         else:
             cls._custom_few_shots_cache = custom_few_shots
-            logger.info("Custom few shots set for ClaimAtomizerAgent (no persistence): {}".format(custom_few_shots is not None))
+            logger.info(f"Custom few shots set for ClaimAtomizerAgent (no persistence): {custom_few_shots is not None}")
 
     @classmethod
     def get_custom_few_shots(cls) -> Optional[str]:
@@ -560,7 +435,6 @@ Return each atomic claim in the format:
         if settings.enable_persistence:
             database = get_database()
             few_shots = database.load_custom_few_shots("claim_atomizer")
-            # Update cache
             if isinstance(few_shots, str) or few_shots is None:
                 cls._custom_few_shots_cache = few_shots
             return few_shots
@@ -576,5 +450,4 @@ Return each atomic claim in the format:
     def reset(self) -> None:
         """Reset the agent to initial state."""
         logger.info("Resetting ClaimAtomizerAgent state")
-        # No state to reset for this agent
         logger.debug("Agent reset complete")

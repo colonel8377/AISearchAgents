@@ -1,9 +1,10 @@
 """
-LLM-based privacy entity verification.
+LLM-based privacy entity verification with Mask-Then-Ask strategy.
 """
 
 import json
-from typing import List, Dict, Any, Optional
+import re
+from typing import List, Dict, Any, Optional, Tuple
 
 from langchain_core.messages import SystemMessage, HumanMessage
 from langchain_openai import ChatOpenAI
@@ -19,30 +20,56 @@ logger = get_logger(__name__)
 
 class PrivacyVerifier:
     """
-    Verifies detected privacy entities using LLM with privacy-safe masking.
+    Mask-Then-Ask privacy verifier.
+    
+    Uses LLM semantic understanding to verify detection results and filter false positives.
     """
+
+    VERIFICATION_PROMPT_TEMPLATE = """You are a privacy security expert. I need you to verify if a detected item is actually sensitive personal information.
+
+Context: "{context}"
+
+Detection: The text "{placeholder}" was flagged as {entity_type}. 
+
+Question: Based on the surrounding context, is this actually a {entity_type}?  
+Consider: 
+1. Does the context suggest this is real personal data or just an example/documentation?
+2. Is the format consistent with a real {entity_type}?
+3. Are there any indicators that this is a placeholder, test data, or version number?
+
+Answer with: 
+- "YES" if this is likely real sensitive data
+- "NO" if this is likely a false positive (example, test data, version number, etc.)
+- Brief reasoning (1 sentence)
+
+Format: YES/NO - [reasoning]"""
 
     def __init__(self, llm: ChatOpenAI):
         self.llm = llm
+        self._cache: Dict[str, Tuple[bool, float, str]] = {}
 
     async def verify_entities(
         self,
         entities: List[PrivacyEntity],
-        text: str
+        text: str,
+        sanitized_text: Optional[str] = None,
+        metadata_registry: Optional[Dict[str, Any]] = None
     ) -> List[PrivacyEntity]:
         """
-        Verify entities using LLM with privacy-safe masking.
+        Verify entities using Mask-Then-Ask strategy.
 
         Only verifies entities with confidence between MIN and MAX thresholds.
         High confidence (>MAX) entities are accepted directly.
         Low confidence (<MIN) entities are discarded.
 
         Privacy Safety: Never sends actual entity values to LLM.
-        Uses <CANDIDATE> placeholder in masked context.
+        Uses placeholders from sanitized text.
 
         Args:
             entities: List of detected privacy entities
             text: Original text containing entities
+            sanitized_text: Sanitized text with placeholders (optional)
+            metadata_registry: Metadata registry mapping placeholders to types (optional)
 
         Returns:
             Filtered list of entities (with non-sensitive entities removed)
@@ -74,8 +101,10 @@ class PrivacyVerifier:
             logger.debug(f"LLM verification: {len(high_confidence_entities)} high confidence, {len(low_confidence_entities)} low confidence discarded")
             return high_confidence_entities
 
-        # Verify entities using LLM (with privacy-safe masking)
-        verified_entities = await self._verify_entities_batch(verify_entities, text)
+        # Verify entities using Mask-Then-Ask
+        verified_entities = await self._verify_entities_mask_then_ask(
+            verify_entities, text, sanitized_text, metadata_registry
+        )
 
         # Combine high confidence and verified entities
         final_entities = high_confidence_entities + verified_entities
@@ -85,6 +114,169 @@ class PrivacyVerifier:
             f"{len(low_confidence_entities)} low confidence discarded"
         )
         return final_entities
+
+    async def verify_single(
+        self,
+        entity: PrivacyEntity,
+        context: str,
+        placeholder: str
+    ) -> Tuple[bool, float, str]:
+        """
+        Verify a single entity.
+
+        Args:
+            entity: Entity to verify
+            context: Context text (sanitized)
+            placeholder: Placeholder text (e.g., "<EMAIL_1>")
+
+        Returns:
+            (is_valid, confidence_adjustment, reasoning)
+        """
+        # Check cache
+        cache_key = f"{entity.entity_type}:{context[:100]}:{placeholder}"
+        if cache_key in self._cache:
+            return self._cache[cache_key]
+
+        # Build verification prompt
+        prompt = self.VERIFICATION_PROMPT_TEMPLATE.format(
+            context=context,
+            placeholder=placeholder,
+            entity_type=entity.entity_type
+        )
+
+        # Call LLM
+        try:
+            response = await self._call_llm(prompt)
+            is_valid, confidence_adj, reasoning = self._parse_response(response)
+        except Exception as e:
+            logger.warning(f"Verification failed for {entity.entity_type}: {e}")
+            # Fail-safe: default to valid
+            is_valid, confidence_adj, reasoning = True, 0.0, "Verification failed, defaulting to valid"
+
+        # Cache result
+        self._cache[cache_key] = (is_valid, confidence_adj, reasoning)
+
+        return is_valid, confidence_adj, reasoning
+
+    async def verify_batch(
+        self,
+        entities: List[PrivacyEntity],
+        contexts: List[str],
+        placeholders: List[str]
+    ) -> List[Tuple[bool, float, str]]:
+        """
+        Batch verify multiple entities.
+
+        Combines multiple verification requests into a single LLM call for efficiency.
+        """
+        if len(entities) != len(contexts) or len(entities) != len(placeholders):
+            raise ValueError("entities, contexts, and placeholders must have same length")
+
+        # Build batch prompt
+        batch_prompt_parts = [
+            "You are a privacy security expert. Verify multiple detected items.",
+            "",
+            "Contexts and detections:"
+        ]
+
+        for idx, (entity, context, placeholder) in enumerate(zip(entities, contexts, placeholders)):
+            batch_prompt_parts.append(
+                f"\n[{idx}] Entity Type: {entity.entity_type}\n"
+                f"Context: \"{context}\"\n"
+                f"Detection: \"{placeholder}\" was flagged as {entity.entity_type}.\n"
+                f"Is this actually a {entity.entity_type}? (YES/NO - reasoning)"
+            )
+
+        batch_prompt_parts.append(
+            "\nReturn JSON array with one result per detection:\n"
+            '[{"index": 0, "is_valid": true/false, "reasoning": "brief explanation"}, ...]'
+        )
+
+        batch_prompt = "\n".join(batch_prompt_parts)
+
+        # Call LLM
+        try:
+            response = await self._call_llm(batch_prompt)
+            results = self._parse_batch_response(response, len(entities))
+        except Exception as e:
+            logger.warning(f"Batch verification failed: {e}")
+            # Fail-safe: default all to valid
+            results = [(True, 0.0, "Verification failed, defaulting to valid")] * len(entities)
+
+        return results
+
+    async def _verify_entities_mask_then_ask(
+        self,
+        entities: List[PrivacyEntity],
+        original_text: str,
+        sanitized_text: Optional[str],
+        metadata_registry: Optional[Dict[str, Any]]
+    ) -> List[PrivacyEntity]:
+        """
+        Verify entities using Mask-Then-Ask strategy.
+        """
+        verified_entities = []
+
+        # Use sanitized text if available, otherwise use original with masking
+        if sanitized_text and metadata_registry:
+            # Find placeholders for each entity
+            entity_placeholders = {}
+            for entity in entities:
+                # Try to find placeholder in metadata registry
+                found = False
+                for registry_key, meta in metadata_registry.items():
+                    if not isinstance(meta, dict):
+                        continue
+                    original_value = meta.get("original_value", "")
+                    if original_value == entity.text:
+                        # Use synthetic_value (from sanitizer) or sanitized_value (for backward compatibility)
+                        placeholder_val = meta.get("synthetic_value") or meta.get("sanitized_value")
+                        if placeholder_val:
+                            entity_placeholders[entity] = placeholder_val
+                            found = True
+                            break
+                if not found:
+                    entity_placeholders[entity] = "<CANDIDATE>"
+            
+            # Extract contexts for each entity
+            contexts = []
+            placeholders = []
+            for entity in entities:
+                placeholder = entity_placeholders.get(entity, "<CANDIDATE>")
+                # Extract context window around placeholder
+                placeholder_pos = sanitized_text.find(placeholder)
+                if placeholder_pos != -1:
+                    context_start = max(0, placeholder_pos - 50)
+                    context_end = min(len(sanitized_text), placeholder_pos + len(placeholder) + 50)
+                    context = sanitized_text[context_start:context_end]
+                else:
+                    # Fallback: use entity position in original text
+                    context_start = max(0, entity.start - 50)
+                    context_end = min(len(original_text), entity.end + 50)
+                    context = original_text[context_start:context_end]
+                
+                contexts.append(context)
+                placeholders.append(placeholder)
+            
+            # Batch verify
+            verification_results = await self.verify_batch(entities, contexts, placeholders)
+            
+            # Filter entities based on verification results
+            for entity, (is_valid, conf_adj, reasoning) in zip(entities, verification_results):
+                if is_valid:
+                    # Adjust confidence
+                    entity.confidence = min(1.0, entity.confidence + conf_adj)
+                    verified_entities.append(entity)
+                else:
+                    logger.debug(
+                        f"LLM verified entity as false positive: {entity.entity_type} "
+                        f"at {entity.start}-{entity.end} (reasoning: {reasoning})"
+                    )
+        else:
+            # Fallback: use original masking approach
+            verified_entities = await self._verify_entities_batch(entities, original_text)
+
+        return verified_entities
 
     async def _verify_entities_batch(
         self,
@@ -267,6 +459,102 @@ Only mark as sensitive if the candidate represents actual privacy information (p
                 {"index": i, "is_sensitive": True, "reasoning": "Parse error, defaulting to sensitive (fail-safe)"}
                 for i in range(expected_count)
             ]
+
+    def _parse_response(self, response: str) -> Tuple[bool, float, str]:
+        """
+        Parse LLM verification response.
+
+        Expected format: "YES/NO - [reasoning]"
+        """
+        response = response.strip().upper()
+
+        if response.startswith("YES"):
+            reasoning = response[3:].strip(" -")
+            return True, 0.1, reasoning  # Valid, boost confidence by 0.1
+        elif response.startswith("NO"):
+            reasoning = response[2:].strip(" -")
+            return False, -0.3, reasoning  # Invalid, reduce confidence by 0.3
+        else:
+            # Unable to parse, default to valid (fail-safe)
+            return True, 0.0, "Unable to parse response, defaulting to valid"
+
+    def _parse_batch_response(self, response_text: str, expected_count: int) -> List[Tuple[bool, float, str]]:
+        """
+        Parse batch verification response JSON.
+        """
+        try:
+            response_text = response_text.strip()
+
+            # Handle markdown code blocks
+            if "```" in response_text:
+                json_pattern = r'```\w*\s*(\[.*?\])'
+                match = re.search(json_pattern, response_text, re.DOTALL)
+                if match:
+                    response_text = match.group(1).strip()
+                else:
+                    json_start = response_text.find('[')
+                    json_end = response_text.rfind(']') + 1
+                    if json_start != -1 and json_end > json_start:
+                        response_text = response_text[json_start:json_end]
+
+            parsed = json.loads(response_text)
+
+            if not isinstance(parsed, list):
+                if isinstance(parsed, dict) and "results" in parsed:
+                    parsed = parsed["results"]
+                else:
+                    raise json.JSONDecodeError("Response is not an array", response_text, 0)
+
+            # Parse results
+            results = []
+            for item in parsed:
+                if isinstance(item, dict):
+                    idx = item.get("index", len(results))
+                    is_valid = item.get("is_valid", True)  # Default to valid (fail-safe)
+                    reasoning = item.get("reasoning", "")
+                    
+                    confidence_adj = 0.1 if is_valid else -0.3
+                    results.append((is_valid, confidence_adj, reasoning))
+
+            # Ensure we have expected_count results
+            while len(results) < expected_count:
+                results.append((True, 0.0, "Missing result, defaulting to valid"))
+
+            return results[:expected_count]
+
+        except (json.JSONDecodeError, ValueError, KeyError) as e:
+            logger.warning(f"Failed to parse batch verification response: {e}")
+            # Fail-safe: return all valid
+            return [(True, 0.0, "Parse error, defaulting to valid")] * expected_count
+
+    def get_verification_priority(self, entity: PrivacyEntity) -> int:
+        """
+        Get verification priority.
+
+        Higher return value means more verification needed:
+        - PERSON/NAME: 3 (highest priority, most false positives)
+        - PHONE (non-standard format): 3
+        - ADDRESS: 2
+        - EMAIL/CREDIT_CARD: 1 (clear format, less verification needed)
+        - API_KEY/PASSWORD: 1 (depends on context)
+        """
+        entity_type_lower = entity.entity_type.lower()
+        
+        if entity_type_lower in ["person", "person_name", "name"]:
+            return 3
+        elif entity_type_lower in ["phone_number", "phone"]:
+            # Check if standard format
+            if re.match(r'^\+?[0-9]{10,15}$', entity.text):
+                return 1
+            return 3
+        elif entity_type_lower in ["physical_address", "address"]:
+            return 2
+        elif entity_type_lower in ["email_address", "email", "credit_card_number", "credit_card"]:
+            return 1
+        elif entity_type_lower in ["api_key", "password", "secret_key"]:
+            return 1
+        
+        return 2  # Default priority
 
     @llm_retry
     async def _call_llm(self, prompt: str, system_prompt: Optional[str] = None) -> str:
