@@ -4,7 +4,7 @@ Optimized for production use with SOTA sliding window techniques and privacy gra
 """
 import importlib
 from collections import namedtuple
-from typing import List, Optional, Any
+from typing import List, Optional, Any, Dict, Tuple
 
 from presidio_analyzer import AnalyzerEngine
 from presidio_analyzer import PatternRecognizer
@@ -18,8 +18,11 @@ from ..core.utils import (
     has_chinese_text,
     severity_to_int
 )
+from .patterns import EnhancedPatternMatcher
+from .allow_list import EnhancedAllowList
 from .....shared.config.settings import settings
 from .....shared.utils.logger import get_logger
+from .....shared.utils.text_normalizer import TextNormalizer
 
 # Lazy imports to handle optional dependencies
 PRESIDIO_AVAILABLE = True
@@ -47,13 +50,41 @@ PrivacyMetadata = namedtuple("PrivacyMetadata", ["category", "severity"])
 
 class HybridDetector(IPrivacyDetector):
     """
-    Hybrid detector combining Presidio (Rule/Model-based) and GLiNER (Zero-shot Semantic).
+    Enhanced hybrid detector combining Presidio, GLiNER, and enhanced pattern matching.
 
-    Architecture:
-    - Layer 1: Presidio (Fast, Regex/NER based) - High precision for standard formats (Email, Phone).
-    - Layer 2: GLiNER (Deep Learning based) - High recall for semantic context (API Keys, Salaries).
-    - Fusion: Non-Maximum Suppression (NMS) based conflict resolution.
+    Detection pipeline:
+    1. Text preprocessing (TextNormalizer)
+    2. Presidio NER detection
+    3. GLiNER semantic detection (dynamic thresholds)
+    4. Enhanced regex pattern matching
+    5. High-entropy string detection
+    6. Allow List filtering
+    7. Chinese word boundary validation (optional jieba)
+    8. NMS conflict resolution (boundary-first)
     """
+
+    # GLiNER dynamic threshold configuration
+    DYNAMIC_THRESHOLDS: Dict[str, float] = {
+        # High precision entities - low threshold for high recall
+        "api_key": 0.20,
+        "password": 0.20,
+        "secret_key": 0.20,
+        "credit_card_number": 0.25,
+        "social_security_number": 0.25,
+        "crypto_wallet": 0.25,
+        
+        # Standard entities
+        "phone_number": 0.35,
+        "email_address": 0.35,
+        "bank_account": 0.35,
+        
+        # Easy false positive entities - high threshold
+        "person": 0.45,
+        "person_name": 0.45,
+        "name": 0.45,
+        "physical_address": 0.45,
+        "salary": 0.40,
+    }
 
     # Define SOTA Privacy Grading (L1-L4)
     ENTITY_MAPPINGS = {
@@ -88,6 +119,21 @@ class HybridDetector(IPrivacyDetector):
         "credit_card_number": PrivacyMetadata("financial", "L4"),
         "phone_number": PrivacyMetadata("identity", "L3"),
         "email_address": PrivacyMetadata("identity", "L3"),
+        
+        # --- Enhanced Pattern Types ---
+        "CN_PHONE": PrivacyMetadata("identity", "L3"),
+        "CN_ID_CARD": PrivacyMetadata("identity", "L4"),
+        "CN_BANK_CARD": PrivacyMetadata("financial", "L4"),
+        "CN_PASSPORT": PrivacyMetadata("identity", "L4"),
+        "CN_DRIVER_LICENSE": PrivacyMetadata("identity", "L3"),
+        "JWT_TOKEN": PrivacyMetadata("technical", "L4"),
+        "AWS_ACCESS_KEY": PrivacyMetadata("technical", "L4"),
+        "GITHUB_TOKEN": PrivacyMetadata("technical", "L4"),
+        "OPENAI_KEY": PrivacyMetadata("technical", "L4"),
+        "STRIPE_KEY": PrivacyMetadata("technical", "L4"),
+        "BTC_ADDRESS": PrivacyMetadata("financial", "L4"),
+        "ETH_ADDRESS": PrivacyMetadata("financial", "L4"),
+        "HIGH_ENTROPY_SECRET": PrivacyMetadata("technical", "L4"),
     }
 
     def __init__(self):
@@ -107,11 +153,17 @@ class HybridDetector(IPrivacyDetector):
             "phone_number", "email_address", "ip_address"
         ]
 
-        # Allow list patterns for false positive filtering
+        # Legacy allow list patterns (kept for backward compatibility)
         self.allow_list_patterns = build_allow_list()
+        
+        # Enhanced components
+        self.pattern_matcher = EnhancedPatternMatcher()
+        self.allow_list = EnhancedAllowList()
+        self.jieba_available = False
 
         self._init_presidio()
         self._init_gliner()
+        self._init_jieba()
 
     def _init_presidio(self) -> None:
         """Initialize Presidio with safe loading of spaCy models and custom patterns."""
@@ -228,25 +280,64 @@ class HybridDetector(IPrivacyDetector):
             logger.warning(f"Failed to initialize GLiNER: {e}")
             self.gliner_model = None
 
+    def _init_jieba(self) -> None:
+        """Initialize Chinese word segmenter (optional)."""
+        try:
+            import jieba
+            self.jieba_available = True
+            jieba.initialize()  # Preload dictionary
+            logger.debug("jieba initialized for boundary validation")
+        except ImportError:
+            self.jieba_available = False
+            logger.info("jieba not available, skipping boundary validation")
+
     def detect(self, text: str) -> List[PrivacyEntity]:
-        """Detect privacy entities using a fused approach."""
+        """
+        Enhanced detection pipeline.
+        
+        Detection flow:
+        1. Text preprocessing (TextNormalizer)
+        2. Presidio NER detection
+        3. GLiNER semantic detection (dynamic thresholds)
+        4. Enhanced regex pattern matching
+        5. High-entropy string detection
+        6. Allow List filtering
+        7. Chinese word boundary validation (if jieba available)
+        8. NMS conflict resolution (boundary-first)
+        """
         if not text:
             return []
 
+        # 1. Text preprocessing
+        normalized_text = TextNormalizer.normalize(text)
+
         raw_entities = []
 
-        # 1. Presidio Detection
+        # 2. Presidio Detection
         if self.analyzer:
-            raw_entities.extend(self._run_presidio(text))
+            raw_entities.extend(self._run_presidio(normalized_text))
 
-        # 2. GLiNER Detection
+        # 3. GLiNER Detection (dynamic thresholds)
         if self.gliner_model:
-            raw_entities.extend(self._run_gliner(text))
+            raw_entities.extend(self._run_gliner_dynamic(normalized_text))
 
-        # 3. Resolve Conflicts & Finalize
-        final_entities = self._resolve_conflicts(raw_entities)
+        # 4. Enhanced regex pattern matching
+        raw_entities.extend(self._run_enhanced_patterns(normalized_text))
 
-        # 4. Filter low-confidence standalone Presidio PERSON detections
+        # 5. High-entropy string detection
+        raw_entities.extend(self._run_entropy_detection(normalized_text))
+
+        # 6. Allow List filtering
+        filtered_entities = self._apply_allow_list(raw_entities, normalized_text)
+
+        # 7. Boundary validation (if jieba available)
+        if self.jieba_available:
+            filtered_entities = self._validate_boundaries(filtered_entities, normalized_text)
+
+        # 8. NMS conflict resolution (boundary-first)
+        final_entities = self._resolve_conflicts_boundary_first(filtered_entities)
+
+        # 9. Filter low-confidence standalone Presidio PERSON detections
         final_entities = self._filter_low_confidence_standalone_person(final_entities, raw_entities)
 
         return final_entities
@@ -279,7 +370,11 @@ class HybridDetector(IPrivacyDetector):
         return entities
 
     def _run_gliner(self, text: str) -> List[PrivacyEntity]:
-        """Run GLiNER with Sliding Window Strategy."""
+        """Run GLiNER with Sliding Window Strategy (legacy method)."""
+        return self._run_gliner_dynamic(text)
+
+    def _run_gliner_dynamic(self, text: str) -> List[PrivacyEntity]:
+        """Run GLiNER with dynamic thresholds."""
         entities = []
         try:
             window_size = self.max_len
@@ -294,59 +389,237 @@ class HybridDetector(IPrivacyDetector):
                     if chunk:
                         chunks.append((chunk, i))
 
-            for chunk_text, offset in chunks:
-                if not chunk_text.strip():
-                    continue
+            # Group labels by threshold
+            threshold_groups: Dict[float, List[str]] = {}
+            for label in self.gliner_labels:
+                threshold = self.DYNAMIC_THRESHOLDS.get(label, 0.35)
+                if threshold not in threshold_groups:
+                    threshold_groups[threshold] = []
+                threshold_groups[threshold].append(label)
 
-                preds = self.gliner_model.predict_entities(
-                    chunk_text, self.gliner_labels, threshold=self.threshold
-                )
-
-                for pred in preds:
-                    # Handle both dict and object return types from GLiNER
-                    if isinstance(pred, dict):
-                        p_text, p_label, p_score = pred['text'], pred['label'], pred['score']
-                        p_start, p_end = pred['start'], pred['end']
-                    else:
-                        p_text, p_label, p_score = pred.text, pred.label, pred.score
-                        p_start, p_end = pred.start, pred.end
-
-                    if not p_text.strip():
+            # Run detection for each threshold group
+            for threshold, labels in threshold_groups.items():
+                for chunk_text, offset in chunks:
+                    if not chunk_text.strip():
                         continue
 
-                    abs_start = p_start + offset
-                    abs_end = p_end + offset
+                    preds = self.gliner_model.predict_entities(
+                        chunk_text, labels, threshold=threshold
+                    )
 
-                    if abs_end > len(text):
-                        continue
+                    for pred in preds:
+                        # Handle both dict and object return types from GLiNER
+                        if isinstance(pred, dict):
+                            p_text, p_label, p_score = pred['text'], pred['label'], pred['score']
+                            p_start, p_end = pred['start'], pred['end']
+                        else:
+                            p_text, p_label, p_score = pred.text, pred.label, pred.score
+                            p_start, p_end = pred.start, pred.end
 
-                    entity_text = text[abs_start:abs_end]
-                    entity_type = p_label.upper()
+                        if not p_text.strip():
+                            continue
 
-                    if is_in_allow_list(entity_text, entity_type, self.allow_list_patterns):
-                        continue
+                        abs_start = p_start + offset
+                        abs_end = p_end + offset
 
-                    meta = self._get_metadata(p_label)
-                    entities.append(PrivacyEntity(
-                        text=entity_text,
-                        entity_type=p_label,
-                        start=abs_start,
-                        end=abs_end,
-                        confidence=p_score,
-                        category=meta.category,
-                        severity=meta.severity,
-                        source="gliner"
-                    ))
+                        if abs_end > len(text):
+                            continue
+
+                        entity_text = text[abs_start:abs_end]
+                        entity_type = p_label.upper()
+
+                        if is_in_allow_list(entity_text, entity_type, self.allow_list_patterns):
+                            continue
+
+                        meta = self._get_metadata(p_label)
+                        entities.append(PrivacyEntity(
+                            text=entity_text,
+                            entity_type=p_label,
+                            start=abs_start,
+                            end=abs_end,
+                            confidence=p_score,
+                            category=meta.category,
+                            severity=meta.severity,
+                            source="gliner"
+                        ))
 
         except Exception as e:
             logger.debug(f"GLiNER run error: {e}")
         return entities
 
+    def _run_enhanced_patterns(self, text: str) -> List[PrivacyEntity]:
+        """Run enhanced regex pattern matching."""
+        entities = []
+        try:
+            matches = self.pattern_matcher.match_all(text)
+            
+            for name, matched_text, start, end, confidence, severity, category in matches:
+                entities.append(PrivacyEntity(
+                    text=matched_text,
+                    entity_type=name,
+                    start=start,
+                    end=end,
+                    confidence=confidence,
+                    severity=severity,
+                    category=category,
+                    source="enhanced_pattern"
+                ))
+        except Exception as e:
+            logger.debug(f"Enhanced pattern matching error: {e}")
+        return entities
+
+    def _run_entropy_detection(self, text: str) -> List[PrivacyEntity]:
+        """Detect high-entropy strings (likely API keys/secrets)."""
+        entities = []
+        try:
+            secrets = self.pattern_matcher.detect_high_entropy_secrets(text)
+            
+            for secret_text, start, end, confidence in secrets:
+                entities.append(PrivacyEntity(
+                    text=secret_text,
+                    entity_type="HIGH_ENTROPY_SECRET",
+                    start=start,
+                    end=end,
+                    confidence=confidence,
+                    severity="L4",
+                    category="technical",
+                    source="entropy"
+                ))
+        except Exception as e:
+            logger.debug(f"Entropy detection error: {e}")
+        return entities
+
+    def _apply_allow_list(self, entities: List[PrivacyEntity], text: str) -> List[PrivacyEntity]:
+        """Apply enhanced Allow List filtering."""
+        filtered = []
+        for entity in entities:
+            if not self.allow_list.should_filter(
+                entity.text,
+                entity.entity_type,
+                text,
+                entity.start
+            ):
+                filtered.append(entity)
+        return filtered
+
+    def _validate_boundaries(self, entities: List[PrivacyEntity], text: str) -> List[PrivacyEntity]:
+        """
+        Validate entity boundaries using jieba word segmentation.
+        
+        Rules:
+        1. If entity boundary cuts a word, reduce confidence or adjust boundary
+        2. If entity fully matches word boundaries, keep confidence
+        """
+        if not self.jieba_available:
+            return entities
+        
+        try:
+            import jieba
+            words = list(jieba.cut(text))
+            
+            # Build word boundary mapping
+            word_boundaries = []
+            pos = 0
+            for word in words:
+                word_start = pos
+                word_end = pos + len(word)
+                word_boundaries.append((word_start, word_end, word))
+                pos = word_end
+            
+            validated = []
+            for entity in entities:
+                # Check if entity boundary is valid
+                boundary_valid = self._check_boundary_validity(
+                    entity.start, entity.end, word_boundaries
+                )
+                
+                if boundary_valid:
+                    validated.append(entity)
+                else:
+                    # Try to adjust boundary or reduce confidence
+                    adjusted = self._adjust_boundary(entity, word_boundaries)
+                    if adjusted:
+                        validated.append(adjusted)
+                    else:
+                        # Reduce confidence if boundary is invalid
+                        entity.confidence *= 0.8
+                        validated.append(entity)
+            
+            return validated
+        except Exception as e:
+            logger.debug(f"Boundary validation error: {e}")
+            return entities
+
+    def _check_boundary_validity(
+        self,
+        start: int,
+        end: int,
+        word_boundaries: List[Tuple[int, int, str]]
+    ) -> bool:
+        """Check if entity boundary aligns with word boundaries."""
+        # Check if start and end align with word boundaries
+        start_aligned = any(boundary[0] == start for boundary in word_boundaries)
+        end_aligned = any(boundary[1] == end for boundary in word_boundaries)
+        
+        # Also check if entity spans complete words
+        spans_complete_words = any(
+            boundary[0] <= start and boundary[1] >= end
+            for boundary in word_boundaries
+        )
+        
+        return (start_aligned and end_aligned) or spans_complete_words
+
+    def _adjust_boundary(
+        self,
+        entity: PrivacyEntity,
+        word_boundaries: List[Tuple[int, int, str]]
+    ) -> Optional[PrivacyEntity]:
+        """Try to adjust entity boundary to align with word boundaries."""
+        # Find overlapping words
+        overlapping_words = [
+            (start, end) for start, end, _ in word_boundaries
+            if not (end <= entity.start or start >= entity.end)
+        ]
+        
+        if not overlapping_words:
+            return None
+        
+        # Adjust to span all overlapping words
+        new_start = min(w[0] for w in overlapping_words)
+        new_end = max(w[1] for w in overlapping_words)
+        
+        # Create adjusted entity
+        adjusted = PrivacyEntity(
+            text=entity.text,  # Will be updated by caller if needed
+            entity_type=entity.entity_type,
+            start=new_start,
+            end=new_end,
+            confidence=entity.confidence * 0.9,  # Slightly reduce confidence
+            category=entity.category,
+            severity=entity.severity,
+            source=entity.source
+        )
+        
+        return adjusted
+
     def _resolve_conflicts(self, entities: List[PrivacyEntity]) -> List[PrivacyEntity]:
-        """SOTA Conflict Resolution: Non-Maximum Suppression (NMS)."""
+        """SOTA Conflict Resolution: Non-Maximum Suppression (NMS) - legacy method."""
+        return self._resolve_conflicts_boundary_first(entities)
+
+    def _resolve_conflicts_boundary_first(self, entities: List[PrivacyEntity]) -> List[PrivacyEntity]:
+        """
+        Boundary-first conflict resolution.
+        
+        Priority:
+        1. Boundary integrity (doesn't cut words)
+        2. Severity level (L4 > L3 > L2 > L1)
+        3. Confidence score
+        4. Span length
+        """
         if not entities:
             return []
 
+        # Sort by start position, then by negative length (longer first)
         sorted_entities = sorted(
             entities,
             key=lambda x: (x.start, -(x.end - x.start))
@@ -355,25 +628,53 @@ class HybridDetector(IPrivacyDetector):
         final_entities = []
         curr = sorted_entities[0]
 
-        for next_ent in sorted_entities[1:]:
-            if next_ent.start < curr.end:
-                # Collision logic
-                curr_sev_val = severity_to_int(curr.severity)
-                next_sev_val = severity_to_int(next_ent.severity)
-
-                if next_sev_val > curr_sev_val:
-                    curr = next_ent
-                elif next_sev_val == curr_sev_val:
-                    if next_ent.confidence > curr.confidence:
-                        curr = next_ent
-                    elif (next_ent.end - next_ent.start) > (curr.end - curr.start):
-                        curr = next_ent
+        for next_entity in sorted_entities[1:]:
+            if next_entity.start < curr.end:
+                # Overlap detected, resolve conflict
+                curr = self._select_better_entity(curr, next_entity)
             else:
                 final_entities.append(curr)
-                curr = next_ent
+                curr = next_entity
 
         final_entities.append(curr)
         return final_entities
+
+    def _select_better_entity(self, e1: PrivacyEntity, e2: PrivacyEntity) -> PrivacyEntity:
+        """
+        Select better entity from two overlapping entities.
+        
+        Comparison order:
+        1. Boundary score (if available)
+        2. Severity level
+        3. Confidence score
+        4. Span length
+        """
+        # 1. Compare severity (higher is better)
+        e1_sev = severity_to_int(e1.severity)
+        e2_sev = severity_to_int(e2.severity)
+        
+        if e2_sev > e1_sev:
+            return e2
+        elif e1_sev > e2_sev:
+            return e1
+        
+        # 2. Compare confidence (higher is better)
+        if e2.confidence > e1.confidence:
+            return e2
+        elif e1.confidence > e2.confidence:
+            return e1
+        
+        # 3. Compare span length (longer is better, more context)
+        e1_len = e1.end - e1.start
+        e2_len = e2.end - e2.start
+        
+        if e2_len > e1_len:
+            return e2
+        elif e1_len > e2_len:
+            return e1
+        
+        # 4. Default to first entity
+        return e1
 
     def _filter_low_confidence_standalone_person(
         self,

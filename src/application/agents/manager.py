@@ -3,6 +3,7 @@
 from typing import Dict, Optional, Any, List
 
 from ...shared.constant.enums import AgentType
+from ...infrastructure.repositories.interfaces import AgentProtocol
 from ...shared.utils.logger import get_logger
 
 logger = get_logger(__name__)
@@ -24,7 +25,7 @@ class AgentManager:
         
     def create_agent(
         self,
-        agent_instance: Any,
+        agent_instance: AgentProtocol,
         agent_type: AgentType,
         agent_id: Optional[str] = None
     ) -> str:
@@ -57,7 +58,7 @@ class AgentManager:
         
         return agent_id
     
-    def get_agent(self, agent_id: str) -> Optional[Any]:
+    def get_agent(self, agent_id: str) -> Optional[AgentProtocol]:
         """
         Get an agent instance by ID.
         

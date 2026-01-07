@@ -12,202 +12,177 @@ import uuid
 from typing import Dict, Any, List, Tuple, Optional
 from datetime import datetime
 
+# 引用 Agent 和 Interfaces
 from src.application.agents.privacy_detector.agent import PrivacyDetectorAgent
 from src.application.agents.privacy_detector.core.interfaces import PrivacyEntity
+from src.application.services.base_service import BaseService
 from src.infrastructure.storage.persistence import get_database
 from src.shared.config.settings import settings, ExecutionMode
-from src.shared.constant.enums import CoTMode, PrivacyType, PrivacySeverity
+from src.shared.constant.enums import AgentType, CoTMode, PrivacyType, PrivacySeverity
 from src.shared.utils.logger import get_logger
 from src.shared.utils.text_normalizer import TextNormalizer
 
 logger = get_logger(__name__)
 
 
-def _convert_privacy_type_to_enum_response(privacy_type: str) -> Dict[str, Any]:
+def _convert_privacy_type_to_enum_response(privacy_type: Any) -> Dict[str, Any]:
     """
-    Convert privacy type string to EnumResponse format.
-    
-    Returns dictionary compatible with EnumResponse Pydantic model.
-    Uses the same logic as API layer's _convert_enum_to_response.
+    Convert privacy type to EnumResponse format.
+    Robust handling for String, Enum, None, or Dict inputs.
     """
+    # 1. Handle None
+    if privacy_type is None:
+        return {"value": "UNKNOWN", "code": 0}
+
+    # 2. Handle Dict (Already formatted)
+    if isinstance(privacy_type, dict) and "value" in privacy_type:
+        return privacy_type
+
     try:
-        enum_value = PrivacyType(privacy_type)
-        string_value = str(enum_value)
-        
-        # Get the numeric code from the enum class (definition order index)
-        numeric_code = 0  # Default fallback
+        # 3. Handle Enum Object
+        if hasattr(privacy_type, 'value'):
+            string_value = str(privacy_type.value)
+        else:
+            # 4. Handle String
+            string_value = str(privacy_type)
+
+        # Try to find numeric code
+        numeric_code = 0
         if hasattr(PrivacyType, '__members__'):
-            enum_members = list(PrivacyType)
-            for i, member in enumerate(enum_members):
-                if member.value == string_value:
+            for i, member in enumerate(PrivacyType):
+                # Compare against member.value (string)
+                if str(member.value) == string_value:
                     numeric_code = i
                     break
-        
+
         return {
             "value": string_value,
             "code": numeric_code
         }
-    except (ValueError, AttributeError, TypeError):
-        # Fallback for unknown types
-        return {
-            "value": str(privacy_type),
-            "code": 0
-        }
+    except Exception as e:
+        logger.warning(f"Error converting privacy type {privacy_type}: {e}")
+        return {"value": "UNKNOWN", "code": 0}
 
 
-def _convert_privacy_severity_to_enum_response(severity: str) -> Dict[str, Any]:
+def _convert_privacy_severity_to_enum_response(severity: Any) -> Dict[str, Any]:
     """
-    Convert privacy severity string to EnumResponse format.
-    
-    Returns dictionary compatible with EnumResponse Pydantic model.
-    Uses the same logic as API layer's _convert_enum_to_response.
+    Convert privacy severity to EnumResponse format.
+    Robust handling for String, Enum, None, or Dict inputs.
     """
+    # 1. Handle None
+    if severity is None:
+        return {"value": "NONE", "code": 0}
+
+    # 2. Handle Dict (Already formatted)
+    if isinstance(severity, dict) and "value" in severity:
+        return severity
+
     try:
-        enum_value = PrivacySeverity(severity)
-        string_value = str(enum_value)
-        
-        # Get the numeric code from the enum class (definition order index)
-        numeric_code = 0  # Default fallback
+        # 3. Handle Enum Object
+        if hasattr(severity, 'value'):
+            string_value = str(severity.value)
+        else:
+            # 4. Handle String
+            string_value = str(severity)
+
+        numeric_code = 0
         if hasattr(PrivacySeverity, '__members__'):
-            enum_members = list(PrivacySeverity)
-            for i, member in enumerate(enum_members):
-                if member.value == string_value:
+            for i, member in enumerate(PrivacySeverity):
+                if str(member.value) == string_value:
                     numeric_code = i
                     break
-        
+
         return {
             "value": string_value,
             "code": numeric_code
         }
-    except (ValueError, AttributeError, TypeError):
-        # Fallback for unknown severities
-        return {
-            "value": str(severity),
-            "code": 0
-        }
+    except Exception as e:
+        logger.warning(f"Error converting severity {severity}: {e}")
+        return {"value": "NONE", "code": 0}
 
 
-class PrivacyDetectorService:
+class PrivacyDetectorService(BaseService):
     """
     Service for privacy detector operations.
-    
-    Single Responsibility: Handle privacy detection business logic.
-    Follows MVC pattern - Controller layer for business logic.
-    
-    Responsibilities:
-    - Business logic orchestration
-    - Data persistence management
-    - Request/response transformation
-    - Error handling and validation
     """
-    
-    def __init__(self, agent: PrivacyDetectorAgent = None):
-        """
-        Initialize the privacy detector service.
-        
-        Args:
-            agent: Optional PrivacyDetectorAgent instance. If None, creates a new one.
-        """
-        self.agent = agent or PrivacyDetectorAgent()
+
+    DEFAULT_PRIVACY_DETECTOR_ID = "default_privacy_detector"
+
+    def __init__(self, agent_manager=None):
+        from ...application.agents.manager import AgentManager
+        super().__init__(agent_manager or AgentManager())
         self._database = get_database() if settings.enable_persistence else None
-        
-        # Load custom few-shots from database if persistence is enabled (business logic)
-        if self._database:
-            try:
-                few_shots = self._database.load_custom_few_shots("privacy_detector")
-                if few_shots:
-                    PrivacyDetectorAgent._custom_few_shots_cache = few_shots
-            except Exception as e:
-                logger.warning(f"Failed to load custom few shots during initialization: {e}")
-        
         logger.debug("PrivacyDetectorService initialized")
-    
+
+    def _get_privacy_detector_agent(self) -> PrivacyDetectorAgent:
+        """Get or create PrivacyDetectorAgent instance."""
+        agent = self.agent_manager.get_agent(self.DEFAULT_PRIVACY_DETECTOR_ID)
+        if agent is None:
+            agent = PrivacyDetectorAgent()
+            # Register agent using AgentManager's create_agent method
+            # PrivacyDetectorAgent should be added to AgentFactory in the future
+            self.agent_manager.create_agent(
+                agent_instance=agent,
+                agent_type=AgentType.PRIVACY_DETECTOR,
+                agent_id=self.DEFAULT_PRIVACY_DETECTOR_ID
+            )
+            logger.info(f"PrivacyDetectorAgent registered with ID: {self.DEFAULT_PRIVACY_DETECTOR_ID}")
+        return agent
+
+    @property
+    def agent(self) -> PrivacyDetectorAgent:
+        """Get the privacy detector agent instance."""
+        return self._get_privacy_detector_agent()
+
     def normalize_and_detect_entities(self, text: str) -> Tuple[str, List[PrivacyEntity]]:
-        """
-        Normalize text and detect privacy entities.
-        
-        This is a shared business logic method for text normalization and entity detection.
-        
-        Args:
-            text: Original text to normalize and detect entities in
-            
-        Returns:
-            Tuple of (normalized_text, entities) where:
-            - normalized_text: Text after normalization (CJK-Latin spacing, full-width to half-width)
-            - entities: List of detected PrivacyEntity objects
-        """
+        """Fast Algorithmic Mode for quick UI masking."""
         normalized_text = TextNormalizer.normalize(text)
         entities = self.agent.detector.detect(normalized_text)
         return normalized_text, entities
-    
+
     def mask_privacy_entities(
         self,
         conversation_records: List[Dict[str, str]]
     ) -> Dict[str, Any]:
-        """
-        Mask privacy entities in conversation messages for UI display.
-        
-        This method performs fast masking without LLM calls:
-        - Detects privacy entities using HybridDetector
-        - Masks entities using pure string manipulation (e.g., "138****0000")
-        - NO external API calls, NO LLM processing
-        
-        Args:
-            conversation_records: List of conversation records, each containing 'user' key
-            
-        Returns:
-            Dictionary with:
-            - masked_messages: List of masked messages with original_text, masked_text, entities_detected
-            - total_entities_detected: Total number of entities detected across all messages
-            
-        Raises:
-            ValueError: If conversation_records is invalid
-        """
+        """Fast Mode: Mask privacy entities without LLM."""
         if not conversation_records:
-            return {
-                "masked_messages": [],
-                "total_entities_detected": 0
-            }
-        
+            return {"masked_messages": [], "total_entities_detected": 0}
+
         masked_messages = []
         total_entities = 0
-        
-        # Process each message in the conversation
+
         for record in conversation_records:
             if not isinstance(record, dict):
-                raise ValueError(f"Invalid record format: {record}")
-            
+                continue
+
             original_text = record.get('user', '')
-            
             if not original_text:
-                # Empty message, skip masking
                 masked_messages.append({
                     "original_text": original_text,
                     "masked_text": original_text,
                     "entities_detected": 0
                 })
                 continue
-            
-            # Normalize text and detect entities (business logic)
+
+            # 1. Normalize & Detect
             normalized_text, entities = self.normalize_and_detect_entities(original_text)
-            
-            # Mask entities (pure string manipulation, no API calls) on normalized text
-            # Note: We mask the normalized text to match the entity indices
-            masked_text = self.agent.sanitizer.mask(normalized_text, entities)
-            
+
+            # 2. Mask
+            masked_text, _ = self.agent.sanitizer.sanitize(normalized_text, entities)
+
             masked_messages.append({
-                "original_text": original_text,  # Keep original for display
-                "masked_text": masked_text,  # Return masked normalized text
+                "original_text": original_text,
+                "masked_text": masked_text,
                 "entities_detected": len(entities)
             })
-            
+
             total_entities += len(entities)
-        
+
         return {
             "masked_messages": masked_messages,
             "total_entities_detected": total_entities
         }
-    
+
     async def detect_privacy_leaks(
         self,
         conversation_records: List[Dict[str, str]],
@@ -219,66 +194,91 @@ class PrivacyDetectorService:
         file_input: Optional[Tuple[bytes, str]] = None
     ) -> Dict[str, Any]:
         """
-        Detect privacy leaks in conversation records.
-        
-        Business logic orchestration:
-        1. Prepare conversation records
-        2. Call agent for detection
-        3. Persist results
-        4. Transform enums to API format
-        5. Return formatted result
-        
-        Args:
-            conversation_records: List of conversation records
-            execution_mode: Execution mode
-            use_cot: Legacy CoT mode
-            use_few_shots: Whether to use few-shot examples
-            cot_mode: CoT mode
-            account_id: Account identifier
-            file_input: Optional file input (bytes, filename)
-            
-        Returns:
-            Detection result with detection_id and enum conversions
+        Detect privacy leaks using the Enhanced Agent.
         """
-        # Prepare conversation records (business logic)
-        processed_records = []
+        # 1. Prepare Input: Merge records context
+        text_segments = []
         for record in conversation_records:
-            if not record.get('user'):
-                continue
-            
-            processed_record = {
-                "user": record['user'],
-                "role": "user",
-                "account_id": account_id or record.get("account_id")
-            }
-            processed_records.append(processed_record)
-        
-        # Delegate core detection to agent (Model layer)
-        result = await self.agent.detect_privacy_leaks(
-            conversation_records=processed_records,
-            execution_mode=execution_mode,
-            use_cot=use_cot,
-            use_few_shots=use_few_shots,
-            cot_mode=cot_mode,
-            account_id=account_id,
-            file_input=file_input
+            content = record.get('user', '')
+            if content:
+                text_segments.append(content)
+
+        full_text = "\n\n".join(text_segments)
+
+        # Handle File Input
+        if file_input:
+            try:
+                file_bytes, filename = file_input
+                file_content = file_bytes.decode('utf-8', errors='ignore')
+                full_text += f"\n\n--- File Content: {filename} ---\n{file_content}"
+            except Exception as e:
+                logger.warning(f"Failed to append file content: {e}")
+
+        if not full_text.strip():
+            return self._create_empty_result()
+
+        # 2. Call Enhanced Agent
+        agent_result = await self.agent.detect_and_mask(
+            text=full_text,
+            account_id=account_id
         )
-        
-        # Persist result (business logic)
+
+        # 3. Transform Agent Output to Service Schema
+        # FIX: Robustly map agent result, calculating overall_score if missing
+        overall_score = agent_result.get("overall_score")
+        if overall_score is None:
+             overall_score = agent_result.get("risk_score", 0.0)
+
+        final_result = {
+            "privacy_detected": agent_result.get("privacy_detected", False),
+            "masked_text": agent_result.get("masked_text", ""),
+            "overall_severity": agent_result.get("overall_severity", "none"),
+            "overall_score": overall_score,
+            "risk_score": overall_score,
+            "privacy_leaks": [],
+            # Metadata
+            "conversation_length": len(conversation_records),
+            "messages_analyzed": len(conversation_records),
+            "analyzed_at": datetime.utcnow().isoformat(),
+            "agent_version": "3.2.0",
+            "metadata_registry": agent_result.get("metadata_registry", {})
+        }
+
+        # Map agent 'leaks' to API 'privacy_leaks'
+        # COMPATIBILITY: Check for both 'leaks' (new) and 'privacy_leaks' (old) keys in agent result
+        agent_leaks = agent_result.get("leaks") or agent_result.get("privacy_leaks") or []
+
+        for leak in agent_leaks:
+            # COMPATIBILITY: Check both 'privacy_type' and 'type' keys
+            p_type = leak.get("privacy_type") or leak.get("type") or "UNKNOWN"
+
+            # COMPATIBILITY: Check both 'detected_items' and 'value'
+            items = leak.get("detected_items", [])
+            if not items and leak.get("value"):
+                items = [leak.get("value")]
+
+            final_result["privacy_leaks"].append({
+                "privacy_type": p_type,
+                "severity": leak.get("severity", "none"),
+                "category": leak.get("category", "UNKNOWN"),
+                "reasoning": leak.get("reasoning", ""),
+                "detected_items": items,
+                "confidence": leak.get("confidence", 0.0)
+            })
+
+        # 4. Persist Result
         detection_id = self._persist_detection_result(
-            conversation_records=processed_records,
-            detection_result=result,
+            conversation_records=conversation_records,
+            detection_result=final_result,
             execution_mode=execution_mode or settings.default_execution_mode,
             use_few_shots=use_few_shots,
             account_id=account_id
         )
-        result["detection_id"] = detection_id
-        
-        # Transform enums to API format (business logic - data transformation)
-        result = self._transform_detection_result_for_api(result)
-        
-        return result
-    
+        final_result["detection_id"] = detection_id
+
+        # 5. Transform Enums for API Response
+        return self._transform_detection_result_for_api(final_result)
+
     async def upload_file_and_update_detection(
         self,
         detection_id: str,
@@ -287,258 +287,126 @@ class PrivacyDetectorService:
         filename: str,
         message_index: int
     ) -> Dict[str, Any]:
-        """
-        Upload file and update existing detection.
-        
-        Business logic:
-        1. Validate detection exists and belongs to account
-        2. Validate message_index
-        3. Re-run detection with file input
-        4. Update persisted result
-        
-        Args:
-            detection_id: Detection ID
-            account_id: Account identifier
-            file_bytes: File content
-            filename: File name
-            message_index: Message index in conversation
-            
-        Returns:
-            Success result
-            
-        Raises:
-            ValueError: If validation fails
-        """
-        # Load existing detection
+        """Re-run detection with uploaded file."""
         detection_result = self.get_detection_result(detection_id)
         if not detection_result:
             raise ValueError(f"Detection '{detection_id}' not found")
-        
-        # Validate account_id
+
         if detection_result.get("account_id") != account_id:
-            raise ValueError(f"Detection '{detection_id}' does not belong to account '{account_id}'")
-        
-        # Validate message_index
+            raise ValueError(f"Access denied for detection '{detection_id}'")
+
         conversation_records = detection_result.get("conversation_records", [])
-        if message_index < 0 or message_index >= len(conversation_records):
-            raise ValueError(
-                f"Invalid message_index {message_index}. "
-                f"Detection has {len(conversation_records)} messages"
-            )
-        
-        # Re-run detection with file input
-        execution_mode = detection_result.get("execution_mode")
-        result = await self.agent.detect_privacy_leaks(
+
+        result = await self.detect_privacy_leaks(
             conversation_records=conversation_records,
-            execution_mode=execution_mode,
-            use_few_shots=True,
             account_id=account_id,
             file_input=(file_bytes, filename)
         )
-        
-        # Update persisted result
-        self._persist_detection_result(
-            conversation_records=conversation_records,
-            detection_result=result,
-            execution_mode=execution_mode,
-            use_few_shots=True,
-            account_id=account_id,
-            detection_id=detection_id  # Update existing
-        )
-        
+
         return {
             "success": True,
-            "detection_id": detection_id,
+            "detection_id": result["detection_id"],
             "message_index": message_index,
             "filename": filename
         }
-    
+
     def get_detection_result(self, detection_id: str) -> Optional[Dict[str, Any]]:
-        """
-        Get detection result by ID.
-        
-        Args:
-            detection_id: Detection ID
-            
-        Returns:
-            Detection result dictionary with detection_result merged and enums transformed, or None if not found
-        """
+        """Get detection result by ID."""
         if not self._database:
             return None
-        
+
         try:
             result = self._database.load_privacy_detection_result(detection_id)
             if result:
-                # Merge detection_result with metadata
-                detection_result = result["detection_result"]
-                detection_result["detection_id"] = result["detection_id"]
-                # Also include conversation_records for file upload endpoint
-                detection_result["conversation_records"] = result.get("conversation_records", [])
-                detection_result["execution_mode"] = result.get("execution_mode")
-                detection_result["account_id"] = result.get("account_id")
-                
-                # Transform enums to API format (business logic)
-                detection_result = self._transform_detection_result_for_api(detection_result)
-                
-                return detection_result
+                data = result["detection_result"]
+                data["detection_id"] = result["detection_id"]
+                data["conversation_records"] = result.get("conversation_records", [])
+                data["account_id"] = result.get("account_id")
+                return self._transform_detection_result_for_api(data)
             return None
         except Exception as e:
             logger.error(f"Failed to load detection result {detection_id}: {e}")
             return None
-    
+
     def _transform_detection_result_for_api(self, result: Dict[str, Any]) -> Dict[str, Any]:
         """
-        Transform detection result for API response.
-        
-        Converts enum strings to EnumResponse format (business logic transformation).
-        This method handles all data transformation between Agent (Model) and API (View).
-        
-        Args:
-            result: Raw detection result from agent
-            
-        Returns:
-            Transformed result with enum conversions, ready for API response
+        Transform internal result dict to API-compliant dict (EnumResponse).
+        Ensures strict Pydantic compatibility.
         """
-        # Convert privacy_leaks enums to EnumResponse format
-        if result.get("privacy_leaks"):
-            converted_leaks = []
-            for leak in result["privacy_leaks"]:
-                converted_leak = {
-                    "privacy_type": _convert_privacy_type_to_enum_response(leak["privacy_type"]),
-                    "severity": _convert_privacy_severity_to_enum_response(leak["severity"]),
-                    "severity_level": leak.get("severity_level"),
-                    "category": leak.get("category"),
-                    "reasoning": leak.get("reasoning", ""),
-                    "detected_items": leak.get("detected_items", []),
-                    "confidence": leak.get("confidence", 0.5),
-                    "region": leak.get("region")
-                }
-                converted_leaks.append(converted_leak)
-            result["privacy_leaks"] = converted_leaks
-        
-        # Convert overall_severity to EnumResponse format
-        if "overall_severity" in result and result["overall_severity"]:
-            result["overall_severity"] = _convert_privacy_severity_to_enum_response(
-                result["overall_severity"]
-            )
-        
-        # Ensure overall_severity_level exists
-        if "overall_severity_level" not in result:
-            result["overall_severity_level"] = None
-        
-        return result
-    
-    def list_detection_results(
-        self,
-        limit: int = 50,
-        offset: int = 0
-    ) -> Dict[str, Any]:
-        """
-        List detection result IDs.
-        
-        Args:
-            limit: Maximum number of results
-            offset: Number of results to skip
-            
-        Returns:
-            Dictionary with detection_ids and count
-        """
-        if not self._database:
-            return {"detection_ids": [], "count": 0}
-        
-        try:
-            results = self._database.load_all_privacy_detection_results(limit=limit, offset=offset)
-            detection_ids = [result["detection_id"] for result in results]
-            return {"detection_ids": detection_ids, "count": len(detection_ids)}
-        except Exception as e:
-            logger.error(f"Failed to list detection results: {e}")
-            return {"detection_ids": [], "count": 0}
-    
-    def get_detection_stats(self, account_id: Optional[str] = None) -> Dict[str, Any]:
-        """
-        Get detection statistics.
-        
-        Args:
-            account_id: Optional account ID to filter by
-            
-        Returns:
-            Statistics dictionary
-        """
-        if not self._database:
-            return {}
-        
-        try:
-            return self._database.get_privacy_detection_stats(account_id=account_id)
-        except Exception as e:
-            logger.error(f"Failed to get detection stats: {e}")
-            return {}
-    
-    def delete_detection_result(self, detection_id: str) -> bool:
-        """
-        Delete detection result.
-        
-        Args:
-            detection_id: Detection ID
-            
-        Returns:
-            True if deleted, False otherwise
-        """
-        if not self._database:
-            return False
-        
-        try:
-            return self._database.delete_privacy_detection_result(detection_id)
-        except Exception as e:
-            logger.error(f"Failed to delete detection result {detection_id}: {e}")
-            return False
-    
-    def _persist_detection_result(
-        self,
-        conversation_records: List[Dict[str, str]],
-        detection_result: Dict[str, Any],
-        execution_mode: str,
-        use_few_shots: bool,
-        account_id: Optional[str] = None,
-        detection_id: Optional[str] = None
-    ) -> str:
-        """
-        Persist detection result to database.
-        
-        Args:
-            conversation_records: Conversation records
-            detection_result: Detection result
-            execution_mode: Execution mode
-            use_few_shots: Whether few-shots were used
-            account_id: Account identifier
-            detection_id: Optional detection ID (for updates)
-            
-        Returns:
-            Detection ID
-        """
-        if not self._database:
-            return detection_id or str(uuid.uuid4())
-        
-        try:
-            if not detection_id:
-                detection_id = str(uuid.uuid4())
-            
-            result_data = {
-                "detection_id": detection_id,
-                "conversation_records": conversation_records,
-                "detection_result": detection_result,
-                "execution_mode": execution_mode,
-                "use_few_shots": use_few_shots,
-                "conversation_length": detection_result.get("conversation_length"),
-                "analyzed_at": detection_result.get("analyzed_at"),
-                "agent_version": detection_result.get("agent_version"),
-                "error": detection_result.get("error"),
-                "account_id": account_id
+        if "privacy_leaks" not in result:
+            result["privacy_leaks"] = []
+
+        # Transform Leaks
+        transformed_leaks = []
+        for leak in result["privacy_leaks"]:
+            # 1. Convert Type (Force valid EnumResponse)
+            p_type = leak.get("privacy_type")
+            p_type_converted = _convert_privacy_type_to_enum_response(p_type)
+
+            # 2. Convert Severity (Force valid EnumResponse)
+            sev = leak.get("severity")
+            sev_converted = _convert_privacy_severity_to_enum_response(sev)
+
+            new_leak = {
+                "privacy_type": p_type_converted,
+                "severity": sev_converted,
+                "category": leak.get("category", "UNKNOWN"),
+                "reasoning": leak.get("reasoning", ""),
+                "detected_items": leak.get("detected_items", []),
+                "confidence": leak.get("confidence", 0.0)
             }
-            
-            self._database.save_privacy_detection_result(result_data)
-            logger.debug(f"Privacy detection result persisted: {detection_id}")
+            transformed_leaks.append(new_leak)
+
+        result["privacy_leaks"] = transformed_leaks
+
+        # Transform Overall Severity
+        result["overall_severity"] = _convert_privacy_severity_to_enum_response(
+            result.get("overall_severity")
+        )
+
+        # Force overall_score existence
+        if "overall_score" not in result or result["overall_score"] is None:
+            result["overall_score"] = result.get("risk_score", 0.0)
+
+        return result
+
+    def _create_empty_result(self) -> Dict[str, Any]:
+        """Create a valid empty result structure."""
+        return {
+            "privacy_detected": False,
+            "masked_text": "",
+            "overall_severity": "none",
+            "overall_score": 0.0,
+            "risk_score": 0.0,
+            "privacy_leaks": [],
+            "detection_id": str(uuid.uuid4())
+        }
+
+    def _persist_detection_result(self, **kwargs) -> str:
+        """Helper to save to DB."""
+        if not self._database:
+            return str(uuid.uuid4())
+        try:
+            detection_id = kwargs.get("detection_id") or str(uuid.uuid4())
+            data = kwargs.copy()
+            data["detection_id"] = detection_id
+            data["created_at"] = datetime.utcnow()
+            self._database.save_privacy_detection_result(data)
             return detection_id
         except Exception as e:
-            logger.error(f"Error persisting detection result: {e}")
-            return detection_id or str(uuid.uuid4())
+            logger.error(f"Persistence error: {e}")
+            return str(uuid.uuid4())
 
+    # --- Pass-through methods ---
+    def list_detection_results(self, limit: int = 50, offset: int = 0) -> Dict[str, Any]:
+        if not self._database: return {"detection_ids": [], "count": 0}
+        results = self._database.load_all_privacy_detection_results(limit=limit, offset=offset)
+        return {"detection_ids": [r["detection_id"] for r in results], "count": len(results)}
+
+    def get_detection_stats(self, account_id: Optional[str] = None) -> Dict[str, Any]:
+        if not self._database: return {}
+        return self._database.get_privacy_detection_stats(account_id=account_id)
+
+    def delete_detection_result(self, detection_id: str) -> bool:
+        if not self._database: return False
+        return self._database.delete_privacy_detection_result(detection_id)

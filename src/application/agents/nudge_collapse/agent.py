@@ -6,6 +6,7 @@ from langchain_core.messages import SystemMessage, HumanMessage, AIMessage
 from langchain_openai import ChatOpenAI
 
 from src.application.few_shots.nudge_collapse.few_shots import NUDGE_COLLAPSE_FEW_SHOTS
+from src.infrastructure.repositories import AgentProtocol
 from src.infrastructure.storage.persistence import get_database
 from src.shared.cache.decorator import cached
 from src.shared.config.settings import settings
@@ -16,7 +17,7 @@ from src.shared.utils import get_logger
 logger = get_logger(__name__)
 
 
-class NudgeCollapseAgent:
+class NudgeCollapseAgent(AgentProtocol):
     """
     Implements the Nudge-and-Collapse experiment agent with a strict 4-turn loop.
 

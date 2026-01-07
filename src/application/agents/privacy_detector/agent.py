@@ -1,485 +1,364 @@
-"""Privacy Detector Agent - Refactored for Performance & Robustness.
-
-P-Guard 3.1 Architecture:
-- Input: Raw Text (handled internally)
-- Output: Structured Pydantic Objects
-- Logic: Detect -> Mask -> LLM Analyze (with Metadata) -> Unmask/Validate
-"""
-
-import hashlib
 import uuid
-from datetime import datetime
-from typing import Dict, List, Optional, Any, Tuple, Union, Set
+from typing import List, Dict, Any, Optional
 
 from langchain_core.messages import SystemMessage, HumanMessage
 from langchain_openai import ChatOpenAI
 from pydantic import BaseModel, Field
 
-from src.infrastructure.storage.persistence import get_database
-from src.shared.cache.decorator import cached
-from src.shared.config.settings import settings, ExecutionMode
-from src.shared.constant.enums import (
-    CoTMode,
-    PrivacyType,
-    PrivacySeverity,
-    PrivacyCategory
-)
-from src.shared.llm import llm_retry
-from src.shared.llm.llm_manager import llm_manager
+from src.infrastructure.repositories import AgentProtocol
+from src.shared.config.settings import settings
+from src.shared.constant.enums import PrivacyType, PrivacySeverity
 from src.shared.utils.logger import get_logger
 from src.shared.utils.text_normalizer import TextNormalizer
-from .core.interfaces import (
-    IPrivacyDetector,
-    ISanitizer,
-    PrivacyEntity
-)
-from .core.utils import (
-    map_privacy_type_to_category,
-    map_severity_to_level
-)
+from .core.interfaces import PrivacyEntity
 from .impl.detectors import HybridDetector
-from .impl.file_parser import SmartFileParser
 from .impl.sanitizer import ConsistentSanitizer
-from .impl.verifier import PrivacyVerifier
-from ...few_shots.privacy_detector.few_shots import PRIVACY_DETECTOR_FEW_SHOTS
 
 logger = get_logger(__name__)
 
-# --- 1. 定义结构化输出模型 (Pydantic) ---
 
-class PrivacyLeakResult(BaseModel):
-    """Structured model for a single privacy leak."""
-    privacy_type: str = Field(description="The specific type of privacy leak (e.g., EMAIL, NAME, PASSWORD)")
-    severity: str = Field(description="Severity: HIGH, MEDIUM, LOW")
-    severity_level: str = Field(description="Level: L1, L2, L3, L4", default="L1")
-    category: str = Field(description="Category: IDENTITY, FINANCIAL, MEDICAL, TECHNICAL", default="IDENTITY")
-    reasoning: str = Field(description="Brief explanation of why this is a leak")
-    detected_items: List[str] = Field(description="List of specific placeholders (e.g., <EMAIL_1>) or strings found")
-    confidence: float = Field(description="Confidence score 0.0-1.0", default=0.5)
+# --- 1. Pydantic 模型 (仅用于类型提示和内部解析，不再直接用于生成 Schema) ---
 
-class PrivacyDetectionResponse(BaseModel):
-    """Structured model for the overall detection response."""
-    privacy_detected: bool = Field(description="Whether any privacy leaks were found")
-    privacy_leaks: List[PrivacyLeakResult] = Field(default_factory=list)
-    overall_severity: str = Field(description="Highest severity found", default="NONE")
-    overall_severity_level: str = Field(description="Highest severity level (L1-L4)", default="none")
-    overall_score: float = Field(description="Risk score 0.0-1.0", default=0.0)
-
-# ---------------------------------------------
-
-class PrivacyDetectorAgent:
+class DetectedLeak(BaseModel):
     """
-    Optimized Privacy Detector Agent (v3.1).
-    Handles the full pipeline: Raw Text -> Detection -> Sanitization -> LLM Analysis.
+    LLM 对单个隐私实体的分析结果。
     """
+    original_value: str
+    privacy_type: PrivacyType
+    severity: PrivacySeverity
+    is_real_leak: bool
+    reasoning: str
+    confidence: float
 
-    _custom_few_shots_cache: Optional[str] = None
+
+class PrivacyAnalysisResponse(BaseModel):
+    """LLM 的整体返回结构"""
+    leaks: List[DetectedLeak]
+
+
+# ----------------------------------------------------
+
+class PrivacyDetectorAgent(AgentProtocol):
+    """
+    Privacy Detector Agent (Refactored for Accuracy & Compatibility).
+    """
 
     def __init__(
-        self,
-        detector: Optional[IPrivacyDetector] = None,
-        sanitizer: Optional[ISanitizer] = None,
-        model_name: Optional[str] = None,
-        api_key: Optional[str] = None,
-        api_base: Optional[str] = None,
-        temperature: Optional[float] = None,
-        session_id: Optional[str] = None
+            self,
+            model_name: str = settings.openai_model,
+            api_key: Optional[str] = settings.openai_api_key,
+            base_url: Optional[str] = settings.openai_api_base,
+            temperature: float = 0.0  # 建议设为 0 以获得更稳定的 JSON
     ):
-        self.detector = detector or HybridDetector()
-        self.sanitizer = sanitizer or ConsistentSanitizer(session_id=session_id or str(uuid.uuid4()))
+        self.detector = HybridDetector()
+        self.sanitizer = ConsistentSanitizer()
 
-        # Initialize LLM client
-        http_client = llm_manager.get_http_client()
-        base_llm = ChatOpenAI(
-            model_name=model_name or settings.openai_model,
-            api_key=api_key or settings.openai_api_key,
-            base_url=api_base or settings.openai_api_base,
-            temperature=temperature if temperature is not None else settings.agent_temperature,
-            max_retries=settings.openai_max_retries,
-            timeout=settings.openai_timeout,
-            http_client=http_client
+        self.llm = ChatOpenAI(
+            model=model_name,
+            api_key=api_key,
+            base_url=base_url,
+            temperature=temperature
         )
 
-        # Configure Structured Output (Robust Parsing)
-        if hasattr(base_llm, "with_structured_output"):
-            self.structured_llm = base_llm.with_structured_output(PrivacyDetectionResponse)
+        # FIX: 手动构造完全展开的 Schema，避免 Pydantic 生成 $defs/$ref 导致部分模型报错 (Error 400)
+        schema = self._get_expanded_schema()
+
+        if hasattr(self.llm, "with_structured_output"):
+            # 传入 Dict 而不是 Pydantic 类，LangChain 会直接使用该 Schema
+            self.structured_llm = self.llm.with_structured_output(schema)
         else:
-            self.structured_llm = base_llm # Fallback (less reliable)
-            logger.warning("LLM does not support native structured output. Parsing might be fragile.")
+            raise RuntimeError("Current model configuration does not support structured output.")
 
-        self.raw_llm = base_llm # Keep raw for file parsing/verification
-        self.file_parser = SmartFileParser(self.raw_llm)
-        self.verifier = PrivacyVerifier(self.raw_llm)
+    def _get_expanded_schema(self) -> Dict[str, Any]:
+        """
+        生成无 $defs/$ref 的扁平化 JSON Schema，适配 Gemini/Vertex AI 等严格后端。
+        """
+        return {
+            "title": "PrivacyAnalysisResponse",
+            "description": "Analysis result containing a list of detected privacy leaks.",
+            "type": "object",
+            "properties": {
+                "leaks": {
+                    "title": "Leaks",
+                    "description": "List of confirmed or potential leaks found.",
+                    "type": "array",
+                    "items": {
+                        "title": "DetectedLeak",
+                        "type": "object",
+                        "properties": {
+                            "original_value": {
+                                "title": "Original Value",
+                                "description": "The exact substring found in the text that constitutes a leak.",
+                                "type": "string"
+                            },
+                            "privacy_type": {
+                                "title": "Privacy Type",
+                                "description": "The specific category of the privacy data.",
+                                "type": "string",
+                                "enum": [t.value for t in PrivacyType]
+                            },
+                            "severity": {
+                                "title": "Severity",
+                                "description": "The severity level of the leak based on risk.",
+                                "type": "string",
+                                "enum": [s.value for s in PrivacySeverity]
+                            },
+                            "is_real_leak": {
+                                "title": "Is Real Leak",
+                                "description": "True if this is actual private data; False if it's example data, public info, or false positive.",
+                                "type": "boolean"
+                            },
+                            "reasoning": {
+                                "title": "Reasoning",
+                                "description": "Brief explanation of why this is or isn't a leak (contextual analysis).",
+                                "type": "string"
+                            },
+                            "confidence": {
+                                "title": "Confidence",
+                                "description": "Confidence score between 0.0 and 1.0.",
+                                "type": "number"
+                            }
+                        },
+                        "required": ["original_value", "privacy_type", "severity", "is_real_leak", "reasoning",
+                                     "confidence"],
+                        "additionalProperties": False
+                    }
+                }
+            },
+            "required": ["leaks"],
+            "additionalProperties": False
+        }
 
-        logger.info("PrivacyDetectorAgent initialized (v3.1 Optimized)")
-
-    async def detect_privacy_leaks(
-        self,
-        conversation_records: List[Dict[str, str]],
-        execution_mode: Optional[ExecutionMode] = None,
-        use_cot: Optional[ExecutionMode] = None,
-        use_few_shots: bool = True,
-        cot_mode: Optional[CoTMode] = None,
-        account_id: Optional[str] = None,
-        file_input: Optional[Tuple[bytes, str]] = None
+    async def detect_and_mask(
+            self,
+            text: str,
+            account_id: Optional[str] = None
     ) -> Dict[str, Any]:
         """
-        Public entry point. Handles hashing and delegates to cached internal method.
-        Input `conversation_records` should contain RAW text.
+        Public API: 检测隐私泄漏并返回脱敏后的文本。
         """
-        # Calculate hash for cache key optimization
-        file_hash = None
-        if file_input:
-            file_bytes, _ = file_input
-            file_hash = hashlib.sha256(file_bytes).hexdigest()
-
-        return await self._detect_privacy_leaks_internal(
-            conversation_records=conversation_records,
-            execution_mode=execution_mode,
-            use_cot=use_cot,
-            use_few_shots=use_few_shots,
-            cot_mode=cot_mode,
-            account_id=account_id,
-            file_hash=file_hash,
-            file_input=file_input
-        )
-
-    @cached(ttl=3600)
-    async def _detect_privacy_leaks_internal(
-        self,
-        conversation_records: List[Dict[str, str]],
-        execution_mode: Optional[ExecutionMode] = None,
-        use_cot: Optional[ExecutionMode] = None,
-        use_few_shots: bool = True,
-        cot_mode: Optional[CoTMode] = None,
-        account_id: Optional[str] = None,
-        file_hash: Optional[str] = None,
-        file_input: Optional[Tuple[bytes, str]] = None
-    ) -> Dict[str, Any]:
-        """Internal logic with caching."""
         try:
-            # 1. Pre-processing & Normalization
-            # Combine all user messages into one context for detection
-            formatted_text = self._format_conversation_records(conversation_records)
-            formatted_text = TextNormalizer.normalize(formatted_text)
+            # Step 1: 文本标准化
+            normalized_text = TextNormalizer.normalize(text)
 
-            effective_cot_mode = self._determine_cot_mode(cot_mode, use_cot, execution_mode)
+            # Step 2: 候选生成 (Algorithm Layer)
+            candidates: List[PrivacyEntity] = self.detector.detect(normalized_text)
 
-            # 2. File Analysis (if exists)
-            file_text = ""
-            if file_input:
-                try:
-                    file_bytes, filename = file_input
-                    file_text = await self.file_parser.analyze_file(file_bytes, filename)
-                    file_text = TextNormalizer.normalize(file_text)
-                except Exception as e:
-                    logger.warning(f"File analysis failed: {e}")
+            # Step 3: LLM 裁决 (Cognitive Layer)
+            llm_result_dict = await self._analyze_with_llm(normalized_text, candidates)
 
-            # 3. Detection (Raw Text -> Entities)
-            # Detect entities in the normalized raw text
-            entities = self.detector.detect(formatted_text)
-            file_entities = self.detector.detect(file_text) if file_text else []
-            all_entities = entities + file_entities
+            # 由于 with_structured_output 传入 Dict 时返回的通常是 Dict，我们需要手动转为对象或直接使用 Dict
+            # 这里统一按 Dict 处理
+            if isinstance(llm_result_dict, PrivacyAnalysisResponse):
+                llm_leaks = llm_result_dict.leaks
+            elif isinstance(llm_result_dict, dict):
+                llm_leaks = [DetectedLeak(**l) for l in llm_result_dict.get("leaks", [])]
+            else:
+                llm_leaks = []
 
-            # 4. LLM Verification (Optional)
-            if getattr(settings, 'enable_llm_verification', False):
-                combined_context = f"{formatted_text}\n\n--- File ---\n{file_text}" if file_text else formatted_text
-                all_entities = await self.verifier.verify_entities(all_entities, combined_context)
+            # 封装一个临时对象方便后续处理，或者修改 _merge_results 接受 list
+            # 为了保持 _merge_results 签名不变，我们构造一个简单的 Namespace 或 Model
+            llm_result_obj = PrivacyAnalysisResponse(leaks=llm_leaks)
 
-            # 5. Sanitization (Raw Text + Entities -> Masked Text + Metadata)
-            # This generates the text LLM will see (e.g., "My email is <EMAIL_1>")
-            combined_text_raw = f"{formatted_text}\n\n--- File Content ---\n{file_text}" if file_text else formatted_text
-            sanitized_text, metadata_registry = self.sanitizer.sanitize(combined_text_raw, all_entities)
+            # Step 4: 结果融合
+            confirmed_entities = self._merge_results(normalized_text, candidates, llm_result_obj)
 
-            # 6. Prompt Engineering (Injecting Metadata)
-            few_shots = self.get_effective_few_shots() if use_few_shots else ""
-            system_prompt = self._get_system_prompt(effective_cot_mode, few_shots)
-            human_prompt = self._get_human_prompt(
-                effective_cot_mode,
-                sanitized_text,
-                metadata_registry,
-                file_text is not None
-            )
+            # Step 5: 执行脱敏
+            masked_text, registry = self.sanitizer.sanitize(normalized_text, confirmed_entities)
 
-            # 7. LLM Analysis (Structured Output)
-            detection_result_model = await self._call_llm_structured(system_prompt, human_prompt)
-
-            # 8. Post-process & Validation (Algorithmically Optimized)
-            final_result = self._post_process_result(
-                detection_result_model,
-                all_entities,
-                metadata_registry
-            )
-
-            # 9. Add Metadata & Persist
-            result_dict = final_result # Already a dict from post_process
-
-            metadata = {
-                "execution_mode": execution_mode or settings.default_execution_mode,
-                "conversation_length": len(conversation_records),
-                "messages_analyzed": len(conversation_records),
-                "analyzed_at": self._get_timestamp(),
-                "agent_version": "3.1.0"
-            }
-            result_dict.update(metadata)
-
-            detection_id = self._persist_detection_result(
-                conversation_records,
-                result_dict,
-                execution_mode or settings.default_execution_mode,
-                use_few_shots,
-                account_id
-            )
-            result_dict["detection_id"] = detection_id
-
-            return result_dict
+            # Step 6: 构造返回
+            return self._build_final_response(confirmed_entities, masked_text, registry)
 
         except Exception as e:
-            logger.error(f"Privacy detection critical failure: {e}", exc_info=True)
-            return self._create_error_response(str(e), len(conversation_records), execution_mode)
+            logger.error(f"Detection critical failure: {e}", exc_info=True)
+            # 降级模式：仅使用算法检测
+            logger.info("Falling back to algorithmic detection only.")
 
-    @llm_retry
-    async def _call_llm_structured(self, system_prompt: str, user_prompt: str) -> PrivacyDetectionResponse:
-        """Call LLM ensuring structured output."""
-        messages = [
+            # 使用算法结果
+            fallback_entities = self.detector.detect(text)
+            masked_text, registry = self.sanitizer.sanitize(text, fallback_entities)
+
+            # FIX: 确保返回结构完整，包含 overall_score 且 Enum 转为字符串
+            return {
+                "privacy_detected": len(fallback_entities) > 0,
+                "masked_text": masked_text,
+                "overall_severity": PrivacySeverity.LOW.value,  # 转为字符串值
+                "overall_score": 0.0,  # 补充缺失字段
+                "risk_score": 0.0,
+                "leaks": [],  # 降级时不返回详细 leaks 以免误导，或者也可以转换算法结果
+                "metadata_registry": registry,
+                "error": str(e)
+            }
+
+    async def _analyze_with_llm(
+            self,
+            text: str,
+            candidates: List[PrivacyEntity]
+    ) -> Any:  # 返回类型可能是 Dict 或 Model，取决于 LangChain 版本
+        """
+        构建 Prompt 并调用 LLM。
+        """
+        candidates_context = "No algorithmic candidates found."
+        if candidates:
+            cand_list = [
+                f"- '{c.text}' (Detected as: {c.entity_type}, Conf: {c.confidence:.2f})"
+                for c in candidates
+            ]
+            candidates_context = "\n".join(cand_list)
+
+        system_prompt = f"""You are an Expert Privacy Security Analyst. 
+Your task is to analyze user text and algorithmic candidates to identify REAL privacy leaks.
+
+## Allowed Output Values
+You must strictly use the following Enums for classification:
+
+**Privacy Types**:
+{[t.value for t in PrivacyType]}
+
+**Severity Levels**:
+- {PrivacySeverity.CRITICAL.value}: Passwords, API Keys, Private Keys, SSN.
+- {PrivacySeverity.HIGH.value}: Phone numbers, Real Names with Context.
+- {PrivacySeverity.MEDIUM.value}: Names alone, Email addresses (if public).
+- {PrivacySeverity.LOW.value}: Public URLs, generic usernames.
+- {PrivacySeverity.NONE.value}: No risk.
+
+## Analysis Rules
+1. **Context is King**: 
+   - 'password=123456' in a curl command -> `is_real_leak: False`.
+   - 'My password is hunter2' -> `is_real_leak: True`.
+2. **Sidecar Hints**: Use candidates as hints but verify them.
+3. **Hallucination Check**: Only report text that explicitly appears in the user input.
+"""
+
+        user_prompt = f"""## Algorithmic Candidates (Hints)
+{candidates_context}
+
+## User Raw Text
+{text}
+
+## Task
+Analyze the text. Return JSON."""
+
+        return await self.structured_llm.ainvoke([
             SystemMessage(content=system_prompt),
             HumanMessage(content=user_prompt)
-        ]
+        ])
 
-        if hasattr(self.structured_llm, "ainvoke"):
-            return await self.structured_llm.ainvoke(messages)
-        else:
-            # Fallback for older models: Get text and parse manually
-            resp = await self.raw_llm.ainvoke(messages)
-            return self._parse_response_legacy(resp.content)
+    def _merge_results(
+            self,
+            text: str,
+            candidates: List[PrivacyEntity],
+            llm_result: PrivacyAnalysisResponse
+    ) -> List[PrivacyEntity]:
+        """
+        融合逻辑：Algorithm (Recall) + LLM (Precision).
+        """
+        final_entities = []
+        candidate_map = {c.text: c for c in candidates}
 
-    def _post_process_result(
-        self,
-        result: Union[PrivacyDetectionResponse, Dict],
-        entities: List[PrivacyEntity],
-        metadata_registry: Dict[str, Dict[str, Any]]
+        for llm_leak in llm_result.leaks:
+            if not llm_leak.is_real_leak:
+                continue
+            if llm_leak.original_value not in text:
+                continue
+
+            base_confidence = llm_leak.confidence
+            matched_cand = candidate_map.get(llm_leak.original_value)
+
+            if matched_cand:
+                final_conf = min(0.99, matched_cand.confidence * 0.4 + base_confidence * 0.6)
+                start, end = matched_cand.start, matched_cand.end
+            else:
+                final_conf = base_confidence
+                start = text.find(llm_leak.original_value)
+                end = start + len(llm_leak.original_value)
+
+            entity = PrivacyEntity(
+                text=llm_leak.original_value,
+                entity_type=llm_leak.privacy_type.value,  # 已经是 Enum 值字符串
+                start=start,
+                end=end,
+                confidence=final_conf,
+                category="DETECTED",
+                severity=llm_leak.severity.value,  # 已经是 Enum 值字符串
+                metadata={
+                    "reasoning": llm_leak.reasoning,
+                    "enum_type": llm_leak.privacy_type,
+                    "enum_severity": llm_leak.severity,
+                    "source": "LLM_HYBRID"
+                }
+            )
+            final_entities.append(entity)
+
+        return final_entities
+
+    def _build_final_response(
+            self,
+            entities: List[PrivacyEntity],
+            masked_text: str,
+            registry: Dict
     ) -> Dict[str, Any]:
         """
-        Optimized validation: O(1) lookups using HashMaps.
-        Maps LLM returned placeholders (e.g., <EMAIL_1>) back to original values or validated entities.
+        构造最终输出字典。
         """
-        # Convert to dict
-        result_dict = result.model_dump() if isinstance(result, BaseModel) else result.copy()
+        severity_weight = {
+            PrivacySeverity.CRITICAL: 4,
+            PrivacySeverity.HIGH: 3,
+            PrivacySeverity.MEDIUM: 2,
+            PrivacySeverity.LOW: 1,
+            PrivacySeverity.NONE: 0
+        }
 
-        # 1. Build Lookup Maps (Pre-computation)
+        overall_severity = PrivacySeverity.NONE
+        max_weight = 0
+        leaks_output = []
 
-        # Map: Sanitized Placeholder -> Original Data
-        # e.g., {"<EMAIL_1>": {"original": "bob@abc.com", "type": "EMAIL"}}
-        sanitized_lookup: Dict[str, Dict] = {}
-        if metadata_registry:
-            for original, meta in metadata_registry.items():
-                s_val = meta.get("sanitized_value", "").strip()
-                if s_val:
-                    sanitized_lookup[s_val] = {
-                        "original": original,
-                        "type": meta.get("type"),
-                        "category": meta.get("category")
-                    }
+        total_conf = 0.0
 
-        # Map: Normalized Original Text -> Entity Object (for hallucination check)
-        # e.g., {"bob@abc.com": Entity(...)}
-        entity_lookup: Dict[str, PrivacyEntity] = {}
         for ent in entities:
-            if ent.text:
-                norm_text = ent.text.lower().replace(" ", "")
-                entity_lookup[norm_text] = ent
+            # 安全获取 severity enum，如果是字符串则尝试转换
+            sev_val = ent.severity
+            if hasattr(sev_val, 'value'): sev_val = sev_val.value
 
-        validated_leaks = []
+            # 查找对应的 Enum 对象用于计算权重
+            sev_enum = PrivacySeverity.LOW
+            try:
+                sev_enum = PrivacySeverity(sev_val)
+            except:
+                pass
 
-        # 2. Validate Leaks
-        for leak in result_dict.get("privacy_leaks", []):
-            detected_items = leak.get("detected_items", [])
-            validated_items = []
+            current_weight = severity_weight.get(sev_enum, 0)
+            if current_weight > max_weight:
+                max_weight = current_weight
+                overall_severity = sev_enum
 
-            for item in detected_items:
-                if not item: continue
-                item_str = str(item).strip()
+            total_conf += ent.confidence
 
-                # Check A: Item is a Placeholder (e.g., <EMAIL_1>) - Preferred Match
-                if item_str in sanitized_lookup:
-                    info = sanitized_lookup[item_str]
-                    validated_items.append(info["original"]) # Restore original for reporting
+            leaks_output.append({
+                "privacy_type": ent.entity_type,
+                "value": ent.text,
+                "severity": ent.severity,
+                "confidence": ent.confidence,
+                "reasoning": ent.metadata.get("reasoning", "")
+            })
 
-                    # Fix type if LLM guessed wrong
-                    if leak.get("privacy_type") == "UNKNOWN":
-                        leak["privacy_type"] = info["type"]
-                    continue
+        # 计算 overall_score
+        avg_conf = total_conf / len(entities) if entities else 0.0
+        max_weight_norm = max_weight / 4.0 if max_weight > 0 else 0.0
+        risk_score = avg_conf * max_weight_norm
 
-                # Check B: Item is the Original Text (e.g., "bob@abc.com")
-                item_norm = item_str.lower().replace(" ", "")
-                if item_norm in entity_lookup:
-                    validated_items.append(entity_lookup[item_norm].text)
-                    continue
-
-                # Check C: Substring fallback (Use cautiously)
-                # Only if text is long enough to avoid false positive on "the"
-                if len(item_norm) > 4:
-                    found = False
-                    for s_val, info in sanitized_lookup.items():
-                        if s_val in item_str: # e.g. "email is <EMAIL_1>"
-                            validated_items.append(info["original"])
-                            found = True
-                            break
-                    if found: continue
-
-                # If we get here, the item was not found in our detection registry.
-                # It might be a hallucination or a leak missed by regex but caught by LLM context.
-                # Only keep if confidence is high.
-                if leak.get("confidence", 0) > 0.8:
-                     validated_items.append(item_str)
-
-            if validated_items:
-                leak["detected_items"] = list(set(validated_items)) # Deduplicate
-
-                # Ensure Enums
-                if not leak.get("severity_level"):
-                    leak["severity_level"] = map_severity_to_level(
-                        leak.get("severity"), leak.get("privacy_type")
-                    ).value
-
-                if not leak.get("category"):
-                    leak["category"] = map_privacy_type_to_category(
-                        leak.get("privacy_type")
-                    ).value
-
-                validated_leaks.append(leak)
-
-        # 3. Finalize
-        result_dict["privacy_leaks"] = validated_leaks
-        result_dict["privacy_detected"] = len(validated_leaks) > 0
-
-        # Recalculate Overall Severity Level
-        if validated_leaks:
-             level_order = {"L4": 4, "L3": 3, "L2": 2, "L1": 1, "none": 0}
-             # Default to L1 if missing
-             levels = [l.get("severity_level", "L1") for l in validated_leaks]
-             max_lvl = max(levels, key=lambda x: level_order.get(x, 0))
-             result_dict["overall_severity_level"] = max_lvl
-        else:
-             result_dict["overall_severity_level"] = "none"
-
-        return result_dict
-
-    def _format_conversation_records(self, records: List[Dict[str, str]]) -> str:
-        return "\n".join(f"[{i+1}] User: {r.get('user', '')}" for i, r in enumerate(records))
-
-    def _determine_cot_mode(
-        self,
-        cot_mode: Optional[CoTMode],
-        use_cot: Optional[ExecutionMode],
-        execution_mode: Optional[ExecutionMode]
-    ) -> CoTMode:
-        if cot_mode: return cot_mode
-        val = str(use_cot or execution_mode or "")
-        if "online" in val: return CoTMode.CHAIN_ONLINE
-        if "no_chain" in val: return CoTMode.NO_CHAIN
-        return CoTMode.CHAIN_LOCAL
-
-    def _get_system_prompt(self, cot_mode: CoTMode, few_shots: str) -> str:
-        """System prompt with explicit instruction on Placeholders."""
-        base = (
-            "You are a Privacy Security Expert. "
-            "Analyze the provided text for privacy leaks. "
-            "IMPORTANT: The text contains placeholders (e.g., <EMAIL_1>) representing sensitive entities. "
-            "You MUST use the provided Metadata Registry to interpret these placeholders.\n"
-            "Assess severity based on the type provided in metadata."
-        )
-
-        mode_instruction = {
-            CoTMode.NO_CHAIN: "Return strict JSON.",
-            CoTMode.CHAIN_LOCAL: "Think step-by-step about the context of each placeholder.",
-            CoTMode.CHAIN_ONLINE: "Use NIST Privacy Framework. Grade L1 (Public) to L4 (Secrets)."
-        }
-
-        return f"{base}\n{mode_instruction.get(cot_mode)}\n\n{few_shots}"
-
-    def _get_human_prompt(
-        self,
-        cot_mode: CoTMode,
-        sanitized_text: str,
-        metadata_registry: Dict[str, Dict[str, Any]],
-        has_file: bool
-    ) -> str:
-        """User prompt that injects the Metadata Legend."""
-        # Create a legend so LLM knows <EMAIL_1> = EMAIL
-        legend_lines = []
-        for k, v in list(metadata_registry.items())[:20]: # Limit to avoid context overflow
-            legend_lines.append(f"- {v['sanitized_value']}: Type={v.get('type')}, Category={v.get('category')}")
-
-        legend_text = "\n".join(legend_lines) if legend_lines else "(No specific entities pre-detected)"
-        file_note = "\n[File content included]" if has_file else ""
-
-        return (
-            f"### Metadata Registry (Reference)\n{legend_text}\n\n"
-            f"### User Conversation\n{sanitized_text}{file_note}\n\n"
-            "Identify real privacy leaks. Ignore generic references. Return JSON."
-        )
-
-    def _parse_response_legacy(self, response: str) -> PrivacyDetectionResponse:
-        """Fallback for models without native structured output."""
-        try:
-            # Simple wrapper to parse JSON manually if needed
-            # (Reuse your old _parse_response logic here, adapted to return Pydantic model)
-            import json, re
-            if "```" in response:
-                match = re.search(r'```\w*\s*(\{.*?\})\s*```', response, re.DOTALL)
-                response = match.group(1).strip() if match else response
-            data = json.loads(response)
-            return PrivacyDetectionResponse(**data)
-        except Exception as e:
-            logger.error(f"Legacy parsing failed: {e}")
-            return PrivacyDetectionResponse(privacy_detected=False)
-
-    def _create_error_response(self, error_msg: str, msg_count: int, mode: Any) -> Dict[str, Any]:
         return {
-            "error": error_msg,
-            "privacy_detected": False,
-            "privacy_leaks": [],
-            "overall_severity": "NONE",
-            "conversation_length": msg_count,
-            "analyzed_at": self._get_timestamp(),
-            "detection_id": str(uuid.uuid4())
+            "privacy_detected": len(entities) > 0,
+            "masked_text": masked_text,
+            "overall_severity": overall_severity.value,  # 返回字符串
+            "overall_score": risk_score,  # 确保有这个字段
+            "risk_score": risk_score,
+            "leaks": leaks_output,
+            "metadata_registry": registry
         }
-
-    def _persist_detection_result(self, records, result, mode, few_shots, acct_id):
-        try:
-            detection_id = str(uuid.uuid4())
-            data = {
-                "detection_id": detection_id,
-                "conversation_records": records,
-                "detection_result": result,
-                "execution_mode": mode,
-                "account_id": acct_id,
-                "created_at": datetime.utcnow()
-            }
-            get_database().save_privacy_detection_result(data)
-            return detection_id
-        except Exception as e:
-            logger.error(f"Persistence error: {e}")
-            return str(uuid.uuid4())
-
-    def _get_timestamp(self) -> str:
-        return datetime.utcnow().isoformat()
-
-    @classmethod
-    def get_effective_few_shots(cls) -> str:
-        custom = cls.get_custom_few_shots()
-        return custom or PRIVACY_DETECTOR_FEW_SHOTS
-
-    @classmethod
-    def set_custom_few_shots(cls, custom_few_shots: Optional[str] = None) -> None:
-        if settings.enable_persistence:
-            get_database().save_custom_few_shots("privacy_detector", custom_few_shots)
-        cls._custom_few_shots_cache = custom_few_shots
-
-    @classmethod
-    def get_custom_few_shots(cls) -> Optional[str]:
-        if cls._custom_few_shots_cache: return cls._custom_few_shots_cache
-        if settings.enable_persistence:
-            cls._custom_few_shots_cache = get_database().load_custom_few_shots("privacy_detector")
-        return cls._custom_few_shots_cache
+    
+    def reset(self) -> None:
+        """Reset the agent to initial state."""
+        logger.info("Resetting PrivacyDetectorAgent state")
+        # PrivacyDetectorAgent is stateless, no state to reset
+        logger.debug("Agent reset complete")

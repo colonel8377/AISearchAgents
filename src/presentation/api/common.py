@@ -9,7 +9,10 @@ from ...application.services import (
     AgentService,
     SummarizerService,
     NudgeCollapseService,
-    SystemService
+    SystemService,
+    ContentService,
+    ConsistencyService,
+    PrivacyDetectorService
 )
 from ...shared.utils.logger import get_logger
 
@@ -27,7 +30,10 @@ agent_repository = AgentRepository(agent_manager)
 agent_service = AgentService(agent_repository)
 summarizer_service = SummarizerService(agent_manager)
 nudge_collapse_service = NudgeCollapseService(agent_manager)
-system_service = SystemService()
+content_service = ContentService(agent_manager)
+consistency_service = ConsistencyService(agent_manager)
+privacy_detector_service = PrivacyDetectorService(agent_manager)
+system_service = SystemService(agent_manager)
 
 # debate_service is imported where needed to avoid circular dependencies
 

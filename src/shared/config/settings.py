@@ -59,6 +59,7 @@ class Settings(BaseSettings):
     openai_api_key: str = Field(default="", description="OpenAI API key or Qwen API key")
     openai_api_base: str = Field(default="https://api.openai.com/v1", description="OpenAI API base URL")
     openai_model: str = Field(default="gpt-3.5-turbo", description="Model name (e.g., qwen-turbo)")
+    openai_proxy: Optional[str] = Field(default=None, description="Proxy URL for OpenAI API requests (e.g., http://user:pass@host:port)")
 
     # Embedding Settings
     embedding_provider: str = Field(default="openai", description="Embedding provider: 'openai', 'qwen', 'gemini', 'deepseek', etc.")
@@ -105,6 +106,7 @@ class Settings(BaseSettings):
     # Performance Optimization Settings
     use_optimized_mode: bool = Field(default=True, description="Enable optimized mode with chain caching and persistence pooling")
     use_chain_cache: bool = Field(default=True, description="Enable chain caching (only in optimized mode)")
+    
     use_shared_http_client: bool = Field(default=True, description="Use shared HTTP client with persistence pooling (only in optimized mode)")
     
     # Cache Backend Settings
@@ -210,7 +212,7 @@ class Settings(BaseSettings):
         description="GLiNER model name for privacy detection (default: urchade/gliner_small-v2.1). Available models: gliner_small-v2.1, gliner_medium-v2, gliner_large-v2"
     )
     gliner_threshold: float = Field(
-        default=0.3,
+        default=0.8,
         description="GLiNER detection threshold for entity confidence (default: 0.3 for high recall)"
     )
     

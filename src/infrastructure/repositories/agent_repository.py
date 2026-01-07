@@ -5,8 +5,11 @@ This repository provides a clean data access layer for agent operations,
 abstracting the underlying AgentManager implementation.
 """
 
-from typing import List, Dict, Any, Optional
-from ...application.agents.manager import AgentManager
+from typing import List, Dict, Any, Optional, TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from ...application.agents.manager import AgentManager
+
 from ...shared.constant.enums import AgentType
 from .interfaces import AgentRepositoryInterface, AgentProtocol
 
@@ -19,7 +22,7 @@ class AgentRepository(AgentRepositoryInterface):
     for agent CRUD operations.
     """
 
-    def __init__(self, agent_manager: AgentManager):
+    def __init__(self, agent_manager: "AgentManager"):
         """
         Initialize repository with agent manager.
 

@@ -107,6 +107,14 @@ class EvaluateSentencesRequest(BaseModel):
         default=None,
         description="Optional custom few-shot examples to use instead of defaults. If provided, use_few_shots must be True."
     )
+    per_message: bool = Field(
+        default=False,
+        description="If true, evaluate each sentence as a separate user message (one LLM call per sentence). Default: False"
+    )
+    is_binary_agreement: bool = Field(
+        default=False,
+        description="If true, only return 0 or 1 (binary agreement). If false (default), return 0.0 to 1.0 (continuous scale). Default: False"
+    )
 
     @field_validator('use_cot', mode='before')
     @classmethod
@@ -131,7 +139,7 @@ class JudgmentResponse(BaseModel):
     """Response model for a single judgment."""
     index: int
     sentence: str
-    agree: int = Field(..., ge=0, le=1, description="1 for agree, 0 for disagree")
+    agree: Union[int, float] = Field(..., ge=0, le=1, description="Agreement score: 0.0-1.0 (continuous) or 0/1 (binary)")
     reason: str
 
 
@@ -209,7 +217,6 @@ class ListAgentsResponse(BaseModel):
 class ExtractContentRequest(BaseModel):
     """Request model for content extraction."""
     url: Optional[str] = Field(default=None, description="URL to extract content from")
-    html: Optional[str] = Field(default=None, description="Raw HTML to extract content from")
     text: Optional[str] = Field(default=None, description="Plain text to process (alternative to URL/HTML)")
     title: Optional[str] = Field(default=None, description="Optional title (used when text is provided)")
     summary: Optional[str] = Field(default=None, description="Optional summary text for claim-level comparison with URL content")
@@ -308,8 +315,11 @@ class AtomizeClaimsRequest(BaseModel):
         default=CoTMode.NO_CHAIN,
         description="Chain of Thought mode: 'chain_online' (0), 'chain_local' (1), 'no_chain' (2), or CoTMode enum. Default: no_chain"
     )
-    custom_few_shots: Optional[str] = Field(default=None, description="Optional custom few-shot examples")
     split_into_paragraphs: bool = Field(default=False, description="Whether to split text into paragraphs before atomization")
+    use_few_shots: bool = Field(
+        default=True,
+        description="Whether to use few-shot examples in the prompt (default: True)"
+    )
 
     @field_validator('use_cot', mode='before')
     @classmethod
@@ -1244,55 +1254,6 @@ class OverallEvaluationResponse(BaseModel):
     processing_metadata: Dict[str, Any]
 
 
-class CompleteAnalysisRequest(BaseModel):
-    """Request model for complete academic analysis pipeline."""
-    url: str = Field(..., description="URL to analyze completely")
-    use_llm_content_extraction: bool = Field(default=False, description="Use LLM for content extraction refinement")
-    use_cot_atomization: Union[CoTMode, str, int] = Field(
-        default=CoTMode.NO_CHAIN,
-        description="Chain of Thought mode for atomization: 'chain_online' (0), 'chain_local' (1), 'no_chain' (2), or CoTMode enum. Default: no_chain"
-    )
-    use_cot_audit: Union[CoTMode, str, int] = Field(
-        default=CoTMode.NO_CHAIN,
-        description="Chain of Thought mode for auditing: 'chain_online' (0), 'chain_local' (1), 'no_chain' (2), or CoTMode enum. Default: no_chain"
-    )
-    custom_few_shots_atomizer: Optional[str] = Field(default=None, description="Custom few-shots for atomizer")
-    custom_few_shots_auditor: Optional[str] = Field(default=None, description="Custom few-shots for auditor")
-
-    @field_validator('use_cot_atomization', mode='before')
-    @classmethod
-    def validate_use_cot_atomization(cls, v):
-        """Convert various input formats to CoTMode enum."""
-        if isinstance(v, CoTMode):
-            return v
-        try:
-            return CoTMode.from_code_or_value(v)
-        except ValueError as e:
-            raise ValueError(f"Invalid use_cot_atomization value: {e}")
-
-    @field_validator('use_cot_audit', mode='before')
-    @classmethod
-    def validate_use_cot_audit(cls, v):
-        """Convert various input formats to CoTMode enum."""
-        if isinstance(v, CoTMode):
-            return v
-        try:
-            return CoTMode.from_code_or_value(v)
-        except ValueError as e:
-            raise ValueError(f"Invalid use_cot_audit value: {e}")
-
-    model_config = {
-        "json_schema_extra": {
-            "examples": [
-                {
-                    "url": "https://example.com/research-paper",
-                    "use_cot_atomization": True,
-                    "use_cot_audit": True,
-                }
-            ]
-        }
-    }
-
 
 class PipelineStepResponse(BaseModel):
     """Response model for a pipeline step."""
@@ -1436,4 +1397,9 @@ class PrivacyDetectionResponse(BaseModel):
             ]
         }
     }
+
+
+
+
+
 

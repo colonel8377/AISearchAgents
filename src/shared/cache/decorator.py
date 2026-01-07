@@ -44,7 +44,12 @@ def cached(
 
         def _should_skip_cache() -> bool:
             """Check if caching is disabled via args or global settings."""
-            return not enabled or not getattr(settings, 'use_chain_cache', True)
+            should_skip = not enabled or not settings.use_chain_cache
+            if not should_skip:
+                logger.info(f"Cache enabled for {func.__name__}. enabled={enabled}, settings.use_chain_cache={settings.use_chain_cache}")
+            else:
+                logger.info(f"Cache skipped for {func.__name__}. enabled={enabled}, settings.use_chain_cache={settings.use_chain_cache}")
+            return should_skip
 
         @functools.wraps(func)
         def sync_wrapper(*args: Any, **kwargs: Any) -> Any:
@@ -57,13 +62,26 @@ def cached(
             # Try to get from cache
             cached_result = cache.get(func, args, kwargs, class_name)
             if cached_result is not None:
-                logger.info(f"Cache hit for {func_name}")
-                return cached_result
+                # Check if cached result is an error response - don't return cached errors
+                if isinstance(cached_result, dict) and cached_result.get("error"):
+                    logger.warning(f"Cache contains error result for {func_name}, ignoring cache")
+                else:
+                    logger.info(f"Cache hit for {func_name}")
+                    return cached_result
 
             # Execute and cache
-            result = func(*args, **kwargs)
-            cache.set(func, args, kwargs, result, class_name, ttl)
-            return result
+            try:
+                result = func(*args, **kwargs)
+                # Only cache successful results (not error responses)
+                if isinstance(result, dict) and result.get("error"):
+                    logger.warning(f"Not caching error result for {func_name}")
+                else:
+                    cache.set(func, args, kwargs, result, class_name, ttl)
+                return result
+            except Exception as e:
+                # Don't cache exceptions
+                logger.warning(f"Exception in {func_name}, not caching: {e}")
+                raise
 
         @functools.wraps(func)
         async def async_wrapper(*args: Any, **kwargs: Any) -> Any:
@@ -76,13 +94,26 @@ def cached(
             # Try to get from cache
             cached_result = cache.get(func, args, kwargs, class_name)
             if cached_result is not None:
-                logger.info(f"Cache hit for {func_name}")
-                return cached_result
+                # Check if cached result is an error response - don't return cached errors
+                if isinstance(cached_result, dict) and cached_result.get("error"):
+                    logger.warning(f"Cache contains error result for {func_name}, ignoring cache")
+                else:
+                    logger.info(f"Cache hit for {func_name}")
+                    return cached_result
 
             # Execute and cache (awaiting the result)
-            result = await func(*args, **kwargs)
-            cache.set(func, args, kwargs, result, class_name, ttl)
-            return result
+            try:
+                result = await func(*args, **kwargs)
+                # Only cache successful results (not error responses)
+                if isinstance(result, dict) and result.get("error"):
+                    logger.warning(f"Not caching error result for {func_name}")
+                else:
+                    cache.set(func, args, kwargs, result, class_name, ttl)
+                return result
+            except Exception as e:
+                # Don't cache exceptions
+                logger.warning(f"Exception in {func_name}, not caching: {e}")
+                raise
 
         if inspect.iscoroutinefunction(func):
             return cast(F, async_wrapper)

@@ -8,6 +8,7 @@ from langchain_core.prompts import ChatPromptTemplate
 from langchain_openai import ChatOpenAI
 
 from src.application.few_shots.summarizer.few_shots import SUMMARIZER_FEW_SHOTS
+from src.infrastructure.repositories import AgentProtocol
 from src.infrastructure.storage.persistence import get_database
 from src.shared.cache import cached
 from src.shared.config.settings import settings, ExecutionMode
@@ -18,7 +19,7 @@ from src.shared.utils import get_logger
 logger = get_logger(__name__)
 
 
-class SummarizerAgent:
+class SummarizerAgent(AgentProtocol):
     """
     Implements a Summarizer Agent that accepts user conversation records
     and summarizes the key information found within those conversation logs.
