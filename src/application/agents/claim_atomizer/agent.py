@@ -5,21 +5,20 @@ atomic claims, each containing only one factual point.
 """
 
 import asyncio
-from dataclasses import dataclass
 from typing import Optional, List, Dict, Any, Union
 
 from langchain_core.messages import SystemMessage, HumanMessage
 from langchain_openai import ChatOpenAI
 
-from .model import AtomicClaim
+from src.shared.llm import llm_manager
+from .model import AtomicClaim, ParagraphClaims, ClaimAtomizationResult
+from .utils import TextProcessor, ClaimParser, ClaimFormatter
 from ...few_shots.claim_atomizer.few_shots import CLAIM_ATOMIZER_FEW_SHOTS
 from ....infrastructure.repositories import AgentProtocol
 from ....infrastructure.storage.persistence import get_database
-from ....shared.constant.enums import CoTMode
 from ....shared.config.settings import settings, ExecutionMode
-from src.shared.llm import llm_manager
+from ....shared.constant.enums import CoTMode
 from ....shared.utils.logger import get_logger
-from .utils import TextProcessor, ClaimParser, ClaimFormatter
 
 logger = get_logger(__name__)
 
