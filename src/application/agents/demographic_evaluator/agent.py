@@ -11,6 +11,7 @@ from langchain_openai import ChatOpenAI
 from src.application.few_shots.demographic_evaluator.few_shots import DEMOGRAPHIC_EVALUATOR_FEW_SHOTS
 from src.infrastructure.repositories import AgentProtocol
 from src.infrastructure.storage.persistence import get_database
+from src.shared.cache import cached
 from src.shared.config.settings import settings, ExecutionMode
 from src.shared.constant.enums import CoTMode
 from src.shared.llm import llm_retry
@@ -653,7 +654,7 @@ Return your evaluation as a JSON object."""
         
         # Note: Actual agree value validation is done in _normalize_judgment
 
-
+    @llm_retry
     async def _evaluate_batch(
         self,
         sentences: List[str],

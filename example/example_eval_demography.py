@@ -21,7 +21,7 @@ FEATHER_PATH = "/Users/lionelyip/PycharmProjects/AISearchAgents/data/biased_sent
 DATA_DIR = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "data")
 SQLITE_DB_PATH = os.path.join(DATA_DIR, "demographic_evaluation.db")
 
-MAX_CONCURRENT_REQUESTS = 10
+MAX_CONCURRENT_REQUESTS = 3
 
 FORCE_NEW_RUN = False
 RESUME_RUN_ID: Optional[str] = '20260106_023547'
