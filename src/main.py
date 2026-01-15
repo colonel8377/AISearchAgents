@@ -35,7 +35,8 @@ def main():
         host=settings.api_host,
         port=settings.api_port,
         reload=True,
-        log_level="info"
+        log_level="info",
+        workers=settings.api_workers
     )
 
 

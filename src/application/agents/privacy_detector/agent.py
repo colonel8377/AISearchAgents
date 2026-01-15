@@ -14,6 +14,18 @@ from .core.interfaces import PrivacyEntity
 from .impl.detectors import HybridDetector
 from .impl.sanitizer import ConsistentSanitizer
 
+# Import OpenAI exceptions for better error handling
+try:
+    from openai import APIError, APIConnectionError, APITimeoutError, RateLimitError
+    from langchain_core.exceptions import LangChainException
+except ImportError:
+    # Fallback if imports fail
+    APIError = Exception
+    APIConnectionError = Exception
+    APITimeoutError = Exception
+    RateLimitError = Exception
+    LangChainException = Exception
+
 logger = get_logger(__name__)
 
 
@@ -52,22 +64,58 @@ class PrivacyDetectorAgent(AgentProtocol):
     ):
         self.detector = HybridDetector()
         self.sanitizer = ConsistentSanitizer()
+        
+        # Store LLM configuration for lazy initialization
+        self._model_name = model_name
+        self._api_key = api_key
+        self._base_url = base_url
+        self._temperature = temperature
+        
+        # LLM will be initialized lazily when needed (for detect_and_mask)
+        self._llm = None
+        self._structured_llm = None
 
-        self.llm = ChatOpenAI(
-            model=model_name,
-            api_key=api_key,
-            base_url=base_url,
-            temperature=temperature
-        )
+    def _ensure_llm_initialized(self):
+        """
+        Lazy initialization of LLM. Only initialize when needed for detect_and_mask.
+        This allows mask_privacy_entities to work even if LLM is not available.
+        """
+        if self._structured_llm is not None:
+            return
+        
+        try:
+            self._llm = ChatOpenAI(
+                model=self._model_name,
+                api_key=self._api_key,
+                base_url=self._base_url,
+                temperature=self._temperature
+            )
 
-        # FIX: 手动构造完全展开的 Schema，避免 Pydantic 生成 $defs/$ref 导致部分模型报错 (Error 400)
-        schema = self._get_expanded_schema()
+            # FIX: 手动构造完全展开的 Schema，避免 Pydantic 生成 $defs/$ref 导致部分模型报错 (Error 400)
+            schema = self._get_expanded_schema()
 
-        if hasattr(self.llm, "with_structured_output"):
-            # 传入 Dict 而不是 Pydantic 类，LangChain 会直接使用该 Schema
-            self.structured_llm = self.llm.with_structured_output(schema)
-        else:
-            raise RuntimeError("Current model configuration does not support structured output.")
+            if hasattr(self._llm, "with_structured_output"):
+                # 传入 Dict 而不是 Pydantic 类，LangChain 会直接使用该 Schema
+                self._structured_llm = self._llm.with_structured_output(schema)
+            else:
+                logger.warning("Current model configuration does not support structured output. LLM features will be disabled.")
+                self._structured_llm = None
+        except Exception as e:
+            logger.warning(f"Failed to initialize LLM: {e}. LLM features will be disabled.")
+            self._llm = None
+            self._structured_llm = None
+    
+    @property
+    def llm(self):
+        """Lazy access to LLM instance."""
+        self._ensure_llm_initialized()
+        return self._llm
+    
+    @property
+    def structured_llm(self):
+        """Lazy access to structured LLM instance."""
+        self._ensure_llm_initialized()
+        return self._structured_llm
 
     def _get_expanded_schema(self) -> Dict[str, Any]:
         """
@@ -145,7 +193,12 @@ class PrivacyDetectorAgent(AgentProtocol):
             candidates: List[PrivacyEntity] = self.detector.detect(normalized_text)
 
             # Step 3: LLM 裁决 (Cognitive Layer)
-            llm_result_dict = await self._analyze_with_llm(normalized_text, candidates)
+            # Check if LLM is available before calling
+            if self.structured_llm is None:
+                logger.warning("LLM not available, skipping LLM analysis and using algorithmic detection only.")
+                llm_result_dict = {"leaks": []}
+            else:
+                llm_result_dict = await self._analyze_with_llm(normalized_text, candidates)
 
             # 由于 with_structured_output 传入 Dict 时返回的通常是 Dict，我们需要手动转为对象或直接使用 Dict
             # 这里统一按 Dict 处理
@@ -239,10 +292,40 @@ You must strictly use the following Enums for classification:
 ## Task
 Analyze the text. Return JSON."""
 
-        return await self.structured_llm.ainvoke([
-            SystemMessage(content=system_prompt),
-            HumanMessage(content=user_prompt)
-        ])
+        try:
+            # Ensure LLM is initialized
+            if self.structured_llm is None:
+                logger.warning("LLM not available, returning empty result")
+                return {"leaks": []}
+            
+            response = await self.structured_llm.ainvoke([
+                SystemMessage(content=system_prompt),
+                HumanMessage(content=user_prompt)
+            ])
+            
+            # Validate response is not None
+            if response is None:
+                logger.warning("LLM returned None response, returning empty result")
+                return {"leaks": []}
+            
+            return response
+            
+        except (APIError, APIConnectionError, APITimeoutError, RateLimitError) as e:
+            logger.error(f"OpenAI API error during privacy analysis: {e}", exc_info=True)
+            # Return empty result to allow fallback to algorithmic detection
+            raise
+        except (TypeError, AttributeError, ValueError) as e:
+            # Handle cases where response parsing fails (e.g., None response, malformed structure)
+            logger.error(f"Error parsing LLM response: {e}. Response may be None or malformed.", exc_info=True)
+            # Return empty result to allow fallback to algorithmic detection
+            return {"leaks": []}
+        except LangChainException as e:
+            logger.error(f"LangChain error during privacy analysis: {e}", exc_info=True)
+            raise
+        except Exception as e:
+            logger.error(f"Unexpected error during LLM analysis: {e}", exc_info=True)
+            # Return empty result to allow fallback to algorithmic detection
+            return {"leaks": []}
 
     def _merge_results(
             self,

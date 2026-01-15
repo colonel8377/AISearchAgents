@@ -15,7 +15,8 @@ from src.shared.utils.logger import get_logger
 from ..common import get_api_key
 # 引入 API Schemas (确保 DetectPrivacyRequest 和 PrivacyDetectionResponse 在 schemas.py 中定义)
 from ..schemas import (
-    DetectPrivacyRequest, PrivacyDetectionResponse
+    DetectPrivacyRequest, PrivacyDetectionResponse, MaskPrivacyResponse, MaskPrivacyRequest, DetectionIdsResponse,
+    MaskedMessage
 )
 
 logger = get_logger(__name__)
@@ -25,56 +26,6 @@ router = APIRouter(prefix="/privacy", tags=["Privacy Detector"])
 
 from ..common import privacy_detector_service
 
-
-# --- Request/Response Models for Masking (Router specific) ---
-# 这些模型如果不在 schemas.py 中，保留在这里定义是正确的
-
-class MaskPrivacyRequest(BaseModel):
-    """Request model for privacy masking."""
-    conversation_records: List[Dict[str, str]] = Field(
-        ...,
-        description="List of user messages with 'user' key containing the message content"
-    )
-
-    @field_validator('conversation_records')
-    @classmethod
-    def validate_conversation_records(cls, v):
-        """Validate that each record contains 'user' key."""
-        for i, record in enumerate(v):
-            if not isinstance(record, dict):
-                raise ValueError(f"Record {i} must be a dictionary")
-            if 'user' not in record:
-                raise ValueError(f"Record {i} must contain 'user' key")
-        return v
-
-    model_config = {
-        "json_schema_extra": {
-            "examples": [
-                {
-                    "conversation_records": [
-                        {"user": "My phone is 13812340000"},
-                        {"user": "Email: test@example.com"}
-                    ]
-                }
-            ]
-        }
-    }
-
-
-class MaskedMessage(BaseModel):
-    original_text: str
-    masked_text: str
-    entities_detected: int
-
-
-class MaskPrivacyResponse(BaseModel):
-    masked_messages: List[MaskedMessage]
-    total_entities_detected: int
-
-
-class DetectionIdsResponse(BaseModel):
-    detection_ids: List[str]
-    count: int
 
 
 # --- API Endpoints ---

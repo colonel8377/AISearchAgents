@@ -64,6 +64,56 @@ ReDoc API 文档
 
 OpenAPI 3.0 规范 JSON
 
+### POST /api/v1/agent/demographic-evaluator/evaluate
+
+评估句子的符合程度
+
+**请求体：**
+
+```json
+{
+  "demography_json": {
+    "age": 25,
+    "gender": "male",
+    "location": "New York",
+    "political_view": "liberal"
+  },
+  "sentences": [
+    "Sentence 1",
+    "Sentence 2"
+  ],
+  "use_cot": "no_chain",
+  "use_few_shots": true,
+  "per_message": false,
+  "is_binary_agreement": false,
+  "is_neutral": false
+}
+```
+
+**参数说明：**
+- `demography_json`: 人口统计学特征（当 `is_neutral=true` 时可选）
+- `sentences`: 待评估句子列表
+- `use_cot`: CoT 模式
+- `use_few_shots`: 是否使用少样本示例
+- `per_message`: 是否逐条评估（并行请求）
+- `is_binary_agreement`: 是否使用二进制（0/1）一致性评分（默认 false 为 0.0-1.0）
+- `is_neutral`: 是否使用中立视角（American citizen）进行评估，忽略人口统计学特征（默认 false）
+
+**响应：**
+
+```json
+{
+  "judgments": [
+    {
+      "index": 0,
+      "sentence": "Sentence 1",
+      "agree": 0.8,
+      "reason": "Reasoning..."
+    }
+  ]
+}
+```
+
 ## 智能体管理 API
 
 ### POST /api/v1/agents/create
@@ -854,6 +904,7 @@ print(response.json()["response"])
 - 详细的 API 结构说明：参见 [API_STRUCTURE.txt](../API_STRUCTURE.txt)
 - 交互式 API 文档：访问 `/docs` 端点
 - 项目 README：参见 [README.md](../README.md)
+
 
 
 

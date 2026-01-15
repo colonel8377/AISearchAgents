@@ -46,35 +46,21 @@ async def evaluate_sentences(
             sentences=request.sentences,
             use_cot=request.use_cot,
             use_few_shots=request.use_few_shots,
-            custom_few_shots=request.custom_few_shots,
             per_message=request.per_message,
-            is_binary_agreement=request.is_binary_agreement
+            is_binary_agreement=request.is_binary_agreement,
+            is_neutral=request.is_neutral,
         )
 
-        # Convert to response model with explicit validation
-        judgments = []
-        for i, judgment in enumerate(result["judgments"]):
-            try:
-                # Ensure all fields are properly typed before creating response model
-                agree_value = judgment.get("agree", 0.0)
-                
-                # Preserve type based on is_binary_agreement
-                # If binary mode, keep as int; otherwise keep as float
-                if request.is_binary_agreement:
-                    agree_value = int(agree_value) if isinstance(agree_value, (int, float)) else 0
-                else:
-                    agree_value = float(agree_value) if isinstance(agree_value, (int, float)) else 0.0
-                
-                validated_judgment = {
-                    "index": int(judgment.get("index", i)),
-                    "sentence": str(judgment.get("sentence", "")),
-                    "agree": agree_value,
-                    "reason": str(judgment.get("reason", ""))
-                }
-                judgments.append(JudgmentResponse(**validated_judgment))
-            except (ValueError, TypeError, KeyError) as e:
-                logger.error(f"Failed to validate judgment {i}: {e}, judgment data: {judgment}")
-                raise ValueError(f"Invalid judgment data at index {i}: {e}")
+        # Convert to response model (agent already normalized judgments)
+        judgments = [
+            JudgmentResponse(
+                index=j["index"],
+                sentence=j["sentence"],
+                agree=j["agree"],
+                reason=j["reason"]
+            )
+            for j in result["judgments"]
+        ]
 
         return EvaluateSentencesResponse(judgments=judgments)
 
