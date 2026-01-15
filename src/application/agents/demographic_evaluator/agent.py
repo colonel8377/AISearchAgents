@@ -46,7 +46,7 @@ class DemographicEvaluatorAgent(AgentProtocol):
     AGREEMENT_OUTPUT_BINARY = "0 or 1, // 0 if you disagree, 1 if you agree"
 
     # Base prompt templates (will be formatted with agreement scale)
-    SYSTEM_PROMPT_TEMPLATE_COT = """You are a person with the following demographic profile:
+    SYSTEM_PROMPT_TEMPLATE_COT = """You are an American citizen with the following demographic profile:
 {demography_json}
 
 Your task is to evaluate a list of sentences provided by the user.
@@ -72,7 +72,7 @@ OUTPUT SCHEMA:
   ]
 }}"""
     
-    SYSTEM_PROMPT_TEMPLATE_NO_COT = """You are a person with the following demographic profile:
+    SYSTEM_PROMPT_TEMPLATE_NO_COT = """You are an American citizen with the following demographic profile:
 {demography_json}
 
 Your task is to evaluate a list of sentences provided by the user.
@@ -95,7 +95,7 @@ OUTPUT SCHEMA:
   ]
 }}"""
 
-    SYSTEM_PROMPT_TEMPLATE_PER_MESSAGE_COT = """You are a person with the following demographic profile:
+    SYSTEM_PROMPT_TEMPLATE_PER_MESSAGE_COT = """You are an American citizen with the following demographic profile:
 {demography_json}
 
 Your task is to evaluate the LATEST message sent by the user.
@@ -115,7 +115,7 @@ OUTPUT SCHEMA:
   "reason": "Your detailed step-by-step reasoning showing your thought process"
 }}"""
 
-    SYSTEM_PROMPT_TEMPLATE_PER_MESSAGE_NO_COT = """You are a person with the following demographic profile:
+    SYSTEM_PROMPT_TEMPLATE_PER_MESSAGE_NO_COT = """You are an American citizen with the following demographic profile:
 {demography_json}
 
 Your task is to evaluate the LATEST message sent by the user.
@@ -125,6 +125,78 @@ RULES:
 2. Provide a brief reasoning from your personal perspective.
 3. STRICT CONSTRAINT: Do not explicitly mention your demographic traits in the reasoning. Speak naturally as that person.
 4. Output must be a valid JSON object.
+
+OUTPUT SCHEMA:
+{{
+  "agree": {agreement_output},
+  "reason": "Your subjective reasoning"
+}}"""
+
+    SYSTEM_PROMPT_TEMPLATE_NEUTRAL_COT = """You are an American citizen evaluating sentences without any specific persona or demographic profile.
+
+Your task is to evaluate a list of sentences provided by the user.
+
+RULES:
+1. For each sentence, decide your level of agreement {agreement_scale}.
+2. Provide detailed step-by-step reasoning showing how an American citizen might think through the issue (Chain of Thought).
+3. Output must be a valid JSON object with a "judgments" key.
+
+OUTPUT SCHEMA:
+{{
+  "judgments": [
+    {{
+      "index": Integer,
+      "sentence": "Original sentence",
+      "agree": {agreement_output},
+      "reason": "Your detailed step-by-step reasoning showing your thought process"
+    }}
+  ]
+}}"""
+
+    SYSTEM_PROMPT_TEMPLATE_NEUTRAL_NO_COT = """You are an American citizen evaluating sentences without any specific persona or demographic profile.
+
+Your task is to evaluate a list of sentences provided by the user.
+
+RULES:
+1. For each sentence, decide your level of agreement {agreement_scale}.
+2. Provide a brief reasoning for your judgment.
+3. Output must be a valid JSON object with a "judgments" key.
+
+OUTPUT SCHEMA:
+{{
+  "judgments": [
+    {{
+      "index": Integer,
+      "sentence": "Original sentence",
+      "agree": {agreement_output},
+      "reason": "Your subjective reasoning"
+    }}
+  ]
+}}"""
+
+    SYSTEM_PROMPT_TEMPLATE_NEUTRAL_PER_MESSAGE_COT = """You are an American citizen evaluating the latest sentence without any specific persona or demographic profile.
+
+Your task is to evaluate the LATEST message sent by the user.
+
+RULES:
+1. Decide your level of agreement with the sentence {agreement_scale}.
+2. Provide detailed step-by-step reasoning showing your thought process (Chain of Thought).
+3. Output must be a valid JSON object.
+
+OUTPUT SCHEMA:
+{{
+  "agree": {agreement_output},
+  "reason": "Your detailed step-by-step reasoning showing your thought process"
+}}"""
+
+    SYSTEM_PROMPT_TEMPLATE_NEUTRAL_PER_MESSAGE_NO_COT = """You are an American citizen evaluating the latest sentence without any specific persona or demographic profile.
+
+Your task is to evaluate the LATEST message sent by the user.
+
+RULES:
+1. Decide your level of agreement with that message {agreement_scale}.
+2. Provide a brief reasoning for your judgment.
+3. Output must be a valid JSON object.
 
 OUTPUT SCHEMA:
 {{
@@ -323,6 +395,7 @@ OUTPUT SCHEMA:
         per_message: bool,
         few_shots: str,
         is_binary_agreement: bool,
+        is_neutral: bool = False,
     ) -> str:
         """
         Build system prompt for LLM.
@@ -343,17 +416,17 @@ OUTPUT SCHEMA:
         agreement_scale = self.AGREEMENT_SCALE_BINARY if is_binary_agreement else self.AGREEMENT_SCALE_CONTINUOUS
         agreement_output = self.AGREEMENT_OUTPUT_BINARY if is_binary_agreement else self.AGREEMENT_OUTPUT_CONTINUOUS
 
-        # Select template based on mode
+        # Select template based on mode and neutrality
         if per_message:
-            if use_cot:
-                template = self.SYSTEM_PROMPT_TEMPLATE_PER_MESSAGE_COT
+            if is_neutral:
+                template = self.SYSTEM_PROMPT_TEMPLATE_NEUTRAL_PER_MESSAGE_COT if use_cot else self.SYSTEM_PROMPT_TEMPLATE_NEUTRAL_PER_MESSAGE_NO_COT
             else:
-                template = self.SYSTEM_PROMPT_TEMPLATE_PER_MESSAGE_NO_COT
+                template = self.SYSTEM_PROMPT_TEMPLATE_PER_MESSAGE_COT if use_cot else self.SYSTEM_PROMPT_TEMPLATE_PER_MESSAGE_NO_COT
         else:
-            if use_cot:
-                template = self.SYSTEM_PROMPT_TEMPLATE_COT
+            if is_neutral:
+                template = self.SYSTEM_PROMPT_TEMPLATE_NEUTRAL_COT if use_cot else self.SYSTEM_PROMPT_TEMPLATE_NEUTRAL_NO_COT
             else:
-                template = self.SYSTEM_PROMPT_TEMPLATE_NO_COT
+                template = self.SYSTEM_PROMPT_TEMPLATE_COT if use_cot else self.SYSTEM_PROMPT_TEMPLATE_NO_COT
 
         # Format template with all variables
         base_prompt = template.format(
@@ -489,6 +562,7 @@ OUTPUT SCHEMA:
         use_cot: bool,
         few_shots: str,
         is_binary_agreement: bool,
+        is_neutral: bool = False,
     ) -> Dict[str, Any]:
         """
         Evaluate sentences in per-message mode (one LLM call per sentence).
@@ -506,7 +580,14 @@ OUTPUT SCHEMA:
         Returns:
             Dictionary with judgments list
         """
-        system_prompt = self._build_system_prompt(demography_json, use_cot, per_message=True, few_shots=few_shots, is_binary_agreement=is_binary_agreement)
+        system_prompt = self._build_system_prompt(
+            demography_json,
+            use_cot,
+            per_message=True,
+            few_shots=few_shots,
+            is_binary_agreement=is_binary_agreement,
+            is_neutral=is_neutral,
+        )
         
         # Create tasks with progressively longer conversation history
         # Each task includes all previous sentences before its index
@@ -662,6 +743,7 @@ Return your evaluation as a JSON object."""
         use_cot: bool,
         few_shots: str,
         is_binary_agreement: bool,
+        is_neutral: bool = False,
     ) -> Dict[str, Any]:
         """
         Evaluate sentences in batch mode (single LLM call with all sentences).
@@ -675,7 +757,14 @@ Return your evaluation as a JSON object."""
         Returns:
             Dictionary with judgments list
         """
-        system_prompt = self._build_system_prompt(demography_json, use_cot, per_message=False, few_shots=few_shots, is_binary_agreement=is_binary_agreement)
+        system_prompt = self._build_system_prompt(
+            demography_json,
+            use_cot,
+            per_message=False,
+            few_shots=few_shots,
+            is_binary_agreement=is_binary_agreement,
+            is_neutral=is_neutral,
+        )
         user_message = self._build_batch_user_message(sentences, use_cot)
 
         messages = [
@@ -704,20 +793,20 @@ Return your evaluation as a JSON object."""
 
     async def evaluate_sentences(
         self,
-        demography_json: Dict[str, Any],
+        demography_json: Optional[Dict[str, Any]],
         sentences: Union[List[str], str],
         use_cot: Union[CoTMode, bool] = CoTMode.NO_CHAIN,
         execution_mode: Optional[ExecutionMode] = None,
         use_few_shots: bool = True,
-        custom_few_shots: Optional[str] = None,
         per_message: bool = False,
-        is_binary_agreement: bool = False
+        is_binary_agreement: bool = False,
+        is_neutral: bool = False,
     ) -> Dict[str, Any]:
         """
         Evaluate a list of sentences from a demographic perspective.
 
         Args:
-            demography_json: Dictionary containing demographic profile information
+            demography_json: Dictionary containing demographic profile information (ignored when is_neutral is True)
             sentences: List of sentences to evaluate (or single string)
             use_cot: Chain of Thought mode ('chain_online', 'chain_local', 'no_chain') or boolean
             execution_mode: Execution mode for CoT ('chain_online', 'chain_local', 'no_chain').
@@ -725,11 +814,10 @@ Return your evaluation as a JSON object."""
                           - 'chain_online' or 'chain_local': Enable CoT reasoning
                           - 'no_chain': Disable CoT reasoning
             use_few_shots: Whether to include few-shot examples in the prompt (default: True)
-            custom_few_shots: Optional custom few-shot examples to use instead of defaults.
-                             If provided, use_few_shots must be True
             per_message: If True, evaluate each sentence as a separate user message (one LLM call per sentence).
                         When True, index and sentence are calculated in Python, LLM only provides agree/disagree and reasoning.
             is_binary_agreement: If True, only return 0 or 1 (binary agreement). If False (default), return 0.0 to 1.0 (continuous scale).
+            is_neutral: If True, ignore demographic persona and use a neutral American citizen prompt.
 
         Returns:
             Dictionary containing judgments with the following structure:
@@ -745,27 +833,38 @@ Return your evaluation as a JSON object."""
             }
         """
         # Normalize input
+        demography_json = demography_json or {}
         sentences_list = self._normalize_sentences(sentences)
         if not sentences_list:
             return {"judgments": []}
 
         # Determine evaluation parameters
         effective_cot = self._determine_cot_mode(use_cot, execution_mode)
-        few_shots = self._get_few_shots(use_few_shots, custom_few_shots)
+        few_shots = self._get_few_shots(use_few_shots, None)
+        if is_neutral:
+            few_shots = ""
+            logger.info("Neutral evaluation enabled: ignoring persona and default few-shot examples")
 
         logger.info(
             f"Evaluating {len(sentences_list)} sentences for demographic profile "
-            f"(CoT={effective_cot}, use_few_shots={use_few_shots}, per_message={per_message})"
+            f"(CoT={effective_cot}, use_few_shots={use_few_shots}, per_message={per_message}, is_neutral={is_neutral})"
         )
 
         # Route to appropriate evaluation method
         try:
             if per_message:
                 return await self._evaluate_per_message(
-                    sentences_list, demography_json, effective_cot, few_shots, is_binary_agreement
+                    sentences_list, demography_json, effective_cot, few_shots, is_binary_agreement, is_neutral
                 )
             else:
-                return await self._evaluate_batch(sentences_list, demography_json, effective_cot, few_shots, is_binary_agreement)
+                return await self._evaluate_batch(
+                    sentences_list,
+                    demography_json,
+                    effective_cot,
+                    few_shots,
+                    is_binary_agreement,
+                    is_neutral,
+                )
         except Exception as e:
             logger.error(f"Failed to evaluate sentences: {e}", exc_info=True)
             raise

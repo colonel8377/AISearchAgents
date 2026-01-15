@@ -70,6 +70,7 @@ class ConsistentSanitizer(ISanitizer):
             Tuple of (sanitized_text, registry)
         """
         sanitized_text = text
+        logger.info(f"Sanitized text: {sanitized_text}")
         registry = {}
 
         if not entities:
@@ -89,9 +90,6 @@ class ConsistentSanitizer(ISanitizer):
                 synthetic_value = self._generate_synthetic_value(entity)
                 self.consistency_map[original_value] = synthetic_value
 
-            # Perform replacement
-            # Note: We use string slicing instead of re.sub for exact positional replacement
-            # re.sub risks replacing unintended occurrences if the text appears multiple times
             sanitized_text = (
                 sanitized_text[:entity.start] +
                 synthetic_value +

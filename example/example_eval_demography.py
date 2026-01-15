@@ -16,15 +16,15 @@ API_BASE_URL = "http://localhost:8000"
 API_ENDPOINT = "/api/v1/agent/demographic-evaluator/evaluate"
 API_KEY = None
 
-FEATHER_PATH = "/Users/lionelyip/PycharmProjects/AISearchAgents/data/biased_sentences.feather"
+FEATHER_PATH = "../data/biased_sentences.feather"
 
 DATA_DIR = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "data")
 SQLITE_DB_PATH = os.path.join(DATA_DIR, "demographic_evaluation.db")
 
-MAX_CONCURRENT_REQUESTS = 3
+MAX_CONCURRENT_REQUESTS = 10
 
 FORCE_NEW_RUN = False
-RESUME_RUN_ID: Optional[str] = '20260106_023547'
+RESUME_RUN_ID: Optional[str] = '20260107_181322'
 
 
 def extract_index_from_sentence(text: str) -> int:
@@ -79,7 +79,6 @@ def init_sqlite_db(db_path: str = SQLITE_DB_PATH) -> sqlite3.Connection:
             is_binary_agreement boolean DEFAULT 0
         )
     ''')
-    
 
     cur.execute('''
         CREATE TABLE IF NOT EXISTS personas (
@@ -141,13 +140,13 @@ def get_run_config(conn: sqlite3.Connection, run_id: str) -> Optional[Dict[str, 
 
 
 def get_or_create_run(
-    conn: sqlite3.Connection,
-    total_personas: int,
-    num_articles: int,
-    use_cot: str,
-    use_few_shots: bool,
-    per_message: bool = True,
-    is_binary_agreement: bool = False
+        conn: sqlite3.Connection,
+        total_personas: int,
+        num_articles: int,
+        use_cot: str,
+        use_few_shots: bool,
+        per_message: bool = True,
+        is_binary_agreement: bool = False
 ) -> tuple[str, Optional[Dict[str, Any]]]:
     """
     Get or create a run. Returns (run_id, config_dict).
@@ -161,7 +160,7 @@ def get_or_create_run(
         if config:
             print(f"Resuming run: {RESUME_RUN_ID}")
             print(f"Using config from DB: use_cot={config['use_cot']}, use_few_shots={config['use_few_shots']}, "
-                      f"per_message={config['per_message']}, is_binary_agreement={config['is_binary_agreement']}")
+                  f"per_message={config['per_message']}, is_binary_agreement={config['is_binary_agreement']}")
             return RESUME_RUN_ID, config
         else:
             print(f"Warning: RESUME_RUN_ID '{RESUME_RUN_ID}' not found in database. Creating new run instead.")
@@ -171,7 +170,8 @@ def get_or_create_run(
         INSERT INTO evaluation_runs
         (run_id, total_personas, num_articles, use_cot, use_few_shots, per_message, is_binary_agreement)
         VALUES (?, ?, ?, ?, ?, ?, ?)
-    ''', (run_id, total_personas, num_articles, use_cot, int(use_few_shots), int(per_message), int(is_binary_agreement)))
+    ''', (
+    run_id, total_personas, num_articles, use_cot, int(use_few_shots), int(per_message), int(is_binary_agreement)))
     conn.commit()
     print(f"Created new run: {run_id}")
     return run_id, None
@@ -194,13 +194,13 @@ def get_completed_persona_article_pairs(conn: sqlite3.Connection, run_id: str) -
 
 
 def save_article_judgments(
-    conn: sqlite3.Connection,
-    run_id: str,
-    persona: Dict[str, str],
-    article_id: int,
-    judgments: List[Dict],
-    success: bool,
-    error: Optional[str] = None
+        conn: sqlite3.Connection,
+        run_id: str,
+        persona: Dict[str, str],
+        article_id: int,
+        judgments: List[Dict],
+        success: bool,
+        error: Optional[str] = None
 ) -> None:
     """
     Save judgments for a persona-article combination.
@@ -226,7 +226,7 @@ def save_article_judgments(
             SET success = ?, error = ?
             WHERE id = ?
         ''', (int(success), error if not success else None, persona_id))
-        
+
         # Delete old judgments for this specific article before inserting new ones
         cur.execute('''
             DELETE FROM judgments 
@@ -265,19 +265,18 @@ def save_article_judgments(
     conn.commit()
 
 
-
 # =============================================================================
 # Async API Client
 # =============================================================================
 
 async def evaluate_article_async(
-    session: aiohttp.ClientSession,
-    persona: Dict[str, str],
-    sentences: List[str],
-    use_cot: str,
-    use_few_shots: bool,
-    per_message: bool,
-    is_binary_agreement: bool = False
+        session: aiohttp.ClientSession,
+        persona: Dict[str, str],
+        sentences: List[str],
+        use_cot: str,
+        use_few_shots: bool,
+        per_message: bool,
+        is_binary_agreement: bool = False
 ) -> Dict[str, Any]:
     url = f"{API_BASE_URL}{API_ENDPOINT}"
     headers = {"Content-Type": "application/json"}
@@ -299,10 +298,10 @@ async def evaluate_article_async(
 
 
 def get_existing_judgments(
-    conn: sqlite3.Connection,
-    run_id: str,
-    persona: Dict[str, str],
-    article_id: int
+        conn: sqlite3.Connection,
+        run_id: str,
+        persona: Dict[str, str],
+        article_id: int
 ) -> Optional[List[Dict[str, Any]]]:
     """
     Get existing judgments from database for a persona-article combination.
@@ -350,17 +349,17 @@ def get_existing_judgments(
 
 
 async def process_persona_article(
-    session: aiohttp.ClientSession,
-    persona: Dict[str, str],
-    article_id: int,
-    sentences: List[str],
-    use_cot: str,
-    use_few_shots: bool,
-    per_message: bool,
-    is_binary_agreement: bool,
-    semaphore: asyncio.Semaphore,
-    conn: sqlite3.Connection,
-    run_id: str
+        session: aiohttp.ClientSession,
+        persona: Dict[str, str],
+        article_id: int,
+        sentences: List[str],
+        use_cot: str,
+        use_few_shots: bool,
+        per_message: bool,
+        is_binary_agreement: bool,
+        semaphore: asyncio.Semaphore,
+        conn: sqlite3.Connection,
+        run_id: str
 ) -> None:
     async with semaphore:
         assert all(k in persona for k in REQUIRED_FIELDS)
@@ -402,12 +401,12 @@ async def process_persona_article(
 
 
 async def run_batch_evaluation_async(
-    article_groups: Dict[int, List[str]],
-    personas: List[Dict[str, str]],
-    use_cot: str = "no_chain",
-    use_few_shots: bool = False,
-    per_message: bool = True,
-    is_binary_agreement: bool = False
+        article_groups: Dict[int, List[str]],
+        personas: List[Dict[str, str]],
+        use_cot: str = "no_chain",
+        use_few_shots: bool = False,
+        per_message: bool = True,
+        is_binary_agreement: bool = False
 ) -> None:
     total_personas = len(personas)
     num_articles = len(article_groups)
@@ -474,7 +473,6 @@ async def run_batch_evaluation_async(
             print(f"\nRun {run_id} finished.")
     finally:
         conn.close()
-
 
 
 def main():

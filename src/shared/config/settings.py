@@ -34,6 +34,7 @@ class Settings(BaseSettings):
     # API Settings
     api_host: str = Field(default="0.0.0.0", description="API host")
     api_port: int = Field(default=8000, description="API port")
+    api_workers: int = Field(default=8, description="Number of API worker processes")
     cors_origins: Optional[List[str]] = Field(
         default=None,
         description="CORS allowed origins (comma-separated list or None to disable CORS)"
@@ -209,10 +210,10 @@ class Settings(BaseSettings):
     )
     gliner_model_name: str = Field(
         default="urchade/gliner_multi-v2.1",
-        description="GLiNER model name for privacy detection (default: urchade/gliner_small-v2.1). Available models: gliner_small-v2.1, gliner_medium-v2, gliner_large-v2"
+        description="GLiNER model name for privacy detection (default: urchade/gliner_multi-v2.1)."
     )
     gliner_threshold: float = Field(
-        default=0.8,
+        default=0.5,
         description="GLiNER detection threshold for entity confidence (default: 0.3 for high recall)"
     )
     

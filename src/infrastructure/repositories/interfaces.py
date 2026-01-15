@@ -96,3 +96,4 @@ class BotRepositoryInterface(ABC):
         """Save conversation history for a bot."""
         pass
 
+

@@ -93,7 +93,7 @@ class ConversationHistoryResponse(BaseModel):
 
 class EvaluateSentencesRequest(BaseModel):
     """Request model for evaluating sentences."""
-    demography_json: Dict[str, Any] = Field(..., description="Demographic profile as JSON object")
+    demography_json: Optional[Dict[str, Any]] = Field(default=None, description="Demographic profile as JSON object")
     sentences: Union[List[str], str] = Field(..., description="List of sentences to evaluate")
     use_cot: Union[CoTMode, str, int] = Field(
         default=CoTMode.NO_CHAIN,
@@ -103,10 +103,6 @@ class EvaluateSentencesRequest(BaseModel):
         default=True,
         description="Whether to use few-shot examples in the prompt (default: True)"
     )
-    custom_few_shots: Optional[str] = Field(
-        default=None,
-        description="Optional custom few-shot examples to use instead of defaults. If provided, use_few_shots must be True."
-    )
     per_message: bool = Field(
         default=False,
         description="If true, evaluate each sentence as a separate user message (one LLM call per sentence). Default: False"
@@ -114,6 +110,10 @@ class EvaluateSentencesRequest(BaseModel):
     is_binary_agreement: bool = Field(
         default=False,
         description="If true, only return 0 or 1 (binary agreement). If false (default), return 0.0 to 1.0 (continuous scale). Default: False"
+    )
+    is_neutral: bool = Field(
+        default=False,
+        description="If true, ignore demographic persona and use a neutral American citizen prompt. Default: False"
     )
 
     @field_validator('use_cot', mode='before')
@@ -128,10 +128,15 @@ class EvaluateSentencesRequest(BaseModel):
             raise ValueError(f"Invalid use_cot value: {e}")
     
     @model_validator(mode='after')
-    def validate_custom_few_shots(self):
-        """Ensure that if custom_few_shots is provided, use_few_shots must be True."""
-        if self.custom_few_shots is not None and not self.use_few_shots:
-            raise ValueError("If custom_few_shots is provided, use_few_shots must be True")
+    def validate_demography_or_neutral(self):
+        """Ensure demography_json is present unless neutral mode is enabled."""
+        if self.demography_json is None:
+            if self.is_neutral:
+                object.__setattr__(self, "demography_json", {})
+                return self
+            raise ValueError("demography_json is required when is_neutral is False")
+        if not isinstance(self.demography_json, dict):
+            raise ValueError("demography_json must be an object")
         return self
 
 
@@ -1397,6 +1402,55 @@ class PrivacyDetectionResponse(BaseModel):
             ]
         }
     }
+
+
+
+class MaskPrivacyRequest(BaseModel):
+    """Request model for privacy masking."""
+    conversation_records: List[Dict[str, str]] = Field(
+        ...,
+        description="List of user messages with 'user' key containing the message content"
+    )
+
+    @field_validator('conversation_records')
+    @classmethod
+    def validate_conversation_records(cls, v):
+        """Validate that each record contains 'user' key."""
+        for i, record in enumerate(v):
+            if not isinstance(record, dict):
+                raise ValueError(f"Record {i} must be a dictionary")
+            if 'user' not in record:
+                raise ValueError(f"Record {i} must contain 'user' key")
+        return v
+
+    model_config = {
+        "json_schema_extra": {
+            "examples": [
+                {
+                    "conversation_records": [
+                        {"user": "My phone is 13812340000"},
+                        {"user": "Email: test@example.com"}
+                    ]
+                }
+            ]
+        }
+    }
+
+
+class MaskedMessage(BaseModel):
+    original_text: str
+    masked_text: str
+    entities_detected: int
+
+
+class MaskPrivacyResponse(BaseModel):
+    masked_messages: List[MaskedMessage]
+    total_entities_detected: int
+
+
+class DetectionIdsResponse(BaseModel):
+    detection_ids: List[str]
+    count: int
 
 
 
